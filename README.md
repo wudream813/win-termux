@@ -44,7 +44,7 @@ Windows 终端复用器（Terminal Multiplexer）—— 单文件 C 实现，基
 cl /O2 termux.cpp /link user32.lib
 
 :: MinGW-w64
-x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -x c -o termux.exe termux.cpp -luser32
+x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -x c -o termux-v1.0.0.exe termux.cpp -luser32
 ```
 
 > 注意：`-x c` 必须保留 —— 文件扩展名是 `.cpp`，但代码是纯 C，
@@ -53,9 +53,9 @@ x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -x c -o termux.exe termux.cpp -luser32
 ## 运行
 
 ```bat
-termux.exe          :: 正常启动
+termux-v1.0.0.exe          :: 正常启动
 set TERMUX_DUMP=1   :: 启用诊断日志（termux_dump.log / render_dump.log / mouse_dump.log）
-termux.exe
+termux-v1.0.0.exe
 ```
 
 ## 系统要求
@@ -77,7 +77,7 @@ python3 verify_color8.py    # color=8 渲染用色回归
 
 ## 版本历史
 
-- **v8.57** 移除 pane / tab 空白区右键兜底（mbtn 优先级已修复右键 tab），修复右键内容区误弹菜单；启动提速（删除 Sleep 800ms）
+- **v1.0.0** 首个正式发布版（原 v8.57）。修复右键内容区误弹菜单；启动提速；8 号粉色调色板修复；鼠标全量诊断日志
 - **v8.56** 启动提速：移除启动横幅 800ms 人为延迟
 - **v8.55** 修复 `color & 7` 折叠 bug —— 8 号（粉色）现在正确渲染
 - **v8.54** 鼠标事件全量日志（`mouse_dump.log`）+ 启动版本标记；键盘选色 vk 兜底
