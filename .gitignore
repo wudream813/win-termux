@@ -5,3 +5,5 @@ render_dump.log
 mouse_dump.log
 .sudo_as_admin_successful
 *.exe
+__pycache__/
+*.py[cod]
