@@ -264,6 +264,28 @@ static int g_mouse_prev_in_tabbar = 0;
 // the popup stays put even if the mouse keeps moving afterwards.
 static int g_pop_anchor_x = -1;
 
+// Rendering happens frequently while pane output is streaming. Reuse one
+// scratch buffer instead of allocating and freeing a multi-megabyte block on
+// every frame; render_screen is serialized by g_mux.cs, so one buffer is
+// sufficient for every view.
+static char *g_render_buf = NULL;
+static int g_render_buf_cap = 0;
+
+static char *render_buffer_acquire(int needed) {
+    if (needed <= 0) return NULL;
+    if (g_render_buf_cap >= needed) return g_render_buf;
+    int cap = g_render_buf_cap > 0 ? g_render_buf_cap : 16384;
+    while (cap < needed) {
+        if (cap > 0x3FFFFFFF) { cap = needed; break; }
+        cap *= 2;
+    }
+    char *next = (char *)realloc(g_render_buf, (size_t)cap);
+    if (!next) return NULL;
+    g_render_buf = next;
+    g_render_buf_cap = cap;
+    return g_render_buf;
+}
+
 static void write_to_pane(const char *data, int len);
 static void draw_tab_bar(char *out, int bs, int *posp);   // v8.18
 static void render_help_content(char *out, int bs, int *posp, int host_rows, int host_cols);   // v8.18
@@ -320,8 +342,15 @@ static void trunc_utf8(char *dst, const char *src, int max) {
 // Console helpers
 // ============================================================
 static void host_write(const char *s, int len) {
-    DWORD written;
-    WriteConsoleA(g_mux.hOut, s, len, &written, NULL);
+    // WriteConsole may legally complete a short write. Keep advancing so a
+    // large rendered frame cannot be silently truncated.
+    while (len > 0) {
+        DWORD written = 0;
+        DWORD chunk = (DWORD)len;
+        if (!WriteConsoleA(g_mux.hOut, s, chunk, &written, NULL) || written == 0) break;
+        s += written;
+        len -= (int)written;
+    }
 }
 
 static void host_printf(const char *fmt, ...) {
@@ -330,7 +359,12 @@ static void host_printf(const char *fmt, ...) {
     va_start(args, fmt);
     int len = vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
-    if (len > 0) host_write(buf, len);
+    // vsnprintf returns the size that would have been written. Clamp it to the
+    // bytes actually present instead of reading past buf on truncation.
+    if (len > 0) {
+        if (len >= (int)sizeof(buf)) len = (int)sizeof(buf) - 1;
+        host_write(buf, len);
+    }
 }
 
 // v8.2: optional raw ConPTY byte dump for diagnosing display bugs
@@ -1696,14 +1730,13 @@ static void render_screen(void) {
     // v8.21: new-pane chooser
     if (g_mux.chooser_mode) {
         int bs = (g_mux.host_rows + 4) * 256;
-        char *out = (char *)malloc(bs);
+        char *out = render_buffer_acquire(bs);
         if (!out) { LeaveCriticalSection(&g_mux.cs); return; }
         int pos = 0;
         render_chooser(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
         pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[1;1H");   // v8.22: tab bar at top
         draw_tab_bar(out, bs, &pos);
         host_write(out, pos);
-        free(out);
         g_mux.needs_redraw = 0;
         LeaveCriticalSection(&g_mux.cs);
         return;
@@ -1711,7 +1744,7 @@ static void render_screen(void) {
     // v8.33: right-click tab menu / color picker / rename
     if (g_mux.ctx_mode) {
         int bs2 = (g_mux.host_rows + 4) * 256;
-        char *out2 = (char *)malloc(bs2);
+        char *out2 = render_buffer_acquire(bs2);
         if (!out2) { LeaveCriticalSection(&g_mux.cs); return; }
         int pos2 = 0;
         if (g_mux.ctx_mode == 1)
@@ -1721,7 +1754,6 @@ static void render_screen(void) {
         pos2 += snprintf(out2 + pos2, bs2 - pos2, "\x1b[0m\x1b[1;1H");
         draw_tab_bar(out2, bs2, &pos2);
         host_write(out2, pos2);
-        free(out2);
         g_mux.needs_redraw = 0;
         LeaveCriticalSection(&g_mux.cs);
         return;
@@ -1729,14 +1761,13 @@ static void render_screen(void) {
     if (g_mux.rename_mode) {
         // v8.46: draw a bordered rename dialog over the pane
         int bs2 = (g_mux.host_rows + 4) * 256;
-        char *out2 = (char *)malloc(bs2);
+        char *out2 = render_buffer_acquire(bs2);
         if (!out2) { LeaveCriticalSection(&g_mux.cs); return; }
         int pos2 = 0;
         render_rename_box(out2, bs2, &pos2, g_mux.host_rows, g_mux.host_cols);
         pos2 += snprintf(out2 + pos2, bs2 - pos2, "\x1b[0m\x1b[1;1H");
         draw_tab_bar(out2, bs2, &pos2);
         host_write(out2, pos2);
-        free(out2);
         g_mux.needs_redraw = 0;
         LeaveCriticalSection(&g_mux.cs);
         return;
@@ -1744,7 +1775,7 @@ static void render_screen(void) {
     // v8.18: built-in help view - works even without any active pane
     if (g_mux.help_mode) {
         int bs = (g_mux.host_rows + 4) * 256;
-        char *out = (char *)malloc(bs);
+        char *out = render_buffer_acquire(bs);
         if (!out) { LeaveCriticalSection(&g_mux.cs); return; }
         int pos = 0;
         render_help_content(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
@@ -1752,7 +1783,6 @@ static void render_screen(void) {
         pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[1;1H");   // v8.22: tab bar at top
         draw_tab_bar(out, bs, &pos);
         host_write(out, pos);
-        free(out);
         g_mux.needs_redraw = 0;
         LeaveCriticalSection(&g_mux.cs);
         return;
@@ -1765,7 +1795,7 @@ static void render_screen(void) {
     // budget 32 bytes/cell plus generous slack for tab bar / cursor escapes.
     // v8.8: truecolor SGRs are ~30 bytes each - budget 48 bytes/cell
     int bs = (s->rows + 2) * (s->cols * 48 + 1024) + 8192;
-    char *out = (char *)malloc(bs);
+    char *out = render_buffer_acquire(bs);
     if (!out) { LeaveCriticalSection(&g_mux.cs); return; }
     int pos = 0;
 
@@ -1837,7 +1867,6 @@ static void render_screen(void) {
 
     host_write(out, pos);
     dump_render_output(out, pos, s->cols, s->rows, g_mux.host_cols, g_mux.host_rows);   // v8.5: diagnostic
-    free(out);
     g_mux.needs_redraw = 0;
     LeaveCriticalSection(&g_mux.cs);
 }
@@ -1941,25 +1970,57 @@ static void render_help_content(char *out, int bs, int *posp, int host_rows, int
 }
 
 static int create_pane_shell(const WCHAR *shell) {
-    int idx = -1; for (int i = 0; i < MAX_PANES; i++) if (!g_mux.panes[i].active) { idx = i; break; } if (idx < 0) return -1;
+    // A dead pane may still be waiting for the main loop to reap its reader and
+    // handles. Only reuse a completely clean slot; otherwise memset would lose
+    // those resources and could race the old reader thread.
+    int idx = -1;
+    for (int i = 0; i < MAX_PANES; i++)
+        if (!g_mux.panes[i].active && g_mux.panes[i].read_thread == NULL) { idx = i; break; }
+    if (idx < 0) return -1;
+
     Pane *pane = &g_mux.panes[idx]; memset(pane, 0, sizeof(*pane));
     if (!screen_init(&pane->screen, g_mux.host_cols, g_mux.host_rows)) return -1;
     pane->screen.pane_index = idx;   // v7: needed for OSC title routing
-    HANDLE pi_r, pi_w, po_r, po_w;
-    if (!CreatePipe(&pi_r, &pi_w, NULL, 0) || !CreatePipe(&po_r, &po_w, NULL, 0)) { screen_free(&pane->screen); return -1; }
+
+    HANDLE pi_r = NULL, pi_w = NULL, po_r = NULL, po_w = NULL;
     COORD sz = {(SHORT)g_mux.host_cols, (SHORT)g_mux.host_rows};
-    if (FAILED(CreatePseudoConsole(sz, pi_r, po_w, 0, &pane->hpc))) { CloseHandle(pi_r); CloseHandle(pi_w); CloseHandle(po_r); CloseHandle(po_w); screen_free(&pane->screen); return -1; }
-    STARTUPINFOEXW si = {0}; si.StartupInfo.cb = sizeof(si); SIZE_T as = 0;
-    InitializeProcThreadAttributeList(NULL, 1, 0, &as); si.lpAttributeList = (LPPROC_THREAD_ATTRIBUTE_LIST)malloc(as);
-    InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &as);
-    UpdateProcThreadAttribute(si.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, pane->hpc, sizeof(HPCON), NULL, NULL);
+    STARTUPINFOEXW si = {0};
+    SIZE_T as = 0;
     PROCESS_INFORMATION pi = {0};
+    WCHAR cmdline[64] = {0};
+    BOOL created = FALSE;
+    si.StartupInfo.cb = sizeof(si);
+
+    if (!CreatePipe(&pi_r, &pi_w, NULL, 0)) goto create_fail;
+    if (!CreatePipe(&po_r, &po_w, NULL, 0)) goto create_fail;
+    if (FAILED(CreatePseudoConsole(sz, pi_r, po_w, 0, &pane->hpc))) goto create_fail;
+
+
+    InitializeProcThreadAttributeList(NULL, 1, 0, &as);
+    if (as == 0) goto create_fail;
+    si.lpAttributeList = (LPPROC_THREAD_ATTRIBUTE_LIST)malloc(as);
+    if (!si.lpAttributeList) goto create_fail;
+    if (!InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &as)) goto attr_fail;
+    if (!UpdateProcThreadAttribute(si.lpAttributeList, 0,
+            PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, pane->hpc, sizeof(HPCON), NULL, NULL)) {
+        DeleteProcThreadAttributeList(si.lpAttributeList);
+        goto attr_fail;
+    }
+
     // v8.21: shell is now selectable (cmd / powershell); copy into a writable buffer
-    WCHAR cmdline[64];
     wcsncpy(cmdline, shell, 63); cmdline[63] = 0;
-    if (!CreateProcessW(NULL, cmdline, NULL, NULL, FALSE, EXTENDED_STARTUPINFO_PRESENT, NULL, NULL, &si.StartupInfo, &pi)) { free(si.lpAttributeList); ClosePseudoConsole(pane->hpc); CloseHandle(pi_r); CloseHandle(pi_w); CloseHandle(po_r); CloseHandle(po_w); screen_free(&pane->screen); return -1; }
-    free(si.lpAttributeList); CloseHandle(pi_r); CloseHandle(po_w);
-    pane->pipe_in = pi_w; pane->pipe_out = po_r; pane->process = pi.hProcess; pane->thread = pi.hThread; pane->active = 1; strcpy(pane->title, "cmd");
+    created = CreateProcessW(NULL, cmdline, NULL, NULL, FALSE,
+                             EXTENDED_STARTUPINFO_PRESENT, NULL, NULL,
+                             &si.StartupInfo, &pi);
+    DeleteProcThreadAttributeList(si.lpAttributeList);
+    free(si.lpAttributeList);
+    si.lpAttributeList = NULL;
+    if (!created) goto create_fail;
+
+    CloseHandle(pi_r); pi_r = NULL;
+    CloseHandle(po_w); po_w = NULL;
+    pane->pipe_in = pi_w; pane->pipe_out = po_r; pane->process = pi.hProcess; pane->thread = pi.hThread; pane->active = 1;
+    strcpy(pane->title, _wcsicmp(shell, L"powershell.exe") == 0 ? "PowerShell" : "cmd");
     if (idx >= g_mux.pane_count) g_mux.pane_count = idx + 1;
     pane->read_thread = (HANDLE)_beginthreadex(NULL, 0, pane_read_thread, (void*)(intptr_t)idx, 0, NULL);
     if (!pane->read_thread) {
@@ -1973,6 +2034,18 @@ static int create_pane_shell(const WCHAR *shell) {
         return -1;
     }
     return idx;
+
+attr_fail:
+    free(si.lpAttributeList);
+create_fail:
+    if (pane->hpc) ClosePseudoConsole(pane->hpc);
+    if (pi_r) CloseHandle(pi_r);
+    if (pi_w) CloseHandle(pi_w);
+    if (po_r) CloseHandle(po_r);
+    if (po_w) CloseHandle(po_w);
+    screen_free(&pane->screen);
+    memset(pane, 0, sizeof(*pane));
+    return -1;
 }
 
 // v8.21: default shell is cmd (kept for existing callers)
@@ -2604,5 +2677,6 @@ cleanup:
     SetConsoleCtrlHandler(ctrl_handler, FALSE);
     SetConsoleMode(g_mux.hIn, g_mux.orig_in_mode); SetConsoleMode(g_mux.hOut, g_mux.orig_out_mode);
     SetConsoleOutputCP(g_mux.orig_cp); SetConsoleCP(g_mux.orig_input_cp);
+    free(g_render_buf); g_render_buf = NULL; g_render_buf_cap = 0;
     DeleteCriticalSection(&g_mux.cs); printf("Bye!\n"); return 0;
 }

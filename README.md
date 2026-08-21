@@ -66,7 +66,13 @@ termux-v1.0.0.exe
 ## 开发说明
 
 源码是**单文件 C**（`termux.cpp`），无第三方依赖，仅链接 `user32`。
-每次改动使用仓库内的 Python 验证脚本回归：
+每次改动可一键运行仓库内的全部 Python 回归验证：
+
+```bash
+python3 verify_all.py
+```
+
+也可以单独运行验证脚本：
 
 ```bash
 python3 verify_picker.py    # 选色器几何 / 点击 / hover 命中
@@ -74,6 +80,7 @@ python3 verify_flow.py      # 弹窗端到端流程
 python3 verify_mouse53.py   # 鼠标按钮优先级 / 兜底 / 渲染用色
 python3 verify_color8.py    # color=8 渲染用色回归
 ```
+
 
 ## 版本历史
 

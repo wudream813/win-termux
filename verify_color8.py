@@ -129,3 +129,5 @@ print(f"  轮换8次后 color={c} 渲染={render_tab_color(c)} (应粉)")
 ok &= (render_tab_color(c) == (205,93,173))
 
 print("\n结果:", "全部通过" if ok else "有失败！")
+
+raise SystemExit(0 if ok else 1)

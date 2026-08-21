@@ -141,3 +141,5 @@ for passed, label in steps:
         ok = False
     print(f"  [{mark}] {label}")
 print("\n端到端:", "全部通过" if ok else "有失败！")
+
+raise SystemExit(0 if ok else 1)

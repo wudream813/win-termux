@@ -239,3 +239,5 @@ for c in range(9):
 chk("color=8 渲染粉色(非蓝色)", render_color(8), (205,93,173))
 chk("color=0 默认蓝", render_color(0), (31,111,235))
 print("  v8.55 渲染用色回归: 通过")
+
+raise SystemExit(0 if ok else 1)
