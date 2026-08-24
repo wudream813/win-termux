@@ -1925,7 +1925,7 @@ static unsigned __stdcall pane_read_thread(void *arg) {
 // mouse wheel). Termux renders it itself - no cmd process involved.
 static const char *const g_help_lines[] = {
     "\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m termux - 帮助",
-    "\x1b[38;2;139;148;158m  版本 v1.0.0 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
+    "\x1b[38;2;139;148;158m  版本 v1.0.1 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
     "",
     "\x1b[38;2;121;192;255;1m  键盘快捷键\x1b[0m",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mc\x1b[0m         新建 cmd pane",
@@ -1942,7 +1942,8 @@ static const char *const g_help_lines[] = {
     "  \x1b[38;2;230;237;243m点击 [+]\x1b[0m           新建 pane（选 cmd / PowerShell）",
     "  \x1b[38;2;230;237;243m点击 termux\x1b[0m       打开 / 关闭本帮助",
     "",
-    "\x1b[38;2;121;192;255;1m  提示\x1b[0m",
+    "\x1b[38;2;121;192;255;1m  提示与警告\x1b[0m",
+    "  - \x1b[38;2;248;81;73m警告: 终端必须使用等宽字体，否则会渲染故障\x1b[0m",
     "  - 每个 tab 带 \x1b[38;2;248;81;73m红 x\x1b[0m 关闭按钮（悬停红底）",
     "  - 编辑器 (nano/vim) 用 alt screen，退出后历史完整保留",
     "  - PgUp / PgDn / 滚轮可滚动本帮助",
@@ -2749,10 +2750,11 @@ int main(void) {
     SetConsoleCtrlHandler(ctrl_handler, TRUE);   // v7: restore console on Ctrl+C/close
 
     host_printf("\x1b[?1049h\x1b[2J\x1b[H");
-    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.0.0\x1b[0m\r\n");
+    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.0.1\x1b[0m\r\n");
     host_printf("  \x1b[33mhost: %dx%d\x1b[0m   (pane screen = host minus 1 tab bar row)\r\n\n", g_mux.host_cols, g_mux.host_rows);
     host_printf("  \x1b[33mCtrl+B\x1b[0m + c/n/p/x/d/0-9   (termux = 帮助)\r\n\n");
     host_printf("  \x1b[33m右键\x1b[0m 标签 = 改颜色、改标题\r\n\n");
+    host_printf("  \x1b[38;2;248;81;73m[注意]\x1b[0m 终端请使用等宽字体，否则会发生渲染故障\r\n\n");
     // v8.56: removed the fixed Sleep(800) splash delay - "Starting..." now
     // proceeds straight into pane creation (ConPTY+cmd take ~100-300ms on
     // their own; the extra 800ms was pure dead time).

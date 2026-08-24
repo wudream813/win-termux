@@ -5,6 +5,10 @@
 Windows 终端复用器（Terminal Multiplexer）—— 单文件 C 实现，基于 Windows ConPTY。
 在 Windows 控制台里管理多个 cmd / PowerShell 会话，像 tmux 一样分标签页。
 
+> ⚠️ **警告 / 注意事项**：
+> 控制台终端**必须配置使用等宽字体**（Monospace Font，例如 *Cascadia Code*、*Consolas*、*JetBrains Mono*、*Fira Code* 等）。
+> 使用非等宽字体会导致字符宽度计算偏差、边框排版错位及界面渲染故障。
+
 ## 特性
 
 - **多标签页**：每个标签一个独立的 cmd / PowerShell 会话（ConPTY 后端，需 Win10 1809+）
@@ -64,6 +68,7 @@ termux-v1.0.0.exe
 
 - Windows 10 1809 (RS5) 或更高（ConPTY 支持）
 - 从真实控制台窗口运行（cmd / Windows Terminal / ConEmu 等）
+- **必须使用等宽字体**（如 Cascadia Code, Consolas 等），否则会出现渲染故障与排版错位
 
 ## 开发说明
 
