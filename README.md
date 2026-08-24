@@ -50,7 +50,7 @@ Windows 终端复用器（Terminal Multiplexer）—— 单文件 C 实现，基
 cl /O2 termux.cpp /link user32.lib
 
 :: MinGW-w64
-x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -x c -o termux-v1.0.2.exe termux.cpp -luser32
+x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -x c -o termux-v1.0.3.exe termux.cpp -luser32
 ```
 
 > 注意：`-x c` 必须保留 —— 文件扩展名是 `.cpp`，但代码是纯 C，
@@ -59,9 +59,9 @@ x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -x c -o termux-v1.0.2.exe termux.cpp -l
 ## 运行
 
 ```bat
-termux-v1.0.2.exe          :: 正常启动
+termux-v1.0.3.exe          :: 正常启动
 set TERMUX_DUMP=1   :: 启用诊断日志（termux_dump.log / render_dump.log / mouse_dump.log）
-termux-v1.0.2.exe
+termux-v1.0.3.exe
 ```
 
 ## 系统要求
@@ -91,6 +91,9 @@ python3 verify_color8.py    # color=8 渲染用色回归
 
 ## 版本历史
 
+- **v1.0.3**
+  - 优化新建弹窗切换渲染：自定义命令行输入框完整覆盖旧弹窗，彻底消除残余边框与文字
+  - 新增进程异常退出保持机制：命令执行报错（退出码不为 0）或启动失败时，完整保留错误日志并显示红色提示，按任意键或点击关闭才退出
 - **v1.0.2**
   - 新增在新建 Pane 弹窗中支持 `[3]` 自定义命令行启动（可输入指定命令如 `wsl`、`bash`、`python`、`pwsh` 等运行）
   - 新增终端窗口标题自动同步当前活动子 Pane 标题（支持 OSC 标题及改名实时同步，退出自动恢复原标题）
