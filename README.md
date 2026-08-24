@@ -92,6 +92,9 @@ python3 verify_color8.py    # color=8 渲染用色回归
 ## 版本历史
 
 - **v1.0.4**
+  - 修复嵌套运行（termux 套 termux）时鼠标移入外层 Tab 栏导致子 termux 悬停（Hover）残留卡住的问题
+  - 修复更改标题与自定义命令行输入框不支持 `←` / `→` / `Home` / `End` 光标导航的问题
+  - 修复 Unicode Emoji（如 `✍️`、带变体选择符/ZWJ序列等）按 Backspace 需要删除两次的问题（支持字素簇一键删除）
   - 修复光标位置异常停留在状态栏（Tab Bar）末尾的渲染管线顺序问题
   - 修复自定义命令行输入框右侧边框对齐问题（校准宽度）
   - 统一编译输出与二进制文件名为 `termux.exe`，精简 MinGW 编译参数（移除 `-Wextra`）

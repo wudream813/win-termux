@@ -2816,6 +2816,23 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
         g_mouse_prev_in_tabbar = now_in;
     }
     if (my == 0) {   // v8.22: tab bar at top
+        // When mouse enters outer tab bar, notify active child pane that mouse left its window
+        // (sends out-of-bounds y=0 motion), so nested termux/app clears its tab hover immediately.
+        if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
+            ScreenBuffer *s = &g_mux.panes[g_mux.active_pane].screen;
+            if (s->mouse_tracking) {
+                int x = mx + 1;
+                char seq[64]; int len = 0;
+                if (s->mouse_sgr) {
+                    len = snprintf(seq, sizeof(seq), "\x1b[<35;%d;0M", x);
+                } else if (x <= 223) {
+                    seq[0] = '\x1b'; seq[1] = '['; seq[2] = 'M';
+                    seq[3] = 32 + 35; seq[4] = 32 + x; seq[5] = 32 + 0;
+                    len = 6;
+                }
+                if (len > 0) write_to_pane(seq, len);
+            }
+        }
         // v8.48: if a popup is already open, clicking the tab bar (any button)
         // only closes it - never opens another popup on top (mutual exclusion).
         int press2 = (me->dwButtonState & (FROM_LEFT_1ST_BUTTON_PRESSED | FROM_LEFT_2ND_BUTTON_PRESSED | RIGHTMOST_BUTTON_PRESSED)) != 0;
