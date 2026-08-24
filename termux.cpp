@@ -1097,25 +1097,99 @@ static void execute_csi(ScreenBuffer *s, char final, char prefix, const char *pa
 // ============================================================
 // Execute OSC sequence
 // ============================================================
+static inline int ci_str_eq(const char *a, const char *b) {
+    while (*a && *b) {
+        char ca = (*a >= 'A' && *a <= 'Z') ? (char)(*a + ('a' - 'A')) : *a;
+        char cb = (*b >= 'A' && *b <= 'Z') ? (char)(*b + ('a' - 'A')) : *b;
+        if (ca != cb) return 0;
+        a++; b++;
+    }
+    return (*a == 0 && *b == 0);
+}
+
+static inline int ci_str_starts_with(const char *str, const char *prefix) {
+    while (*prefix) {
+        char ca = (*str >= 'A' && *str <= 'Z') ? (char)(*str + ('a' - 'A')) : *str;
+        char cb = (*prefix >= 'A' && *prefix <= 'Z') ? (char)(*prefix + ('a' - 'A')) : *prefix;
+        if (ca != cb) return 0;
+        str++; prefix++;
+    }
+    return 1;
+}
+
+static void sanitize_title(const char *raw, int raw_len, char *out, int out_size) {
+    if (!raw || raw_len <= 0 || out_size <= 0) {
+        if (out && out_size > 0) out[0] = 0;
+        return;
+    }
+    char buf[512];
+    int len = raw_len < 511 ? raw_len : 511;
+    memcpy(buf, raw, len);
+    buf[len] = 0;
+
+    // Trim trailing whitespace and control chars (e.g. BEL 0x07)
+    while (len > 0 && ((unsigned char)buf[len - 1] <= ' ' || buf[len - 1] == 0x07)) {
+        buf[--len] = 0;
+    }
+
+    const char *p = buf;
+
+    // 1. Strip Windows "管理员: " / "Administrator: " prefixes
+    if (strncmp(p, "\xe7\xae\xa1\xe7\x90\x86\xe5\x91\x98", 9) == 0) { // "管理员" in UTF-8
+        p += 9;
+        while (*p == ':' || *p == ' ') p++;
+    } else if (ci_str_starts_with(p, "Administrator")) {
+        p += 13;
+        while (*p == ':' || *p == ' ') p++;
+    }
+
+    // 2. If conhost/cmd prefixed the title with ":   " (e.g. "cmd.exe:   T" or ":   T")
+    const char *colon = strstr(p, ":   ");
+    if (!colon) colon = strstr(p, ":  ");
+    if (!colon) colon = strstr(p, ": ");
+    if (colon) {
+        p = colon + 1;
+        while (*p == ' ' || *p == ':') p++;
+    }
+
+    // 3. If there is a " - " separator after an exe path (e.g. "cmd.exe - T")
+    const char *dash = strstr(p, " - ");
+    if (dash && (strstr(buf, ".exe") || strstr(buf, "\\") || strstr(buf, "/"))) {
+        p = dash + 3;
+        while (*p == ' ') p++;
+    }
+
+    // 4. Strip any stray leading colons, dashes or whitespace
+    while (*p == ':' || *p == '-' || *p == ' ') p++;
+
+    // 5. If string is still a file path e.g. "C:\Windows\System32\cmd.exe"
+    if (strstr(p, "\\") || strstr(p, "/")) {
+        const char *last_slash = p;
+        for (const char *s = p; *s; s++) {
+            if (*s == '\\' || *s == '/') last_slash = s + 1;
+        }
+        p = last_slash;
+    }
+
+    // Normalize common shell names
+    if (ci_str_eq(p, "cmd.exe") || ci_str_eq(p, "cmd")) {
+        p = "cmd";
+    } else if (ci_str_eq(p, "powershell.exe") || ci_str_eq(p, "powershell")) {
+        p = "PowerShell";
+    }
+
+    if (!*p) p = "cmd";
+
+    strncpy(out, p, out_size - 1);
+    out[out_size - 1] = 0;
+}
+
 static void execute_osc(ScreenBuffer *s) {
     // Only handle OSC 0, 1, 2 (window title)
     if ((s->osc_num == 0 || s->osc_num == 1 || s->osc_num == 2) && s->osc_len > 0) {
-        // v7: target the pane that actually emitted the title, not the active one
         int idx = s->pane_index;
         if (idx >= 0 && idx < g_mux.pane_count && g_mux.panes[idx].active) {
-            // v8.9: use osc_len exactly - osc_buf is NOT NUL-terminated, so
-            // strrchr would scan into stale bytes from previous OSCs. Find the
-            // last path separator within [0, osc_len) only.
-            int cut = -1;
-            for (int i = 0; i < s->osc_len; i++)
-                if (s->osc_buf[i] == '\\' || s->osc_buf[i] == '/') cut = i;
-            const char *title = s->osc_buf + (cut + 1);
-            int tlen = s->osc_len - (cut + 1);
-            if (tlen <= 0) { s->osc_num = -1; s->osc_len = 0; s->osc_sep = 0; return; }
-            if (tlen > (int)sizeof(g_mux.panes[idx].title) - 1)
-                tlen = (int)sizeof(g_mux.panes[idx].title) - 1;
-            memcpy(g_mux.panes[idx].title, title, tlen);
-            g_mux.panes[idx].title[tlen] = 0;
+            sanitize_title(s->osc_buf, s->osc_len, g_mux.panes[idx].title, sizeof(g_mux.panes[idx].title));
         }
     }
     // All other OSC sequences are silently ignored
