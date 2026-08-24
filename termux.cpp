@@ -1958,9 +1958,6 @@ static void render_screen(void) {
             pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[K", y + 2);
 
         if (vo > 0) { int pct = s->hist_lines > 0 ? (vo * 100 / s->hist_lines) : 0; pos += snprintf(out + pos, bs - pos, "\x1b[2;%dH\x1b[30;43m[%d%%]\x1b[0m", g_mux.host_cols - 10, pct); }
-        if (vo == 0 && s->cursor_visible && s->cursor_y + 1 <= rr && s->cursor_x + 1 <= rc &&
-            !g_mux.chooser_mode && !g_mux.ctx_mode && !g_mux.rename_mode && !g_mux.custom_cmd_mode)
-            if (pos < bs - 32) pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", s->cursor_y + 2, s->cursor_x + 1);
     } else {
         for (int y = 0; y < g_mux.host_rows && pos < bs - 64; y++)
             pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[K", y + 2);
@@ -1982,6 +1979,36 @@ static void render_screen(void) {
     // 3. Tab bar at top
     pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[1;1H");
     draw_tab_bar(out, bs, &pos);
+
+    // 4. Position and set cursor visibility as the FINAL step (must be after draw_tab_bar)
+    if (g_mux.rename_mode) {
+        int r_top = 2, r_left = (g_pop_anchor_x >= 0) ? g_pop_anchor_x : g_mouse_x;
+        if (r_left + RENAME_W > g_mux.host_cols) r_left = (g_pop_anchor_x >= 0 ? g_pop_anchor_x : g_mouse_x) - RENAME_W;
+        if (r_left < 0) r_left = 0;
+        int cx = r_left + 2 + utf8_cols(g_mux.rename_buf, g_mux.rename_len);
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", r_top + 1, cx);
+    } else if (g_mux.custom_cmd_mode) {
+        int c_top = 2, c_left = (g_pop_anchor_x >= 0) ? g_pop_anchor_x : g_mouse_x;
+        if (c_left + CMD_BOX_W > g_mux.host_cols) c_left = (g_pop_anchor_x >= 0 ? g_pop_anchor_x : g_mouse_x) - CMD_BOX_W;
+        if (c_left < 0) c_left = 0;
+        int cx = c_left + 2 + utf8_cols(g_mux.custom_cmd_buf, g_mux.custom_cmd_len);
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", c_top + 1, cx);
+    } else if (g_mux.chooser_mode || g_mux.ctx_mode || g_mux.help_mode) {
+        pos += snprintf(out + pos, bs - pos, "\x1b[?25l");
+    } else if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
+        Pane *pane = &g_mux.panes[g_mux.active_pane];
+        ScreenBuffer *s = &pane->screen;
+        int vo = pane->scroll_offset;
+        int rr = s->rows < g_mux.host_rows ? s->rows : g_mux.host_rows;
+        int rc = s->cols < g_mux.host_cols ? s->cols : g_mux.host_cols;
+        if (vo == 0 && s->cursor_visible && s->cursor_y + 1 <= rr && s->cursor_x + 1 <= rc) {
+            pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", s->cursor_y + 2, s->cursor_x + 1);
+        } else {
+            pos += snprintf(out + pos, bs - pos, "\x1b[?25l");
+        }
+    } else {
+        pos += snprintf(out + pos, bs - pos, "\x1b[?25l");
+    }
 
     host_write(out, pos);
     if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active)
