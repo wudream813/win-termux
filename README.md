@@ -50,7 +50,7 @@ Windows 终端复用器（Terminal Multiplexer）—— 单文件 C 实现，基
 cl /O2 termux.cpp /link user32.lib
 
 :: MinGW-w64
-x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -x c -o termux-v1.0.3.exe termux.cpp -luser32
+x86_64-w64-mingw32-gcc -O2 -Wall -x c -o termux.exe termux.cpp -luser32
 ```
 
 > 注意：`-x c` 必须保留 —— 文件扩展名是 `.cpp`，但代码是纯 C，
@@ -59,9 +59,9 @@ x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -x c -o termux-v1.0.3.exe termux.cpp -l
 ## 运行
 
 ```bat
-termux-v1.0.3.exe          :: 正常启动
+termux.exe          :: 正常启动
 set TERMUX_DUMP=1   :: 启用诊断日志（termux_dump.log / render_dump.log / mouse_dump.log）
-termux-v1.0.3.exe
+termux.exe
 ```
 
 ## 系统要求

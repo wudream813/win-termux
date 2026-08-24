@@ -1746,7 +1746,7 @@ static void render_chooser(char *out, int bs, int *posp, int host_rows, int host
     *posp = pos;
 }
 
-#define CMD_BOX_W 36
+#define CMD_BOX_W 38
 #define CMD_BOX_H 4
 static void render_custom_cmd_box(char *out, int bs, int *posp, int host_rows, int host_cols) {
     (void)host_rows;
