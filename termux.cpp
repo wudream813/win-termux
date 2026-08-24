@@ -230,6 +230,8 @@ typedef struct {
     char title[32];
     int scroll_offset;
     int color;   // v8.32: tab color index 0=default, 1..8 = palette
+    int exited_hold; // 1 = process exited with error, holding screen for user
+    DWORD exit_code;
 } Pane;
 
 typedef struct {
@@ -1891,164 +1893,99 @@ static void render_screen(void) {
     EnterCriticalSection(&g_mux.cs);
     if (g_mux.host_cols < 1 || g_mux.host_rows < 1 || g_mux.total_host_rows < 1) { LeaveCriticalSection(&g_mux.cs); return; }
     update_host_title();
-    // v8.21: new-pane chooser
-    if (g_mux.chooser_mode) {
-        int bs = (g_mux.host_rows + 4) * 256;
-        char *out = render_buffer_acquire(bs);
-        if (!out) { LeaveCriticalSection(&g_mux.cs); return; }
-        int pos = 0;
-        pos += snprintf(out + pos, bs - pos, "\x1b[?25l");
-        render_chooser(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
-        pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[1;1H");   // v8.22: tab bar at top
-        draw_tab_bar(out, bs, &pos);
-        host_write(out, pos);
-        g_mux.needs_redraw = 0;
-        LeaveCriticalSection(&g_mux.cs);
-        return;
-    }
-    // v8.33: right-click tab menu / color picker / rename
-    if (g_mux.ctx_mode) {
-        int bs2 = (g_mux.host_rows + 4) * 256;
-        char *out2 = render_buffer_acquire(bs2);
-        if (!out2) { LeaveCriticalSection(&g_mux.cs); return; }
-        int pos2 = 0;
-        pos2 += snprintf(out2 + pos2, bs2 - pos2, "\x1b[?25l");
-        if (g_mux.ctx_mode == 1)
-            render_ctx_menu(out2, bs2, &pos2, g_mux.host_rows, g_mux.host_cols);
-        else
-            render_color_picker(out2, bs2, &pos2, g_mux.host_rows, g_mux.host_cols);
-        pos2 += snprintf(out2 + pos2, bs2 - pos2, "\x1b[0m\x1b[1;1H");
-        draw_tab_bar(out2, bs2, &pos2);
-        host_write(out2, pos2);
-        g_mux.needs_redraw = 0;
-        LeaveCriticalSection(&g_mux.cs);
-        return;
-    }
-    if (g_mux.rename_mode) {
-        // v8.46: draw a bordered rename dialog over the pane
-        int bs2 = (g_mux.host_rows + 4) * 256;
-        char *out2 = render_buffer_acquire(bs2);
-        if (!out2) { LeaveCriticalSection(&g_mux.cs); return; }
-        int pos2 = 0;
-        pos2 += snprintf(out2 + pos2, bs2 - pos2, "\x1b[?25l");
-        render_rename_box(out2, bs2, &pos2, g_mux.host_rows, g_mux.host_cols);
-        pos2 += snprintf(out2 + pos2, bs2 - pos2, "\x1b[0m\x1b[1;1H");
-        draw_tab_bar(out2, bs2, &pos2);
-        host_write(out2, pos2);
-        g_mux.needs_redraw = 0;
-        LeaveCriticalSection(&g_mux.cs);
-        return;
-    }
-    if (g_mux.custom_cmd_mode) {
-        int bs2 = (g_mux.host_rows + 4) * 256;
-        char *out2 = render_buffer_acquire(bs2);
-        if (!out2) { LeaveCriticalSection(&g_mux.cs); return; }
-        int pos2 = 0;
-        pos2 += snprintf(out2 + pos2, bs2 - pos2, "\x1b[?25l");
-        render_custom_cmd_box(out2, bs2, &pos2, g_mux.host_rows, g_mux.host_cols);
-        pos2 += snprintf(out2 + pos2, bs2 - pos2, "\x1b[0m\x1b[1;1H");
-        draw_tab_bar(out2, bs2, &pos2);
-        host_write(out2, pos2);
-        g_mux.needs_redraw = 0;
-        LeaveCriticalSection(&g_mux.cs);
-        return;
-    }
-    // v8.18: built-in help view - works even without any active pane
-    if (g_mux.help_mode) {
-        int bs = (g_mux.host_rows + 4) * 256;
-        char *out = render_buffer_acquire(bs);
-        if (!out) { LeaveCriticalSection(&g_mux.cs); return; }
-        int pos = 0;
-        pos += snprintf(out + pos, bs - pos, "\x1b[?25l");
-        render_help_content(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
-        // draw the tab bar (help tab shown active)
-        pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[1;1H");   // v8.22: tab bar at top
-        draw_tab_bar(out, bs, &pos);
-        host_write(out, pos);
-        g_mux.needs_redraw = 0;
-        LeaveCriticalSection(&g_mux.cs);
-        return;
-    }
-    if (g_mux.active_pane < 0 || g_mux.active_pane >= g_mux.pane_count || !g_mux.panes[g_mux.active_pane].active) { LeaveCriticalSection(&g_mux.cs); return; }
 
-    Pane *pane = &g_mux.panes[g_mux.active_pane];
-    ScreenBuffer *s = &pane->screen;
-    // v7: worst case is ~18 bytes of escape overhead + 3 bytes UTF-8 per cell;
-    // budget 32 bytes/cell plus generous slack for tab bar / cursor escapes.
-    // v8.8: truecolor SGRs are ~30 bytes each - budget 48 bytes/cell
-    int bs = (s->rows + 2) * (s->cols * 48 + 1024) + 8192;
+    int bs = (g_mux.host_rows + 4) * (g_mux.host_cols * 48 + 1024) + 16384;
     char *out = render_buffer_acquire(bs);
     if (!out) { LeaveCriticalSection(&g_mux.cs); return; }
     int pos = 0;
 
     pos += snprintf(out + pos, bs - pos, "\x1b[?25l");
-    WORD la_attr = 0xFFFF, la_fr = 0, la_br = 0; int la_fv = -1, la_bv = -1;
-    // v8.14: defensive clamp - never render rows beyond the real history depth
-    // (a stale scroll_offset would otherwise draw empty buffer).
-    if (pane->scroll_offset > s->hist_lines) pane->scroll_offset = s->hist_lines;
-    if (pane->scroll_offset < 0) pane->scroll_offset = 0;
-    int vo = pane->scroll_offset, rr = s->rows < g_mux.host_rows ? s->rows : g_mux.host_rows, rc = s->cols < g_mux.host_cols ? s->cols : g_mux.host_cols;
 
-    for (int y = 0; y < rr; y++) {
-        pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H", y + 2);   // v8.22: tab bar is on row 1
-        for (int x = 0; x < rc; x++) {
-            CHAR_INFO *cell = NULL;
-            int ar = -1;
-            if (vo > 0 && !s->in_alt_screen) { ar = s->scroll_top + y - vo; if (ar >= 0 && ar < s->total_lines) cell = &s->buffer[ar * s->cols + x]; }
-            else cell = screen_cell(s, y, x);
-            WCHAR wc = L' '; WORD attr = 0x07;
-            if (cell) { wc = cell->Char.UnicodeChar; attr = cell->Attributes; }
-            if (wc == 0) continue;   // v8.2: right half of a wide char - the glyph already occupies 2 columns, draw nothing
-            WORD frgb, brgb; int fgv, bgv;
-            cell_truecolor(s, y, x, ar, &frgb, &brgb, &fgv, &bgv);
-            if (attr != la_attr || frgb != la_fr || brgb != la_br || fgv != la_fv || bgv != la_bv) {
-                const char *ul = (attr & COMMON_LVB_UNDERSCORE) ? ";4" : "";
-                if (fgv || bgv) {
-                    // v8.7/8.8: truecolor, one complete SGR per change (never split
-                    // across multiple writes, so truncation can't produce bare text)
-                    int fr, fg2, fb; rgb565_split(frgb, &fr, &fg2, &fb);
-                    int br2, bg2, bb; rgb565_split(brgb, &br2, &bg2, &bb);
-                    if (fgv && bgv)
-                        pos += snprintf(out + pos, bs - pos, "\x1b[0%s;38;2;%d;%d;%d;48;2;%d;%d;%dm", ul, fr, fg2, fb, br2, bg2, bb);
-                    else if (fgv)
-                        pos += snprintf(out + pos, bs - pos, "\x1b[0%s;38;2;%d;%d;%dm", ul, fr, fg2, fb);
-                    else
-                        pos += snprintf(out + pos, bs - pos, "\x1b[0%s;48;2;%d;%d;%dm", ul, br2, bg2, bb);
-                } else {
-                    static const int m[8] = {0,4,2,6,1,5,3,7};
-                    int fg = attr & 0x0F, bg = (attr >> 4) & 0x0F;
-                    if (fg & 8) pos += snprintf(out + pos, bs - pos, "\x1b[0%s;1;%d;%dm", ul, (fg & 8) ? 90 + m[fg & 7] : 30 + m[fg & 7], (bg & 8) ? 100 + m[bg & 7] : 40 + m[bg & 7]);
-                    else pos += snprintf(out + pos, bs - pos, "\x1b[0%s;%d;%dm", ul, 30 + m[fg & 7], 40 + m[bg & 7]);
+    // 1. Render background content (Help view or Active Pane)
+    if (g_mux.help_mode) {
+        render_help_content(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
+    } else if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
+        Pane *pane = &g_mux.panes[g_mux.active_pane];
+        ScreenBuffer *s = &pane->screen;
+        WORD la_attr = 0xFFFF, la_fr = 0, la_br = 0; int la_fv = -1, la_bv = -1;
+        // v8.14: defensive clamp - never render rows beyond the real history depth
+        if (pane->scroll_offset > s->hist_lines) pane->scroll_offset = s->hist_lines;
+        if (pane->scroll_offset < 0) pane->scroll_offset = 0;
+        int vo = pane->scroll_offset, rr = s->rows < g_mux.host_rows ? s->rows : g_mux.host_rows, rc = s->cols < g_mux.host_cols ? s->cols : g_mux.host_cols;
+
+        for (int y = 0; y < rr; y++) {
+            pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H", y + 2);   // v8.22: tab bar is on row 1
+            for (int x = 0; x < rc; x++) {
+                CHAR_INFO *cell = NULL;
+                int ar = -1;
+                if (vo > 0 && !s->in_alt_screen) { ar = s->scroll_top + y - vo; if (ar >= 0 && ar < s->total_lines) cell = &s->buffer[ar * s->cols + x]; }
+                else cell = screen_cell(s, y, x);
+                WCHAR wc = L' '; WORD attr = 0x07;
+                if (cell) { wc = cell->Char.UnicodeChar; attr = cell->Attributes; }
+                if (wc == 0) continue;   // v8.2: right half of a wide char
+                WORD frgb, brgb; int fgv, bgv;
+                cell_truecolor(s, y, x, ar, &frgb, &brgb, &fgv, &bgv);
+                if (attr != la_attr || frgb != la_fr || brgb != la_br || fgv != la_fv || bgv != la_bv) {
+                    const char *ul = (attr & COMMON_LVB_UNDERSCORE) ? ";4" : "";
+                    if (fgv || bgv) {
+                        int fr, fg2, fb; rgb565_split(frgb, &fr, &fg2, &fb);
+                        int br2, bg2, bb; rgb565_split(brgb, &br2, &bg2, &bb);
+                        if (fgv && bgv)
+                            pos += snprintf(out + pos, bs - pos, "\x1b[0%s;38;2;%d;%d;%d;48;2;%d;%d;%dm", ul, fr, fg2, fb, br2, bg2, bb);
+                        else if (fgv)
+                            pos += snprintf(out + pos, bs - pos, "\x1b[0%s;38;2;%d;%d;%dm", ul, fr, fg2, fb);
+                        else
+                            pos += snprintf(out + pos, bs - pos, "\x1b[0%s;48;2;%d;%d;%dm", ul, br2, bg2, bb);
+                    } else {
+                        static const int m[8] = {0,4,2,6,1,5,3,7};
+                        int fg = attr & 0x0F, bg = (attr >> 4) & 0x0F;
+                        if (fg & 8) pos += snprintf(out + pos, bs - pos, "\x1b[0%s;1;%d;%dm", ul, (fg & 8) ? 90 + m[fg & 7] : 30 + m[fg & 7], (bg & 8) ? 100 + m[bg & 7] : 40 + m[bg & 7]);
+                        else pos += snprintf(out + pos, bs - pos, "\x1b[0%s;%d;%dm", ul, 30 + m[fg & 7], 40 + m[bg & 7]);
+                    }
+                    la_attr = attr; la_fr = frgb; la_br = brgb; la_fv = fgv; la_bv = bgv;
                 }
-                la_attr = attr; la_fr = frgb; la_br = brgb; la_fv = fgv; la_bv = bgv;
+                if (wc < 0x80) out[pos++] = (char)wc;
+                else if (wc < 0x800) { out[pos++] = 0xC0 | (wc >> 6); out[pos++] = 0x80 | (wc & 0x3F); }
+                else { out[pos++] = 0xE0 | (wc >> 12); out[pos++] = 0x80 | ((wc >> 6) & 0x3F); out[pos++] = 0x80 | (wc & 0x3F); }
+                if (pos > bs - 256) break;
             }
-            if (wc < 0x80) out[pos++] = (char)wc;
-            else if (wc < 0x800) { out[pos++] = 0xC0 | (wc >> 6); out[pos++] = 0x80 | (wc & 0x3F); }
-            else { out[pos++] = 0xE0 | (wc >> 12); out[pos++] = 0x80 | ((wc >> 6) & 0x3F); out[pos++] = 0x80 | (wc & 0x3F); }
+            pos += snprintf(out + pos, bs - pos, "\x1b[K");
             if (pos > bs - 256) break;
         }
-        pos += snprintf(out + pos, bs - pos, "\x1b[K");
-        if (pos > bs - 256) break;
+
+        // clear leftover rows below pane
+        for (int y = rr; y < g_mux.host_rows && pos < bs - 64; y++)
+            pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[K", y + 2);
+
+        if (vo > 0) { int pct = s->hist_lines > 0 ? (vo * 100 / s->hist_lines) : 0; pos += snprintf(out + pos, bs - pos, "\x1b[2;%dH\x1b[30;43m[%d%%]\x1b[0m", g_mux.host_cols - 10, pct); }
+        if (vo == 0 && s->cursor_visible && s->cursor_y + 1 <= rr && s->cursor_x + 1 <= rc &&
+            !g_mux.chooser_mode && !g_mux.ctx_mode && !g_mux.rename_mode && !g_mux.custom_cmd_mode)
+            if (pos < bs - 32) pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", s->cursor_y + 2, s->cursor_x + 1);
+    } else {
+        for (int y = 0; y < g_mux.host_rows && pos < bs - 64; y++)
+            pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[K", y + 2);
     }
 
-    // v8: if the pane's virtual screen is smaller than the host area (e.g. the
-    // app resized it via CSI 8;r;ct), clear the leftover rows so stale content
-    // doesn't linger below the pane and look like misalignment.
-    for (int y = rr; y < g_mux.host_rows && pos < bs - 64; y++)
-        pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[K", y + 2);   // v8.22
+    // 2. Overlay popups (so popups cleanly replace each other without leftover rows)
+    if (g_mux.chooser_mode) {
+        render_chooser(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
+    } else if (g_mux.ctx_mode == 1) {
+        render_ctx_menu(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
+    } else if (g_mux.ctx_mode == 2) {
+        render_color_picker(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
+    } else if (g_mux.rename_mode) {
+        render_rename_box(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
+    } else if (g_mux.custom_cmd_mode) {
+        render_custom_cmd_box(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
+    }
 
-    pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[1;1H");   // v8.22: tab bar at top
+    // 3. Tab bar at top
+    pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[1;1H");
     draw_tab_bar(out, bs, &pos);
-    // v8.33: rename prompt at the bottom row
-    if (g_mux.rename_mode) {
-        pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[K\x1b[48;2;33;38;45m 新标题: \x1b[38;2;230;237;243m%s\x1b[0m", g_mux.total_host_rows, g_mux.rename_buf);
-    }
-    if (vo > 0) { int pct = s->hist_lines > 0 ? (vo * 100 / s->hist_lines) : 0; pos += snprintf(out + pos, bs - pos, "\x1b[2;%dH\x1b[30;43m[%d%%]\x1b[0m", g_mux.host_cols - 10, pct); }   // v8.22: scroll pct on pane row 1
-    if (vo == 0 && s->cursor_visible && s->cursor_y + 1 <= rr && s->cursor_x + 1 <= rc)
-        if (pos < bs - 32) pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", s->cursor_y + 2, s->cursor_x + 1);   // v8.22
 
     host_write(out, pos);
-    dump_render_output(out, pos, s->cols, s->rows, g_mux.host_cols, g_mux.host_rows);   // v8.5: diagnostic
+    if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active)
+        dump_render_output(out, pos, g_mux.panes[g_mux.active_pane].screen.cols, g_mux.panes[g_mux.active_pane].screen.rows, g_mux.host_cols, g_mux.host_rows);
     g_mux.needs_redraw = 0;
     LeaveCriticalSection(&g_mux.cs);
 }
@@ -2194,10 +2131,42 @@ static int create_pane_shell(const WCHAR *shell) {
     created = CreateProcessW(NULL, cmdline, NULL, NULL, FALSE,
                              EXTENDED_STARTUPINFO_PRESENT, NULL, NULL,
                              &si.StartupInfo, &pi);
+    // If direct execution failed, try via cmd.exe /c
+    if (!created && _wcsicmp(shell, L"cmd.exe") != 0 && _wcsicmp(shell, L"powershell.exe") != 0) {
+        WCHAR fallback[300];
+        _snwprintf(fallback, 299, L"cmd.exe /c %s", shell);
+        created = CreateProcessW(NULL, fallback, NULL, NULL, FALSE,
+                                 EXTENDED_STARTUPINFO_PRESENT, NULL, NULL,
+                                 &si.StartupInfo, &pi);
+    }
     DeleteProcThreadAttributeList(si.lpAttributeList);
     free(si.lpAttributeList);
     si.lpAttributeList = NULL;
-    if (!created) goto create_fail;
+    if (!created) {
+        DWORD err = GetLastError();
+        CloseHandle(pi_r); pi_r = NULL;
+        CloseHandle(po_w); po_w = NULL;
+        pane->pipe_in = pi_w; pane->pipe_out = po_r;
+        pane->active = 1;
+        pane->exited_hold = 1;
+        pane->exit_code = err;
+        char u8cmd[64] = {0};
+        WideCharToMultiByte(CP_UTF8, 0, shell, -1, u8cmd, 63, NULL, NULL);
+        char *space = strchr(u8cmd, ' ');
+        if (space) *space = 0;
+        sanitize_title(u8cmd, (int)strlen(u8cmd), pane->title, sizeof(pane->title));
+
+        char errmsg[256];
+        int elen = snprintf(errmsg, sizeof(errmsg),
+            "\x1b[31;1m[启动失败: 无法执行命令 \"%s\" (错误码: %lu)]\x1b[0m\r\n\x1b[33m按任意键关闭该标签页...\x1b[0m\r\n",
+            u8cmd, (unsigned long)err);
+        EnterCriticalSection(&g_mux.cs);
+        screen_process_output(&pane->screen, errmsg, elen);
+        LeaveCriticalSection(&g_mux.cs);
+
+        if (idx >= g_mux.pane_count) g_mux.pane_count = idx + 1;
+        return idx;
+    }
 
     CloseHandle(pi_r); pi_r = NULL;
     CloseHandle(po_w); po_w = NULL;
@@ -2288,10 +2257,29 @@ static void reap_dead_panes(void) {
             if (p->read_thread != NULL) close_pane(i);   // reader finished: release resources
             continue;
         }
-        if (WaitForSingleObject(p->process, 0) == WAIT_OBJECT_0) {
-            // Child exited. Give the reader a short grace period to drain any
-            // trailing output; if the pipe never EOFs (ConPTY quirk) we force
-            // close - closing the output pipe unblocks the reader.
+        if (p->exited_hold) {
+            continue;   // Waiting for user keypress/click to close
+        }
+        if (p->process != NULL && WaitForSingleObject(p->process, 0) == WAIT_OBJECT_0) {
+            DWORD exit_code = 0;
+            GetExitCodeProcess(p->process, &exit_code);
+            if (exit_code != 0) {
+                // Non-zero exit code! Drain remaining output and show error prompt
+                if (p->read_thread != NULL)
+                    WaitForSingleObject(p->read_thread, 250);
+                char msg[256];
+                int mlen = snprintf(msg, sizeof(msg),
+                    "\r\n\x1b[31;1m[进程异常退出，退出码: %lu (0x%lX)]\x1b[0m \x1b[33m按任意键关闭该标签页...\x1b[0m\r\n",
+                    (unsigned long)exit_code, (unsigned long)exit_code);
+                EnterCriticalSection(&g_mux.cs);
+                screen_process_output(&p->screen, msg, mlen);
+                p->exited_hold = 1;
+                p->exit_code = exit_code;
+                g_mux.needs_redraw = 1;
+                LeaveCriticalSection(&g_mux.cs);
+                continue;
+            }
+            // Child exited normally (code 0)
             if (p->read_thread != NULL)
                 WaitForSingleObject(p->read_thread, 250);
             pane_mark_dead(i);
@@ -2346,6 +2334,23 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
     if (!ke->bKeyDown) return;
     WORD vk = ke->wVirtualKeyCode; DWORD ctrl = ke->dwControlKeyState; WCHAR uc = ke->uChar.UnicodeChar;
     BOOL is_ctrl = (ctrl & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0, is_alt = (ctrl & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) != 0, is_shift = (ctrl & SHIFT_PRESSED) != 0;
+
+    // If active pane is in exited_hold state (showing error), any key closes it
+    if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].exited_hold) {
+        int c = g_mux.active_pane;
+        int n = find_next_active_pane(c);
+        pane_mark_dead(c);
+        close_pane(c);
+        if (n >= 0 && g_mux.panes[n].active) switch_pane(n);
+        else {
+            int f = -1;
+            for (int i = 0; i < g_mux.pane_count; i++) if (g_mux.panes[i].active) { f = i; break; }
+            if (f >= 0) switch_pane(f); else g_mux.running = 0;
+        }
+        g_mux.needs_redraw = 1;
+        return;
+    }
+
     if (g_mux.prefix_mode) { handle_prefix(vk, ctrl); return; }
     if ((uc == 0x02) || (vk == 'B' && is_ctrl && !is_alt && !is_shift)) { g_mux.prefix_mode = 1; return; }
     // v8.33: rename mode - type the new title, Enter confirms, Esc cancels
