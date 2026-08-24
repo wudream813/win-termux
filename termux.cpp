@@ -1987,7 +1987,7 @@ static void draw_tab_bar(char *out, int bs, int *posp) {
         int hl = snprintf(head, sizeof(head), "[%s", nm);
         int hc = utf8_cols(head, hl);               // columns of "[title"
         int lc = hc + 1;                            // + 1 for the 'x' glyph
-        if (col + lc + 4 > g_mux.host_cols) break;  // leave room for [+]
+        if (col + lc + 4 + 4 > g_mux.host_cols) break;  // leave room for [+] and [*]
         // v8.38: no color dot anymore - hover target is the 'x' right after head
         int hovering = (g_mouse_y == 0 &&   // v8.22: tab bar at top
                         g_mouse_x >= col + hc && g_mouse_x < col + lc);
@@ -2030,8 +2030,8 @@ static void draw_tab_bar(char *out, int bs, int *posp) {
     }
     // [+] button - leave a 1-column gap (tab bar bg) so an active/hovered last
     // tab's highlight never visually touches the '+' (v8.26)
-    if (col < g_mux.host_cols) { pos += snprintf(out + pos, bs - pos, TB_BG " "); col++; }
-    if (col + 3 <= g_mux.host_cols) {
+    if (col < g_mux.host_cols - 4) { pos += snprintf(out + pos, bs - pos, TB_BG " "); col++; }
+    if (col + 3 <= g_mux.host_cols - 4) {
         g_mux.tab_info[g_mux.tab_count].start_col = col;
         g_mux.tab_info[g_mux.tab_count].end_col = col + 3;
         g_mux.tab_info[g_mux.tab_count].pane_idx = -1;
@@ -2044,8 +2044,11 @@ static void draw_tab_bar(char *out, int bs, int *posp) {
         col += 3;
         g_mux.tab_count++;
     }
-    // [*] Settings button (-3)
-    if (col < g_mux.host_cols) { pos += snprintf(out + pos, bs - pos, TB_BG " "); col++; }
+    // Fill background spaces to the far right before [*] settings button
+    pos += snprintf(out + pos, bs - pos, TB_BG);
+    while (col < g_mux.host_cols - 3 && pos < bs - 8) { out[pos++] = ' '; col++; }
+
+    // [*] Settings button anchored at far right (pane_idx == -3)
     if (col + 3 <= g_mux.host_cols) {
         g_mux.tab_info[g_mux.tab_count].start_col = col;
         g_mux.tab_info[g_mux.tab_count].end_col = col + 3;
@@ -2372,23 +2375,23 @@ static void render_settings_main(char *out, int bs, int *posp, int host_rows, in
     }
     pos += snprintf(out + pos, bs - pos, "  \x1b[48;2;33;38;45m│\x1b[0m");
 
-    // Footer: [S] 保存配置 (termux.ini)          [Esc] 取消并返回
+    // Footer: [Ctrl+S] 保存配置          [Esc] 取消并返回
     int f_r = top + 6 + g_chooser_item_count;
-    int h_save = (g_mouse_y == f_r - 1 && g_mouse_x >= left + 2 && g_mouse_x <= left + 28);
-    int h_esc = (g_mouse_y == f_r - 1 && g_mouse_x >= left + 38 && g_mouse_x <= left + 54);
+    int h_save = (g_mouse_y == f_r - 1 && g_mouse_x >= left + 2 && g_mouse_x <= left + 20);
+    int h_esc = (g_mouse_y == f_r - 1 && g_mouse_x >= left + 31 && g_mouse_x <= left + 47);
 
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  ", f_r, left);
     if (h_save)
-        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;63;185;80m\x1b[38;2;255;255;255;1m [S] 保存配置 (termux.ini) \x1b[0m          ");
+        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;63;185;80m\x1b[38;2;255;255;255;1m [Ctrl+S] 保存配置 \x1b[0m          ");
     else
-        pos += snprintf(out + pos, bs - pos, "\x1b[38;2;63;185;80;1m[S] 保存配置 (termux.ini)\x1b[0m            ");
+        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m\x1b[38;2;63;185;80;1m [Ctrl+S] 保存配置 \x1b[0m          ");
 
     if (h_esc)
         pos += snprintf(out + pos, bs - pos, "\x1b[48;2;217;119;54m\x1b[38;2;255;255;255;1m [Esc] 取消并返回 \x1b[0m");
     else
-        pos += snprintf(out + pos, bs - pos, "\x1b[38;2;217;119;54m[Esc] 取消并返回\x1b[0m");
+        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m\x1b[38;2;217;119;54;1m [Esc] 取消并返回 \x1b[0m");
 
-    int u_f = 1 + 2 + 25 + 12 + 15;
+    int u_f = 1 + 2 + 19 + 10 + 17;
     while (u_f < sw - 1 && pos < bs - 8) { out[pos++] = ' '; u_f++; }
     pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
 
@@ -3100,7 +3103,8 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
             g_mux.needs_redraw = 1;
             return;
         }
-        if (uc == 's' || uc == 'S') {
+        // Ctrl+S: save configuration
+        if ((vk == 'S' && is_ctrl) || (uc == 0x13)) {
             save_config();
             g_mux.settings_mode = 0;
             g_mux.needs_redraw = 1;
@@ -3882,15 +3886,15 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                                 return;
                             }
                         }
-                        // Click [S] 保存配置
+                        // Click [Ctrl+S] 保存配置
                         if (r == top + 6 + g_chooser_item_count) {
-                            if (c >= left + 2 && c <= left + 32) {
+                            if (c >= left + 2 && c <= left + 22) {
                                 save_config();
                                 g_mux.settings_mode = 0;
                                 g_mux.needs_redraw = 1;
                                 return;
                             }
-                            if (c >= left + 35 && c <= left + sw - 2) {
+                            if (c >= left + 31 && c <= left + sw - 2) {
                                 load_config();
                                 g_mux.settings_mode = 0;
                                 g_mux.needs_redraw = 1;
