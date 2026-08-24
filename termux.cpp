@@ -3646,7 +3646,28 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
         case VK_ESCAPE: seq[0] = 0x1B; sl = 1; break;
         case VK_RETURN: seq[0] = is_ctrl ? 0x0A : 0x0D; sl = 1; break;   // v7: Ctrl+Enter = LF
         case VK_SPACE: seq[0] = is_ctrl ? 0 : ' '; sl = 1; break;
-        default: if (uc) { if (is_alt) seq[sl++] = 0x1B; if (uc < 0x80) seq[sl++] = (char)uc; else if (uc < 0x800) { seq[sl++] = 0xC0 | (uc >> 6); seq[sl++] = 0x80 | (uc & 0x3F); } else { seq[sl++] = 0xE0 | (uc >> 12); seq[sl++] = 0x80 | ((uc >> 6) & 0x3F); seq[sl++] = 0x80 | (uc & 0x3F); } } break;
+        default:
+            if (uc >= 0xD800 && uc <= 0xDBFF) {
+                g_high_surrogate = uc;
+                return;
+            }
+            if (uc) {
+                if (is_alt) seq[sl++] = 0x1B;
+                if (uc >= 0xDC00 && uc <= 0xDFFF && g_high_surrogate) {
+                    unsigned int cp = 0x10000 + (((unsigned int)(g_high_surrogate & 0x3FF)) << 10) + (uc & 0x3FF);
+                    g_high_surrogate = 0;
+                    seq[sl++] = (char)(0xF0 | (cp >> 18));
+                    seq[sl++] = (char)(0x80 | ((cp >> 12) & 0x3F));
+                    seq[sl++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+                    seq[sl++] = (char)(0x80 | (cp & 0x3F));
+                } else {
+                    g_high_surrogate = 0;
+                    if (uc < 0x80) seq[sl++] = (char)uc;
+                    else if (uc < 0x800) { seq[sl++] = 0xC0 | (uc >> 6); seq[sl++] = 0x80 | (uc & 0x3F); }
+                    else { seq[sl++] = 0xE0 | (uc >> 12); seq[sl++] = 0x80 | ((uc >> 6) & 0x3F); seq[sl++] = 0x80 | (uc & 0x3F); }
+                }
+            }
+            break;
     }
     if (sl > 0) for (WORD r = 0; r < ke->wRepeatCount; r++) write_to_pane(seq, sl);
 }
