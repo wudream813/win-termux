@@ -551,6 +551,33 @@ static int utf8_cols(const char *s, int len) {
     return cols;
 }
 
+static void append_padded_utf8(char *out, int bs, int *posp, int *colsp, const char *s, int target_cols) {
+    int pos = *posp;
+    int len = (int)strlen(s);
+    int cols = 0;
+    int i = 0;
+    while (i < len) {
+        int adv = 0;
+        unsigned int cp = utf8_decode_cp(s + i, len - i, &adv);
+        if (is_zero_width_cp(cp)) {
+            for (int k = 0; k < adv && pos < bs - 1; k++) out[pos++] = s[i + k];
+            i += adv;
+            continue;
+        }
+        int w = is_wide_cp(cp) ? 2 : 1;
+        if (cols + w > target_cols) break;
+        for (int k = 0; k < adv && pos < bs - 1; k++) out[pos++] = s[i + k];
+        cols += w;
+        i += adv;
+    }
+    while (cols < target_cols && pos < bs - 1) {
+        out[pos++] = ' ';
+        cols++;
+    }
+    *posp = pos;
+    if (colsp) *colsp += cols;
+}
+
 static int utf8_prev_grapheme(const char *buf, int pos) {
     if (pos <= 0) return 0;
     int p = pos;
@@ -2017,7 +2044,7 @@ static void draw_tab_bar(char *out, int bs, int *posp) {
         col += 3;
         g_mux.tab_count++;
     }
-    // [⚙] Settings button (-3)
+    // [*] Settings button (-3)
     if (col < g_mux.host_cols) { pos += snprintf(out + pos, bs - pos, TB_BG " "); col++; }
     if (col + 3 <= g_mux.host_cols) {
         g_mux.tab_info[g_mux.tab_count].start_col = col;
@@ -2025,9 +2052,9 @@ static void draw_tab_bar(char *out, int bs, int *posp) {
         g_mux.tab_info[g_mux.tab_count].pane_idx = -3;
         int shover = (g_mouse_y == 0 && g_mouse_x >= col && g_mouse_x < col + 3);
         if (shover)
-            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;137;87;229m\x1b[38;2;255;255;255;1m[⚙]\x1b[0m");
+            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;137;87;229m\x1b[38;2;255;255;255;1m[*]\x1b[0m");
         else
-            pos += snprintf(out + pos, bs - pos, TAB_IN_BG "\x1b[38;2;139;148;158m[⚙]\x1b[0m");
+            pos += snprintf(out + pos, bs - pos, TAB_IN_BG "\x1b[38;2;139;148;158m[*]\x1b[0m");
         col += 3;
         g_mux.tab_count++;
     }
@@ -2213,7 +2240,7 @@ static void render_color_picker(char *out, int bs, int *posp, int host_rows, int
     *posp = pos;
 }
 
-#define SET_W 64
+#define SET_W 68
 static void settings_geom(int host_rows, int host_cols, int *top, int *left, int *w, int *h) {
     (void)host_rows;
     int sw = SET_W;
@@ -2234,30 +2261,30 @@ static void render_settings_main(char *out, int bs, int *posp, int host_rows, in
     settings_geom(host_rows, host_cols, &top, &left, &sw, &sh);
     int pos = *posp;
 
-    // Header: ┌─ ⚙  termux 设置 ────────────────────────────┐
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[38;2;255;255;255m\x1b[48;2;137;87;229m┌─ ⚙ termux 设置 ", top, left);
-    int used = 2 + 15; // "┌─" (2) + " ⚙ termux 设置 " (15)
+    // Header: ┌─ * termux 设置 ────────────────────────────┐
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[38;2;255;255;255m\x1b[48;2;137;87;229m┌─ * termux 设置 ", top, left);
+    int used = 2 + 14; // "┌─" (2) + " * termux 设置 " (14)
     while (used < sw - 1 && pos < bs - 8) {
         out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
         used++;
     }
     pos += snprintf(out + pos, bs - pos, "┐\x1b[0m");
 
-    // Subheader: │  【新建菜单项配置】                 │
+    // Subheader: │  【新建菜单项配置】 (Ctrl+↑/↓选 / ↑/↓排 / Enter改 / Ctrl+D删)    │
     int r1 = top + 1;
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;121;192;255;1m【新建菜单项配置】\x1b[0m\x1b[38;2;139;148;158m (点击编辑 / [↑][↓]调顺序 / [×]删除)\x1b[0m", r1, left);
-    int u1 = 1 + 2 + 18 + 36;
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;121;192;255;1m【新建菜单项配置】\x1b[0m \x1b[38;2;139;148;158m(Ctrl+↑/↓选 / ↑/↓排 / Enter改 / Ctrl+D删)\x1b[0m", r1, left);
+    int u1 = 1 + 2 + 18 + 1 + 39;
     while (u1 < sw - 1 && pos < bs - 8) { out[pos++] = ' '; u1++; }
     pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
 
-    // Column headers: │   #  显示名称        启动命令行               操作   │
+    // Column headers: │   #   显示名称       启动命令行                 操作           │
     int r2 = top + 2;
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m   \x1b[38;2;210;153;34m#\x1b[0m  \x1b[38;2;230;237;243m显示名称        启动命令行                操作     \x1b[0m", r2, left);
-    int u2 = 1 + 3 + 1 + 2 + 12 + 26 + 11;
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m   \x1b[38;2;210;153;34m#\x1b[0m   \x1b[38;2;230;237;243m显示名称       启动命令行                 操作\x1b[0m", r2, left);
+    int u2 = 1 + 3 + 1 + 3 + 8 + 7 + 10 + 17 + 4;
     while (u2 < sw - 1 && pos < bs - 8) { out[pos++] = ' '; u2++; }
     pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
 
-    // Divider: │  ────────────────────────────────────────────────────────  │
+    // Divider: │  ────────────────────────────────────────────────────────────  │
     int r3 = top + 3;
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  ", r3, left);
     int u3 = 1 + 2;
@@ -2271,25 +2298,71 @@ static void render_settings_main(char *out, int bs, int *posp, int host_rows, in
     for (int i = 0; i < g_chooser_item_count; i++) {
         int r = top + 4 + i;
         int is_sel = (i == g_mux.settings_sel);
-        char nm[16]; trunc_utf8(nm, g_chooser_items[i].name, sizeof(nm));
-        char cm[24]; trunc_utf8(cm, g_chooser_items[i].cmd, sizeof(cm));
+        int row_hover = (g_mouse_y == r - 1);
+        int h_up = (row_hover && g_mouse_x >= left + 45 && g_mouse_x <= left + 47);
+        int h_dn = (row_hover && g_mouse_x >= left + 48 && g_mouse_x <= left + 50);
+        int h_ed = (row_hover && g_mouse_x >= left + 52 && g_mouse_x <= left + 55);
+        int h_del = (row_hover && g_mouse_x >= left + 57 && g_mouse_x <= left + 60);
 
         const char *bg = is_sel ? "\x1b[48;2;45;55;72m" : "";
-        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m%s  \x1b[38;2;210;153;34m[%d]\x1b[0m%s \x1b[38;2;230;237;243;1m%-14s\x1b[0m%s \x1b[38;2;139;148;158m%-22s\x1b[0m%s \x1b[38;2;63;185;80m[↑]\x1b[0m%s\x1b[38;2;217;119;54m[↓]\x1b[0m%s\x1b[38;2;121;192;255m[改]\x1b[0m%s\x1b[38;2;248;81;73m[×]\x1b[0m%s",
-                        r, left, bg, i + 1, bg, nm, bg, cm, bg, bg, bg, bg, bg);
-        int item_used = 1 + 2 + 3 + 1 + 14 + 1 + 22 + 1 + 3 + 3 + 3 + 3;
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m%s  \x1b[38;2;210;153;34m[%d]\x1b[0m%s \x1b[38;2;230;237;243;1m",
+                        r, left, bg, i + 1, bg);
+        int cols = 0;
+        append_padded_utf8(out, bs, &pos, &cols, g_chooser_items[i].name, 14);
+        pos += snprintf(out + pos, bs - pos, "\x1b[0m%s \x1b[38;2;139;148;158m", bg);
+        append_padded_utf8(out, bs, &pos, &cols, g_chooser_items[i].cmd, 22);
+        pos += snprintf(out + pos, bs - pos, "\x1b[0m%s ", bg);
+
+        // [↑] button
+        if (h_up)
+            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;63;185;80m\x1b[38;2;255;255;255;1m[↑]\x1b[0m%s", bg);
+        else
+            pos += snprintf(out + pos, bs - pos, "\x1b[38;2;63;185;80m[↑]\x1b[0m%s", bg);
+
+        // [↓] button
+        if (h_dn)
+            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;217;119;54m\x1b[38;2;255;255;255;1m[↓]\x1b[0m%s ", bg);
+        else
+            pos += snprintf(out + pos, bs - pos, "\x1b[38;2;217;119;54m[↓]\x1b[0m%s ", bg);
+
+        // [改] button
+        if (h_ed)
+            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;31;111;235m\x1b[38;2;255;255;255;1m[改]\x1b[0m%s ", bg);
+        else
+            pos += snprintf(out + pos, bs - pos, "\x1b[38;2;121;192;255m[改]\x1b[0m%s ", bg);
+
+        // [删] button
+        if (h_del)
+            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;248;81;73m\x1b[38;2;255;255;255;1m[删]\x1b[0m%s", bg);
+        else
+            pos += snprintf(out + pos, bs - pos, "\x1b[38;2;248;81;73m[删]\x1b[0m%s", bg);
+
+        int item_used = 1 + 2 + 4 + 14 + 1 + 22 + 1 + 3 + 3 + 1 + 4 + 1 + 4;
         while (item_used < sw - 1 && pos < bs - 8) { out[pos++] = ' '; item_used++; }
         pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[48;2;33;38;45m│\x1b[0m");
     }
 
-    // Action buttons row: [+] 添加条目   [P] 常用预设
+    // Action buttons row: [+] 添加新条目   [P] 快速添加预设
     int btn_r = top + 4 + g_chooser_item_count;
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[48;2;31;111;235m\x1b[38;2;255;255;255;1m [+] 添加新条目 \x1b[0m  \x1b[48;2;31;136;61m\x1b[38;2;255;255;255;1m [P] 快速添加预设 \x1b[0m", btn_r, left);
+    int h_add = (g_mouse_y == btn_r - 1 && g_mouse_x >= left + 2 && g_mouse_x <= left + 19);
+    int h_pre = (g_mouse_y == btn_r - 1 && g_mouse_x >= left + 22 && g_mouse_x <= left + 41);
+
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  ", btn_r, left);
+    if (h_add)
+        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;45;135;255m\x1b[38;2;255;255;255;1m [+] 添加新条目 \x1b[0m  ");
+    else
+        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;31;111;235m\x1b[38;2;255;255;255;1m [+] 添加新条目 \x1b[0m  ");
+
+    if (h_pre)
+        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;45;165;85m\x1b[38;2;255;255;255;1m [P] 快速添加预设 \x1b[0m");
+    else
+        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;31;136;61m\x1b[38;2;255;255;255;1m [P] 快速添加预设 \x1b[0m");
+
     int u_btn = 1 + 2 + 16 + 2 + 18;
     while (u_btn < sw - 1 && pos < bs - 8) { out[pos++] = ' '; u_btn++; }
     pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
 
-    // Divider
+    // Divider 2
     int d2_r = top + 5 + g_chooser_item_count;
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  ", d2_r, left);
     int u_d2 = 1 + 2;
@@ -2299,10 +2372,23 @@ static void render_settings_main(char *out, int bs, int *posp, int host_rows, in
     }
     pos += snprintf(out + pos, bs - pos, "  \x1b[48;2;33;38;45m│\x1b[0m");
 
-    // Footer: [S / Enter] 保存并写入配置    [Esc] 取消/返回
+    // Footer: [S] 保存配置 (termux.ini)          [Esc] 取消并返回
     int f_r = top + 6 + g_chooser_item_count;
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;63;185;80;1m[S] 保存配置 (termux.ini)\x1b[0m          \x1b[38;2;217;119;54m[Esc] 取消并返回\x1b[0m", f_r, left);
-    int u_f = 1 + 2 + 25 + 10 + 15;
+    int h_save = (g_mouse_y == f_r - 1 && g_mouse_x >= left + 2 && g_mouse_x <= left + 28);
+    int h_esc = (g_mouse_y == f_r - 1 && g_mouse_x >= left + 38 && g_mouse_x <= left + 54);
+
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  ", f_r, left);
+    if (h_save)
+        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;63;185;80m\x1b[38;2;255;255;255;1m [S] 保存配置 (termux.ini) \x1b[0m          ");
+    else
+        pos += snprintf(out + pos, bs - pos, "\x1b[38;2;63;185;80;1m[S] 保存配置 (termux.ini)\x1b[0m            ");
+
+    if (h_esc)
+        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;217;119;54m\x1b[38;2;255;255;255;1m [Esc] 取消并返回 \x1b[0m");
+    else
+        pos += snprintf(out + pos, bs - pos, "\x1b[38;2;217;119;54m[Esc] 取消并返回\x1b[0m");
+
+    int u_f = 1 + 2 + 25 + 12 + 15;
     while (u_f < sw - 1 && pos < bs - 8) { out[pos++] = ' '; u_f++; }
     pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
 
@@ -2319,7 +2405,7 @@ static void render_settings_main(char *out, int bs, int *posp, int host_rows, in
     *posp = pos;
 }
 
-#define EDIT_BOX_W 50
+#define EDIT_BOX_W 52
 #define EDIT_BOX_H 6
 static void render_settings_edit_dialog(char *out, int bs, int *posp, int host_rows, int host_cols) {
     (void)host_rows;
@@ -2330,9 +2416,10 @@ static void render_settings_edit_dialog(char *out, int bs, int *posp, int host_r
     if (left < 0) left = 0;
     int pos = *posp;
 
-    const char *title = (g_mux.settings_edit_idx >= 0) ? "┌─ 📝 编辑菜单项 " : "┌─ ➕ 添加新菜单项 ";
+    const char *title = (g_mux.settings_edit_idx >= 0) ? "┌─ [*] 编辑菜单项 " : "┌─ [*] 添加新菜单项 ";
+    int title_cols = (g_mux.settings_edit_idx >= 0) ? 17 : 19;
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m%s", top, left, title);
-    int used = 2 + 17;
+    int used = title_cols;
     while (used < ew - 1 && pos < bs - 8) {
         out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
         used++;
@@ -2342,27 +2429,44 @@ static void render_settings_edit_dialog(char *out, int bs, int *posp, int host_r
     // Field 0: 名称
     int f0_sel = (g_mux.settings_edit_field == 0);
     const char *f0_bg = f0_sel ? "\x1b[48;2;50;60;80m" : "\x1b[48;2;22;27;34m";
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m名称: \x1b[0m%s\x1b[38;2;230;237;243;1m %s\x1b[0m", top + 1, left, f0_bg, g_mux.settings_edit_name);
-    int u0 = 1 + 2 + 6 + 1 + utf8_cols(g_mux.settings_edit_name, g_mux.settings_edit_name_len);
-    while (u0 < ew - 1 && pos < bs - 8) { out[pos++] = ' '; u0++; }
-    pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[48;2;33;38;45m│\x1b[0m");
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m名称: \x1b[0m%s\x1b[38;2;230;237;243;1m ", top + 1, left, f0_bg);
+    int u0 = 0;
+    append_padded_utf8(out, bs, &pos, &u0, g_mux.settings_edit_name, 38);
+    pos += snprintf(out + pos, bs - pos, " \x1b[0m");
+    int total_u0 = 1 + 2 + 6 + 1 + 38 + 1;
+    while (total_u0 < ew - 1 && pos < bs - 8) { out[pos++] = ' '; total_u0++; }
+    pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
 
     // Field 1: 命令
     int f1_sel = (g_mux.settings_edit_field == 1);
     const char *f1_bg = f1_sel ? "\x1b[48;2;50;60;80m" : "\x1b[48;2;22;27;34m";
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m命令: \x1b[0m%s\x1b[38;2;230;237;243m %s\x1b[0m", top + 2, left, f1_bg, g_mux.settings_edit_cmd);
-    int u1 = 1 + 2 + 6 + 1 + utf8_cols(g_mux.settings_edit_cmd, g_mux.settings_edit_cmd_len);
-    while (u1 < ew - 1 && pos < bs - 8) { out[pos++] = ' '; u1++; }
-    pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[48;2;33;38;45m│\x1b[0m");
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m命令: \x1b[0m%s\x1b[38;2;230;237;243m ", top + 2, left, f1_bg);
+    int u1 = 0;
+    append_padded_utf8(out, bs, &pos, &u1, g_mux.settings_edit_cmd, 38);
+    pos += snprintf(out + pos, bs - pos, " \x1b[0m");
+    int total_u1 = 1 + 2 + 6 + 1 + 38 + 1;
+    while (total_u1 < ew - 1 && pos < bs - 8) { out[pos++] = ' '; total_u1++; }
+    pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
 
     // Tips: [Tab] 切换输入行
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;139;148;158m[Tab] 切换输入项  (特殊命令 :custom 为自定义输入)\x1b[0m", top + 3, left);
-    int u2 = 1 + 2 + 48;
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;139;148;158m[Tab] 切换输入项  (:custom 为自定义命令行)\x1b[0m", top + 3, left);
+    int u2 = 1 + 2 + 42;
     while (u2 < ew - 1 && pos < bs - 8) { out[pos++] = ' '; u2++; }
     pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
 
     // Action buttons: [Enter] 确定  [Esc] 取消
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;63;185;80;1m[Enter] 确认保存\x1b[0m           \x1b[38;2;217;119;54m[Esc] 取消\x1b[0m", top + 4, left);
+    int h_ok = (g_mouse_y == top + 3 && g_mouse_x >= left + 2 && g_mouse_x <= left + 18);
+    int h_esc = (g_mouse_y == top + 3 && g_mouse_x >= left + 28 && g_mouse_x <= left + 40);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  ", top + 4, left);
+    if (h_ok)
+        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;63;185;80m\x1b[38;2;255;255;255;1m [Enter] 确认保存 \x1b[0m         ");
+    else
+        pos += snprintf(out + pos, bs - pos, "\x1b[38;2;63;185;80;1m[Enter] 确认保存\x1b[0m           ");
+    if (h_esc)
+        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;217;119;54m\x1b[38;2;255;255;255;1m [Esc] 取消 \x1b[0m");
+    else
+        pos += snprintf(out + pos, bs - pos, "\x1b[38;2;217;119;54m[Esc] 取消\x1b[0m");
+
     int u3 = 1 + 2 + 16 + 11 + 9;
     while (u3 < ew - 1 && pos < bs - 8) { out[pos++] = ' '; u3++; }
     pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
@@ -2379,7 +2483,7 @@ static void render_settings_edit_dialog(char *out, int bs, int *posp, int host_r
     *posp = pos;
 }
 
-#define PRESET_BOX_W 48
+#define PRESET_BOX_W 50
 static void render_settings_presets(char *out, int bs, int *posp, int host_rows, int host_cols) {
     (void)host_rows;
     int top = 3;
@@ -2389,8 +2493,8 @@ static void render_settings_presets(char *out, int bs, int *posp, int host_rows,
     if (left < 0) left = 0;
     int pos = *posp;
 
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[38;2;255;255;255m\x1b[48;2;31;136;61m┌─ ⚡ 常用命令行预设 (按数字添加) ", top, left);
-    int used = 2 + 33;
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[38;2;255;255;255m\x1b[48;2;31;136;61m┌─ 常用命令行预设 (按数字添加) ", top, left);
+    int used = 2 + 29;
     while (used < pw - 1 && pos < bs - 8) {
         out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
         used++;
@@ -2399,16 +2503,29 @@ static void render_settings_presets(char *out, int bs, int *posp, int host_rows,
 
     for (int i = 0; i < g_preset_count; i++) {
         int r = top + 1 + i;
-        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m[%d]\x1b[0m \x1b[38;2;230;237;243;1m%-12s\x1b[0m \x1b[38;2;139;148;158m%-24s\x1b[0m",
-                        r, left, i + 1, g_presets[i].name, g_presets[i].cmd);
-        int u = 1 + 2 + 3 + 1 + 12 + 1 + 24;
+        int row_hover = (g_mouse_y == r - 1);
+        const char *bg = row_hover ? "\x1b[48;2;45;55;72m" : "";
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m%s  \x1b[38;2;210;153;34m[%d]\x1b[0m%s \x1b[38;2;230;237;243;1m",
+                        r, left, bg, i + 1, bg);
+        int cols = 0;
+        append_padded_utf8(out, bs, &pos, &cols, g_presets[i].name, 12);
+        pos += snprintf(out + pos, bs - pos, "\x1b[0m%s \x1b[38;2;139;148;158m", bg);
+        append_padded_utf8(out, bs, &pos, &cols, g_presets[i].cmd, 26);
+        pos += snprintf(out + pos, bs - pos, "\x1b[0m%s", bg);
+
+        int u = 1 + 2 + 4 + 12 + 1 + 26;
         while (u < pw - 1 && pos < bs - 8) { out[pos++] = ' '; u++; }
-        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
+        pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[48;2;33;38;45m│\x1b[0m");
     }
 
     int esc_r = top + 1 + g_preset_count;
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;139;148;158m[Esc] 取消\x1b[0m", esc_r, left);
-    int ue = 1 + 2 + 9;
+    int h_esc = (g_mouse_y == esc_r - 1 && g_mouse_x >= left + 2 && g_mouse_x <= left + 14);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  ", esc_r, left);
+    if (h_esc)
+        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;217;119;54m\x1b[38;2;255;255;255;1m [Esc] 取消 \x1b[0m");
+    else
+        pos += snprintf(out + pos, bs - pos, "\x1b[38;2;139;148;158m[Esc] 取消\x1b[0m");
+    int ue = 1 + 2 + 12;
     while (ue < pw - 1 && pos < bs - 8) { out[pos++] = ' '; ue++; }
     pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
 
@@ -2656,7 +2773,7 @@ static const char *const g_help_lines[] = {
     "  \x1b[38;2;230;237;243m点击 [x]\x1b[0m           关闭该 pane",
     "  \x1b[38;2;230;237;243m右键 tab\x1b[0m           改颜色 / 改标题",
     "  \x1b[38;2;230;237;243m点击 [+]\x1b[0m           新建 pane (支持选择/自定义命令行)",
-    "  \x1b[38;2;230;237;243m点击 [⚙]\x1b[0m           打开图形化设置页面",
+    "  \x1b[38;2;230;237;243m点击 [*]\x1b[0m           打开图形化设置页面",
     "  \x1b[38;2;230;237;243m点击 termux\x1b[0m       打开 / 关闭本帮助",
     "",
     "\x1b[38;2;121;192;255;1m  提示与警告\x1b[0m",
@@ -2989,17 +3106,20 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
             g_mux.needs_redraw = 1;
             return;
         }
-        if (vk == VK_UP) {
+        // Ctrl+Up: select previous item
+        if (vk == VK_UP && is_ctrl) {
             if (g_mux.settings_sel > 0) g_mux.settings_sel--;
             g_mux.needs_redraw = 1;
             return;
         }
-        if (vk == VK_DOWN) {
+        // Ctrl+Down: select next item
+        if (vk == VK_DOWN && is_ctrl) {
             if (g_mux.settings_sel < g_chooser_item_count - 1) g_mux.settings_sel++;
             g_mux.needs_redraw = 1;
             return;
         }
-        if (uc == 'u' || uc == 'U') { // Move item up
+        // Up (without Ctrl): move selected item position up
+        if ((vk == VK_UP && !is_ctrl) || uc == 'u' || uc == 'U') {
             int i = g_mux.settings_sel;
             if (i > 0 && i < g_chooser_item_count) {
                 ChooserItem tmp = g_chooser_items[i];
@@ -3010,7 +3130,8 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
             }
             return;
         }
-        if (uc == 'd' || uc == 'D') { // Move item down
+        // Down (without Ctrl): move selected item position down
+        if ((vk == VK_DOWN && !is_ctrl) || uc == 'd' || uc == 'D') {
             int i = g_mux.settings_sel;
             if (i >= 0 && i < g_chooser_item_count - 1) {
                 ChooserItem tmp = g_chooser_items[i];
@@ -3021,9 +3142,10 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
             }
             return;
         }
-        if (uc == 'x' || uc == 'X' || vk == VK_DELETE) { // Delete item
+        // Ctrl+D / Delete / x: delete selected item
+        if ((vk == 'D' && is_ctrl) || (uc == 0x04) || vk == VK_DELETE || uc == 'x' || uc == 'X') {
             int i = g_mux.settings_sel;
-            if (i >= 0 && i < g_chooser_item_count) {
+            if (i >= 0 && i < g_chooser_item_count && g_chooser_item_count > 1) {
                 for (int k = i; k < g_chooser_item_count - 1; k++) {
                     g_chooser_items[k] = g_chooser_items[k + 1];
                 }
@@ -3034,7 +3156,8 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
             }
             return;
         }
-        if (uc == 'e' || uc == 'E' || vk == VK_RETURN) { // Edit selected item
+        // Enter / e: edit selected item
+        if (vk == VK_RETURN || uc == 'e' || uc == 'E') {
             int i = g_mux.settings_sel;
             if (i >= 0 && i < g_chooser_item_count) {
                 g_mux.settings_mode = 2;
@@ -3492,7 +3615,7 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
         // picker's swatches need live hover highlights (previously the picker
         // was never redrawn on mouse move, so hovering did nothing).
         if (now_in || (prev_in && !now_in) ||
-            g_mux.chooser_mode || g_mux.ctx_mode || g_mux.rename_mode || g_mux.custom_cmd_mode)
+            g_mux.chooser_mode || g_mux.ctx_mode || g_mux.rename_mode || g_mux.custom_cmd_mode || g_mux.settings_mode)
             g_mux.needs_redraw = 1;
         g_mouse_prev_in_tabbar = now_in;
 
@@ -3522,11 +3645,15 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
         // only closes it - never opens another popup on top (mutual exclusion).
         int press2 = (me->dwButtonState & (FROM_LEFT_1ST_BUTTON_PRESSED | FROM_LEFT_2ND_BUTTON_PRESSED | RIGHTMOST_BUTTON_PRESSED)) != 0;
         if (press2 && (me->dwEventFlags == 0 || me->dwEventFlags == DOUBLE_CLICK) &&
-            (g_mux.chooser_mode || g_mux.ctx_mode || g_mux.rename_mode || g_mux.custom_cmd_mode)) {
+            (g_mux.chooser_mode || g_mux.ctx_mode || g_mux.rename_mode || g_mux.custom_cmd_mode || g_mux.settings_mode)) {
             g_mux.chooser_mode = 0;
             g_mux.ctx_mode = 0;
             g_mux.rename_mode = 0;
             g_mux.custom_cmd_mode = 0;
+            if (g_mux.settings_mode) {
+                load_config();
+                g_mux.settings_mode = 0;
+            }
             g_mux.needs_redraw = 1;
             return;
         }
@@ -3675,9 +3802,8 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                         for (int i = 0; i < g_chooser_item_count; i++) {
                             if (r == top + 4 + i) {
                                 g_mux.settings_sel = i;
-                                int right_edge = left + sw;
                                 // [↑]
-                                if (c >= right_edge - 17 && c <= right_edge - 14) {
+                                if (c >= left + 46 && c <= left + 48) {
                                     if (i > 0) {
                                         ChooserItem tmp = g_chooser_items[i];
                                         g_chooser_items[i] = g_chooser_items[i - 1];
@@ -3686,7 +3812,7 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                                     }
                                 }
                                 // [↓]
-                                else if (c >= right_edge - 13 && c <= right_edge - 10) {
+                                else if (c >= left + 49 && c <= left + 51) {
                                     if (i < g_chooser_item_count - 1) {
                                         ChooserItem tmp = g_chooser_items[i];
                                         g_chooser_items[i] = g_chooser_items[i + 1];
@@ -3695,7 +3821,7 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                                     }
                                 }
                                 // [改]
-                                else if (c >= right_edge - 9 && c <= right_edge - 6) {
+                                else if (c >= left + 53 && c <= left + 56) {
                                     g_mux.settings_mode = 2;
                                     g_mux.settings_edit_idx = i;
                                     g_mux.settings_edit_field = 0;
@@ -3706,17 +3832,19 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                                     g_mux.settings_edit_cmd_len = (int)strlen(g_mux.settings_edit_cmd);
                                     g_mux.settings_edit_cmd_pos = g_mux.settings_edit_cmd_len;
                                 }
-                                // [×]
-                                else if (c >= right_edge - 5 && c <= right_edge - 2) {
-                                    for (int k = i; k < g_chooser_item_count - 1; k++) {
-                                        g_chooser_items[k] = g_chooser_items[k + 1];
+                                // [删]
+                                else if (c >= left + 58 && c <= left + 61) {
+                                    if (g_chooser_item_count > 1) {
+                                        for (int k = i; k < g_chooser_item_count - 1; k++) {
+                                            g_chooser_items[k] = g_chooser_items[k + 1];
+                                        }
+                                        g_chooser_item_count--;
+                                        if (g_mux.settings_sel >= g_chooser_item_count && g_mux.settings_sel > 0)
+                                            g_mux.settings_sel = g_chooser_item_count - 1;
                                     }
-                                    g_chooser_item_count--;
-                                    if (g_mux.settings_sel >= g_chooser_item_count && g_mux.settings_sel > 0)
-                                        g_mux.settings_sel = g_chooser_item_count - 1;
                                 }
-                                // Click text -> edit
-                                else {
+                                // Click text / row -> select item (double click -> edit)
+                                else if (me->dwEventFlags == DOUBLE_CLICK) {
                                     g_mux.settings_mode = 2;
                                     g_mux.settings_edit_idx = i;
                                     g_mux.settings_edit_field = 0;
