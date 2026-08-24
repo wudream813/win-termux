@@ -64,6 +64,27 @@ set TERMUX_DUMP=1   :: 启用诊断日志（termux_dump.log / render_dump.log / 
 termux.exe
 ```
 
+## ⚙️ 配置文件 (termux.ini)
+
+`termux` 支持通过 `termux.ini` 配置文件自定义 **[+] 新建菜单** 中的条目、顺序与启动命令。
+
+- **配置文件路径**：优先读取 `termux.exe` 所在目录下的 `termux.ini`；若不存在则读取 `%USERPROFILE%\.termux.ini`。首次启动会自动生成默认配置文件。
+- **配置示例**：
+  ```ini
+  # win-termux 配置文件 (UTF-8)
+  # 格式: 序号 = 菜单显示名称, 启动命令行
+  # 特殊命令 ":custom" 表示打开自定义命令行输入框
+
+  [menu]
+  1 = cmd, cmd.exe
+  2 = PowerShell, powershell.exe
+  3 = 自定义命令行, :custom
+  # 自定义示例 (取消注释即可启用，支持 1-9 项，按数字键或鼠标点击直接启动):
+  # 4 = WSL Ubuntu, wsl.exe -d Ubuntu
+  # 5 = Git Bash, "C:\Program Files\Git\bin\bash.exe" --login -i
+  # 6 = Python, python -i
+  ```
+
 ## 系统要求
 
 - Windows 10 1809 (RS5) 或更高（ConPTY 支持）
@@ -92,6 +113,7 @@ python3 verify_color8.py    # color=8 渲染用色回归
 ## 版本历史
 
 - **v1.0.5**
+  - 新增 `termux.ini` 配置文件支持：可持久化自定义新建 Pane 菜单的条目数量（1-9项）、显示名称、顺序位置与启动命令行，不存在时自动生成默认配置
   - 修复嵌套运行（termux 套 termux）时鼠标移入外层 Tab 栏导致子 termux 悬停（Hover）残留卡住的问题
   - 修复更改标题与自定义命令行输入框不支持 `←` / `→` / `Home` / `End` 光标导航的问题
   - 修复 Unicode Emoji（如 `✍️`、带变体选择符/ZWJ序列等）按 Backspace 需要删除两次的问题（支持字素簇一键删除）

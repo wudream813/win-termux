@@ -273,6 +273,116 @@ static int g_pop_anchor_x = -1;
 static WCHAR g_orig_title[256] = {0};
 static char g_current_host_title[128] = {0};
 
+typedef struct {
+    char name[32];
+    char cmd[256];
+} ChooserItem;
+
+#define MAX_CHOOSER_ITEMS 9
+static ChooserItem g_chooser_items[MAX_CHOOSER_ITEMS];
+static int g_chooser_item_count = 0;
+
+static void init_default_config(void) {
+    g_chooser_item_count = 3;
+    strcpy(g_chooser_items[0].name, "cmd");
+    strcpy(g_chooser_items[0].cmd, "cmd.exe");
+
+    strcpy(g_chooser_items[1].name, "PowerShell");
+    strcpy(g_chooser_items[1].cmd, "powershell.exe");
+
+    strcpy(g_chooser_items[2].name, "自定义命令行");
+    strcpy(g_chooser_items[2].cmd, ":custom");
+}
+
+static void load_config(void) {
+    init_default_config();
+
+    WCHAR exe_path[MAX_PATH] = {0};
+    GetModuleFileNameW(NULL, exe_path, MAX_PATH);
+    WCHAR *last_bs = wcsrchr(exe_path, L'\\');
+    WCHAR ini_path[MAX_PATH] = {0};
+    if (last_bs) {
+        *last_bs = 0;
+        _snwprintf(ini_path, MAX_PATH - 1, L"%s\\termux.ini", exe_path);
+    } else {
+        wcscpy(ini_path, L"termux.ini");
+    }
+
+    FILE *f = _wfopen(ini_path, L"rb");
+    if (!f) {
+        const WCHAR *prof = _wgetenv(L"USERPROFILE");
+        if (prof) {
+            WCHAR user_ini[MAX_PATH] = {0};
+            _snwprintf(user_ini, MAX_PATH - 1, L"%s\\.termux.ini", prof);
+            f = _wfopen(user_ini, L"rb");
+        }
+    }
+
+    // If config file doesn't exist, create a default termux.ini with helpful comments
+    if (!f) {
+        FILE *wf = _wfopen(ini_path, L"wb");
+        if (wf) {
+            const char *default_ini =
+                "# win-termux 配置文件 (UTF-8)\r\n"
+                "# 可自定义 [+] 新建菜单中的条目、位置顺序与启动命令（支持 1-9 项）\r\n"
+                "# 格式: 序号 = 菜单显示名称, 启动命令行\r\n"
+                "# 特殊命令 \":custom\" 表示打开自定义命令行输入框\r\n"
+                "\r\n"
+                "[menu]\r\n"
+                "1 = cmd, cmd.exe\r\n"
+                "2 = PowerShell, powershell.exe\r\n"
+                "3 = 自定义命令行, :custom\r\n"
+                "# 示例（取消注释即可启用）:\r\n"
+                "# 4 = WSL, wsl.exe\r\n"
+                "# 5 = Git Bash, \"C:\\Program Files\\Git\\bin\\bash.exe\" --login -i\r\n"
+                "# 6 = Python, python -i\r\n";
+            fwrite(default_ini, 1, strlen(default_ini), wf);
+            fclose(wf);
+        }
+        return;
+    }
+
+    char line[512];
+    int parsed_count = 0;
+    while (fgets(line, sizeof(line), f)) {
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p || *p == '#' || *p == ';' || *p == '\r' || *p == '\n' || *p == '[') continue;
+        char *eq = strchr(p, '=');
+        if (!eq) continue;
+        char *val = eq + 1;
+        while (*val == ' ' || *val == '\t') val++;
+        char *comma = strchr(val, ',');
+        if (!comma) continue;
+        *comma = 0;
+        char *name = val;
+        char *cmd = comma + 1;
+        while (*cmd == ' ' || *cmd == '\t') cmd++;
+
+        // trim trailing whitespace from name
+        int nlen = (int)strlen(name);
+        while (nlen > 0 && ((unsigned char)name[nlen - 1] <= ' ' || name[nlen - 1] == '\r' || name[nlen - 1] == '\n')) name[--nlen] = 0;
+
+        // trim trailing whitespace from cmd
+        int clen = (int)strlen(cmd);
+        while (clen > 0 && ((unsigned char)cmd[clen - 1] <= ' ' || cmd[clen - 1] == '\r' || cmd[clen - 1] == '\n')) cmd[--clen] = 0;
+
+        if (nlen > 0 && clen > 0 && parsed_count < MAX_CHOOSER_ITEMS) {
+            strncpy(g_chooser_items[parsed_count].name, name, sizeof(g_chooser_items[0].name) - 1);
+            g_chooser_items[parsed_count].name[sizeof(g_chooser_items[0].name) - 1] = 0;
+
+            strncpy(g_chooser_items[parsed_count].cmd, cmd, sizeof(g_chooser_items[0].cmd) - 1);
+            g_chooser_items[parsed_count].cmd[sizeof(g_chooser_items[0].cmd) - 1] = 0;
+            parsed_count++;
+        }
+    }
+    fclose(f);
+
+    if (parsed_count > 0) {
+        g_chooser_item_count = parsed_count;
+    }
+}
+
 // Rendering happens frequently while pane output is streaming. Reuse one
 // scratch buffer instead of allocating and freeing a multi-megabyte block on
 // every frame; render_screen is serialized by g_mux.cs, so one buffer is
@@ -1850,26 +1960,66 @@ static void draw_tab_bar(char *out, int bs, int *posp) {
     *posp = pos;
 }
 
-// v8.23: draw the new-pane chooser as a small centered dialog (keeps the
-// underlying pane content visible - no full-screen clear). All rows are
-// exactly CHOOSER_W columns wide.
-#define CHOOSER_W 26
-#define CHOOSER_H 6
-static void render_chooser(char *out, int bs, int *posp, int host_rows, int host_cols) {
+static void chooser_geom(int host_rows, int host_cols, int *top, int *left, int *w, int *h) {
     (void)host_rows;
+    int cw = 26;
+    for (int i = 0; i < g_chooser_item_count; i++) {
+        int nw = utf8_cols(g_chooser_items[i].name, (int)strlen(g_chooser_items[i].name)) + 12;
+        if (nw > cw) cw = nw;
+    }
+    if (cw > host_cols) cw = host_cols;
+    if (cw < 26) cw = 26;
+    int ch = g_chooser_item_count + 3;
+
+    if (w) *w = cw;
+    if (h) *h = ch;
+    *top = 2;   // below the tab bar
+    *left = (g_pop_anchor_x >= 0) ? g_pop_anchor_x : g_mouse_x;
+    if (*left + cw > host_cols) *left = (g_pop_anchor_x >= 0 ? g_pop_anchor_x : g_mouse_x) - cw;
+    if (*left < 0) *left = 0;
+}
+
+static void render_chooser(char *out, int bs, int *posp, int host_rows, int host_cols) {
+    int top, left, cw, ch;
+    chooser_geom(host_rows, host_cols, &top, &left, &cw, &ch);
     int pos = *posp;
-    // v8.47: top = row 2 (below the tab bar) so the ┌──┐ border is visible
-    int top = 2;
-    int ax = (g_pop_anchor_x >= 0) ? g_pop_anchor_x : g_mouse_x;
-    int left = ax;
-    if (left + CHOOSER_W > host_cols) left = ax - CHOOSER_W;
-    if (left < 0) left = 0;
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m┌─ 新建 pane ────────────┐\x1b[0m", top, left);
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m[1]\x1b[0m \x1b[38;2;230;237;243mcmd\x1b[0m               \x1b[48;2;33;38;45m│\x1b[0m", top + 1, left);
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m[2]\x1b[0m \x1b[38;2;230;237;243mPowerShell\x1b[0m        \x1b[48;2;33;38;45m│\x1b[0m", top + 2, left);
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m[3]\x1b[0m \x1b[38;2;230;237;243m自定义命令行\x1b[0m      \x1b[48;2;33;38;45m│\x1b[0m", top + 3, left);
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;139;148;158mEsc 取消\x1b[0m              \x1b[48;2;33;38;45m│\x1b[0m", top + 4, left);
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m└────────────────────────┘\x1b[0m", top + 5, left);
+
+    // Header: ┌─ 新建 pane ──────┐
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m┌─ 新建 pane ", top, left);
+    int used = 2 + 11; // "┌─" (2) + " 新建 pane " (11)
+    while (used < cw - 1 && pos < bs - 8) {
+        out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
+        used++;
+    }
+    pos += snprintf(out + pos, bs - pos, "┐\x1b[0m");
+
+    // Items
+    for (int i = 0; i < g_chooser_item_count; i++) {
+        int r = top + 1 + i;
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m[%d]\x1b[0m \x1b[38;2;230;237;243m%s\x1b[0m",
+                        r, left, i + 1, g_chooser_items[i].name);
+        int item_used = 1 + 2 + 3 + 1 + utf8_cols(g_chooser_items[i].name, (int)strlen(g_chooser_items[i].name));
+        while (item_used < cw - 1 && pos < bs - 8) { out[pos++] = ' '; item_used++; }
+        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
+    }
+
+    // Esc row
+    int esc_r = top + 1 + g_chooser_item_count;
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;139;148;158mEsc 取消\x1b[0m", esc_r, left);
+    int esc_used = 1 + 2 + 8; // "│" (1) + "  " (2) + "Esc 取消" (8)
+    while (esc_used < cw - 1 && pos < bs - 8) { out[pos++] = ' '; esc_used++; }
+    pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
+
+    // Bottom border: └──────┘
+    int bot_r = top + 2 + g_chooser_item_count;
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m└", bot_r, left);
+    int bot_used = 1;
+    while (bot_used < cw - 1 && pos < bs - 8) {
+        out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
+        bot_used++;
+    }
+    pos += snprintf(out + pos, bs - pos, "┘\x1b[0m");
+
     *posp = pos;
 }
 
@@ -1984,16 +2134,6 @@ static void render_color_picker(char *out, int bs, int *posp, int host_rows, int
     }
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m└────────────────────────────┘\x1b[0m", top + 3, left);
     *posp = pos;
-}
-
-// v8.23: chooser geometry shared with the mouse handler
-static void chooser_geom(int host_rows, int host_cols, int *top, int *left) {
-    (void)host_rows;
-    // v8.42: match render_chooser's near-mouse placement
-    *top = 2;   // v8.47: below the tab bar
-    *left = (g_pop_anchor_x >= 0) ? g_pop_anchor_x : g_mouse_x;
-    if (*left + CHOOSER_W > host_cols) *left = (g_pop_anchor_x >= 0 ? g_pop_anchor_x : g_mouse_x) - CHOOSER_W;
-    if (*left < 0) *left = 0;
 }
 
 static void update_host_title(void) {
@@ -2363,8 +2503,15 @@ create_fail:
     return -1;
 }
 
-// v8.21: default shell is cmd (kept for existing callers)
-static int create_pane(void) { return create_pane_shell(L"cmd.exe"); }
+// v8.21: default shell is configured item 1 or cmd
+static int create_pane(void) {
+    if (g_chooser_item_count > 0 && strcmp(g_chooser_items[0].cmd, ":custom") != 0) {
+        WCHAR wcmd[256] = {0};
+        MultiByteToWideChar(CP_UTF8, 0, g_chooser_items[0].cmd, -1, wcmd, 255);
+        return create_pane_shell(wcmd);
+    }
+    return create_pane_shell(L"cmd.exe");
+}
 
 static void close_pane(int idx) {
     if (idx < 0 || idx >= g_mux.pane_count) return;
@@ -2715,27 +2862,34 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
         g_mux.needs_redraw = 1;
         return;
     }
-    // v8.21: shell chooser - 1/2 select, Esc/other cancels
+    // shell chooser - 1..N selects configured item, Esc cancels
     if (g_mux.chooser_mode) {
-        if (uc == '1' || vk == '1') {
+        if (vk == VK_ESCAPE) {
             g_mux.chooser_mode = 0;
-            int ni = create_pane_shell(L"cmd.exe");
-            if (ni >= 0) switch_pane(ni);
             g_mux.needs_redraw = 1;
             return;
         }
-        if (uc == '2' || vk == '2') {
-            g_mux.chooser_mode = 0;
-            int ni = create_pane_shell(L"powershell.exe");
-            if (ni >= 0) switch_pane(ni);
-            g_mux.needs_redraw = 1;
-            return;
+        int selected_idx = -1;
+        for (int i = 0; i < g_chooser_item_count; i++) {
+            char digit = (char)('1' + i);
+            if (uc == digit || vk == ('1' + i) || (vk == (VK_NUMPAD1 + i))) {
+                selected_idx = i;
+                break;
+            }
         }
-        if (uc == '3' || vk == '3') {
+        if (selected_idx >= 0) {
             g_mux.chooser_mode = 0;
-            g_mux.custom_cmd_mode = 1;
-            g_mux.custom_cmd_len = 0;
-            g_mux.custom_cmd_buf[0] = 0;
+            if (strcmp(g_chooser_items[selected_idx].cmd, ":custom") == 0) {
+                g_mux.custom_cmd_mode = 1;
+                g_mux.custom_cmd_len = 0;
+                g_mux.custom_cmd_pos = 0;
+                g_mux.custom_cmd_buf[0] = 0;
+            } else {
+                WCHAR wcmd[256] = {0};
+                MultiByteToWideChar(CP_UTF8, 0, g_chooser_items[selected_idx].cmd, -1, wcmd, 255);
+                int ni = create_pane_shell(wcmd);
+                if (ni >= 0) switch_pane(ni);
+            }
             g_mux.needs_redraw = 1;
             return;
         }
@@ -3023,33 +3177,30 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                 g_mux.needs_redraw = 1;
                 return;
             }
-            // chooser: [1] cmd / [2] PowerShell, click anywhere else cancels
-            int top, left;
-            chooser_geom(g_mux.host_rows, g_mux.host_cols, &top, &left);
+            // chooser: 1..N items from termux.ini, click anywhere else cancels
+            int top, left, cw, ch;
+            chooser_geom(g_mux.host_rows, g_mux.host_cols, &top, &left, &cw, &ch);
             int r = my + 1, c = mx + 1;   // convert to 1-based (as the renderer)
-            int in_box = (r >= top && r < top + CHOOSER_H && c >= left && c < left + CHOOSER_W);
-            if (in_box && r == top + 1) {   // [1] cmd
-                g_mux.chooser_mode = 0;
-                int ni = create_pane_shell(L"cmd.exe");
-                if (ni >= 0) switch_pane(ni);
-                g_mux.needs_redraw = 1;
-                return;
-            }
-            if (in_box && r == top + 2) {   // [2] PowerShell
-                g_mux.chooser_mode = 0;
-                int ni = create_pane_shell(L"powershell.exe");
-                if (ni >= 0) switch_pane(ni);
-                g_mux.needs_redraw = 1;
-                return;
-            }
-            if (in_box && r == top + 3) {   // [3] 自定义命令行
-                g_mux.chooser_mode = 0;
-                g_mux.custom_cmd_mode = 1;
-                g_mux.custom_cmd_len = 0;
-                g_mux.custom_cmd_pos = 0;
-                g_mux.custom_cmd_buf[0] = 0;
-                g_mux.needs_redraw = 1;
-                return;
+            int in_box = (r >= top && r < top + ch && c >= left && c < left + cw);
+            if (in_box) {
+                for (int i = 0; i < g_chooser_item_count; i++) {
+                    if (r == top + 1 + i) {
+                        g_mux.chooser_mode = 0;
+                        if (strcmp(g_chooser_items[i].cmd, ":custom") == 0) {
+                            g_mux.custom_cmd_mode = 1;
+                            g_mux.custom_cmd_len = 0;
+                            g_mux.custom_cmd_pos = 0;
+                            g_mux.custom_cmd_buf[0] = 0;
+                        } else {
+                            WCHAR wcmd[256] = {0};
+                            MultiByteToWideChar(CP_UTF8, 0, g_chooser_items[i].cmd, -1, wcmd, 255);
+                            int ni = create_pane_shell(wcmd);
+                            if (ni >= 0) switch_pane(ni);
+                        }
+                        g_mux.needs_redraw = 1;
+                        return;
+                    }
+                }
             }
             // click anywhere else cancels
             g_mux.chooser_mode = 0;
@@ -3264,6 +3415,7 @@ int main(void) {
         if (f) { fprintf(f, "[v8.54] startup host=%dx%d\n", g_mux.host_cols, g_mux.host_rows); fclose(f); }
     }
     SetConsoleCtrlHandler(ctrl_handler, TRUE);   // v7: restore console on Ctrl+C/close
+    load_config();                               // load custom menu items from termux.ini
 
     host_printf("\x1b[?1049h\x1b[2J\x1b[H");
     host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.0.5\x1b[0m\r\n");
