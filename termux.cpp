@@ -1,4 +1,4 @@
-// termux.cpp - Windows Terminal Multiplexer v1.0.5
+// termux.cpp - Windows Terminal Multiplexer v1.1.1
 // ---------------------------------------------------------------------------
 // v8.3 changes:
 //  19. ConPTY line-width autodetect: legacy full-screen apps (edit.com...) can
@@ -110,7 +110,9 @@
 #include <stdarg.h>
 #include <process.h>
 
+#ifdef _MSC_VER
 #pragma comment(lib, "user32.lib")
+#endif
 
 #define MAX_PANES         16
 #define SCROLL_BUF_LINES  10000
@@ -255,6 +257,16 @@ typedef struct {
     char rename_buf[64];
     int rename_len;
     int rename_pos;
+    int settings_mode;       // 0=off, 1=main settings, 2=edit item, 3=presets
+    int settings_sel;        // selected item index 0..N-1
+    int settings_edit_idx;   // editing item index (or -1 for new)
+    int settings_edit_field; // 0=name, 1=cmd
+    char settings_edit_name[32];
+    int settings_edit_name_len;
+    int settings_edit_name_pos;
+    char settings_edit_cmd[256];
+    int settings_edit_cmd_len;
+    int settings_edit_cmd_pos;
     DWORD orig_in_mode, orig_out_mode;
     UINT orig_cp, orig_input_cp;
     PaneTabInfo tab_info[MAX_PANES + 3];
@@ -381,6 +393,57 @@ static void load_config(void) {
     if (parsed_count > 0) {
         g_chooser_item_count = parsed_count;
     }
+}
+
+static const ChooserItem g_presets[] = {
+    {"cmd", "cmd.exe"},
+    {"PowerShell", "powershell.exe"},
+    {"WSL", "wsl.exe"},
+    {"Git Bash", "\"C:\\Program Files\\Git\\bin\\bash.exe\" --login -i"},
+    {"Python", "python -i"},
+    {"Node.js", "node"},
+    {"自定义命令行", ":custom"},
+};
+static const int g_preset_count = (int)(sizeof(g_presets) / sizeof(g_presets[0]));
+
+static void save_config(void) {
+    WCHAR exe_path[MAX_PATH] = {0};
+    GetModuleFileNameW(NULL, exe_path, MAX_PATH);
+    WCHAR *last_bs = wcsrchr(exe_path, L'\\');
+    WCHAR ini_path[MAX_PATH] = {0};
+    if (last_bs) {
+        *last_bs = 0;
+        _snwprintf(ini_path, MAX_PATH - 1, L"%s\\termux.ini", exe_path);
+    } else {
+        wcscpy(ini_path, L"termux.ini");
+    }
+
+    FILE *f = _wfopen(ini_path, L"wb");
+    if (!f) {
+        const WCHAR *prof = _wgetenv(L"USERPROFILE");
+        if (prof) {
+            WCHAR user_ini[MAX_PATH] = {0};
+            _snwprintf(user_ini, MAX_PATH - 1, L"%s\\.termux.ini", prof);
+            f = _wfopen(user_ini, L"wb");
+        }
+    }
+    if (!f) return;
+
+    const char *header =
+        "# win-termux 配置文件 (UTF-8)\r\n"
+        "# 可自定义 [+] 新建菜单中的条目、位置顺序与启动命令（支持 1-9 项）\r\n"
+        "# 格式: 序号 = 菜单显示名称, 启动命令行\r\n"
+        "# 特殊命令 \":custom\" 表示打开自定义命令行输入框\r\n"
+        "\r\n"
+        "[menu]\r\n";
+    fwrite(header, 1, strlen(header), f);
+
+    for (int i = 0; i < g_chooser_item_count; i++) {
+        char line[512];
+        int len = snprintf(line, sizeof(line), "%d = %s, %s\r\n", i + 1, g_chooser_items[i].name, g_chooser_items[i].cmd);
+        if (len > 0) fwrite(line, 1, len, f);
+    }
+    fclose(f);
 }
 
 // Rendering happens frequently while pane output is streaming. Reuse one
@@ -1954,6 +2017,20 @@ static void draw_tab_bar(char *out, int bs, int *posp) {
         col += 3;
         g_mux.tab_count++;
     }
+    // [⚙] Settings button (-3)
+    if (col < g_mux.host_cols) { pos += snprintf(out + pos, bs - pos, TB_BG " "); col++; }
+    if (col + 3 <= g_mux.host_cols) {
+        g_mux.tab_info[g_mux.tab_count].start_col = col;
+        g_mux.tab_info[g_mux.tab_count].end_col = col + 3;
+        g_mux.tab_info[g_mux.tab_count].pane_idx = -3;
+        int shover = (g_mouse_y == 0 && g_mouse_x >= col && g_mouse_x < col + 3);
+        if (shover)
+            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;137;87;229m\x1b[38;2;255;255;255;1m[⚙]\x1b[0m");
+        else
+            pos += snprintf(out + pos, bs - pos, TAB_IN_BG "\x1b[38;2;139;148;158m[⚙]\x1b[0m");
+        col += 3;
+        g_mux.tab_count++;
+    }
     pos += snprintf(out + pos, bs - pos, TB_BG);
     while (col < g_mux.host_cols && pos < bs - 4) { out[pos++] = ' '; col++; }
     pos += snprintf(out + pos, bs - pos, "\x1b[0m");
@@ -2136,6 +2213,217 @@ static void render_color_picker(char *out, int bs, int *posp, int host_rows, int
     *posp = pos;
 }
 
+#define SET_W 64
+static void settings_geom(int host_rows, int host_cols, int *top, int *left, int *w, int *h) {
+    (void)host_rows;
+    int sw = SET_W;
+    if (sw > host_cols) sw = host_cols;
+    if (sw < 40) sw = 40;
+    int sh = g_chooser_item_count + 9;
+    if (sh > host_rows) sh = host_rows;
+
+    if (w) *w = sw;
+    if (h) *h = sh;
+    *top = 2;
+    *left = (host_cols - sw) / 2;
+    if (*left < 0) *left = 0;
+}
+
+static void render_settings_main(char *out, int bs, int *posp, int host_rows, int host_cols) {
+    int top, left, sw, sh;
+    settings_geom(host_rows, host_cols, &top, &left, &sw, &sh);
+    int pos = *posp;
+
+    // Header: ┌─ ⚙  termux 设置 ────────────────────────────┐
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[38;2;255;255;255m\x1b[48;2;137;87;229m┌─ ⚙ termux 设置 ", top, left);
+    int used = 2 + 15; // "┌─" (2) + " ⚙ termux 设置 " (15)
+    while (used < sw - 1 && pos < bs - 8) {
+        out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
+        used++;
+    }
+    pos += snprintf(out + pos, bs - pos, "┐\x1b[0m");
+
+    // Subheader: │  【新建菜单项配置】                 │
+    int r1 = top + 1;
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;121;192;255;1m【新建菜单项配置】\x1b[0m\x1b[38;2;139;148;158m (点击编辑 / [↑][↓]调顺序 / [×]删除)\x1b[0m", r1, left);
+    int u1 = 1 + 2 + 18 + 36;
+    while (u1 < sw - 1 && pos < bs - 8) { out[pos++] = ' '; u1++; }
+    pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
+
+    // Column headers: │   #  显示名称        启动命令行               操作   │
+    int r2 = top + 2;
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m   \x1b[38;2;210;153;34m#\x1b[0m  \x1b[38;2;230;237;243m显示名称        启动命令行                操作     \x1b[0m", r2, left);
+    int u2 = 1 + 3 + 1 + 2 + 12 + 26 + 11;
+    while (u2 < sw - 1 && pos < bs - 8) { out[pos++] = ' '; u2++; }
+    pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
+
+    // Divider: │  ────────────────────────────────────────────────────────  │
+    int r3 = top + 3;
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  ", r3, left);
+    int u3 = 1 + 2;
+    while (u3 < sw - 3 && pos < bs - 8) {
+        out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
+        u3++;
+    }
+    pos += snprintf(out + pos, bs - pos, "  \x1b[48;2;33;38;45m│\x1b[0m");
+
+    // Rows for items
+    for (int i = 0; i < g_chooser_item_count; i++) {
+        int r = top + 4 + i;
+        int is_sel = (i == g_mux.settings_sel);
+        char nm[16]; trunc_utf8(nm, g_chooser_items[i].name, sizeof(nm));
+        char cm[24]; trunc_utf8(cm, g_chooser_items[i].cmd, sizeof(cm));
+
+        const char *bg = is_sel ? "\x1b[48;2;45;55;72m" : "";
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m%s  \x1b[38;2;210;153;34m[%d]\x1b[0m%s \x1b[38;2;230;237;243;1m%-14s\x1b[0m%s \x1b[38;2;139;148;158m%-22s\x1b[0m%s \x1b[38;2;63;185;80m[↑]\x1b[0m%s\x1b[38;2;217;119;54m[↓]\x1b[0m%s\x1b[38;2;121;192;255m[改]\x1b[0m%s\x1b[38;2;248;81;73m[×]\x1b[0m%s",
+                        r, left, bg, i + 1, bg, nm, bg, cm, bg, bg, bg, bg, bg);
+        int item_used = 1 + 2 + 3 + 1 + 14 + 1 + 22 + 1 + 3 + 3 + 3 + 3;
+        while (item_used < sw - 1 && pos < bs - 8) { out[pos++] = ' '; item_used++; }
+        pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[48;2;33;38;45m│\x1b[0m");
+    }
+
+    // Action buttons row: [+] 添加条目   [P] 常用预设
+    int btn_r = top + 4 + g_chooser_item_count;
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[48;2;31;111;235m\x1b[38;2;255;255;255;1m [+] 添加新条目 \x1b[0m  \x1b[48;2;31;136;61m\x1b[38;2;255;255;255;1m [P] 快速添加预设 \x1b[0m", btn_r, left);
+    int u_btn = 1 + 2 + 16 + 2 + 18;
+    while (u_btn < sw - 1 && pos < bs - 8) { out[pos++] = ' '; u_btn++; }
+    pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
+
+    // Divider
+    int d2_r = top + 5 + g_chooser_item_count;
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  ", d2_r, left);
+    int u_d2 = 1 + 2;
+    while (u_d2 < sw - 3 && pos < bs - 8) {
+        out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
+        u_d2++;
+    }
+    pos += snprintf(out + pos, bs - pos, "  \x1b[48;2;33;38;45m│\x1b[0m");
+
+    // Footer: [S / Enter] 保存并写入配置    [Esc] 取消/返回
+    int f_r = top + 6 + g_chooser_item_count;
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;63;185;80;1m[S] 保存配置 (termux.ini)\x1b[0m          \x1b[38;2;217;119;54m[Esc] 取消并返回\x1b[0m", f_r, left);
+    int u_f = 1 + 2 + 25 + 10 + 15;
+    while (u_f < sw - 1 && pos < bs - 8) { out[pos++] = ' '; u_f++; }
+    pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
+
+    // Bottom border: └────────────────────────────────────────────────────────┘
+    int b_r = top + 7 + g_chooser_item_count;
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m└", b_r, left);
+    int u_b = 1;
+    while (u_b < sw - 1 && pos < bs - 8) {
+        out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
+        u_b++;
+    }
+    pos += snprintf(out + pos, bs - pos, "┘\x1b[0m");
+
+    *posp = pos;
+}
+
+#define EDIT_BOX_W 50
+#define EDIT_BOX_H 6
+static void render_settings_edit_dialog(char *out, int bs, int *posp, int host_rows, int host_cols) {
+    (void)host_rows;
+    int top = 3;
+    int ew = EDIT_BOX_W;
+    if (ew > host_cols) ew = host_cols;
+    int left = (host_cols - ew) / 2;
+    if (left < 0) left = 0;
+    int pos = *posp;
+
+    const char *title = (g_mux.settings_edit_idx >= 0) ? "┌─ 📝 编辑菜单项 " : "┌─ ➕ 添加新菜单项 ";
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m%s", top, left, title);
+    int used = 2 + 17;
+    while (used < ew - 1 && pos < bs - 8) {
+        out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
+        used++;
+    }
+    pos += snprintf(out + pos, bs - pos, "┐\x1b[0m");
+
+    // Field 0: 名称
+    int f0_sel = (g_mux.settings_edit_field == 0);
+    const char *f0_bg = f0_sel ? "\x1b[48;2;50;60;80m" : "\x1b[48;2;22;27;34m";
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m名称: \x1b[0m%s\x1b[38;2;230;237;243;1m %s\x1b[0m", top + 1, left, f0_bg, g_mux.settings_edit_name);
+    int u0 = 1 + 2 + 6 + 1 + utf8_cols(g_mux.settings_edit_name, g_mux.settings_edit_name_len);
+    while (u0 < ew - 1 && pos < bs - 8) { out[pos++] = ' '; u0++; }
+    pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[48;2;33;38;45m│\x1b[0m");
+
+    // Field 1: 命令
+    int f1_sel = (g_mux.settings_edit_field == 1);
+    const char *f1_bg = f1_sel ? "\x1b[48;2;50;60;80m" : "\x1b[48;2;22;27;34m";
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m命令: \x1b[0m%s\x1b[38;2;230;237;243m %s\x1b[0m", top + 2, left, f1_bg, g_mux.settings_edit_cmd);
+    int u1 = 1 + 2 + 6 + 1 + utf8_cols(g_mux.settings_edit_cmd, g_mux.settings_edit_cmd_len);
+    while (u1 < ew - 1 && pos < bs - 8) { out[pos++] = ' '; u1++; }
+    pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[48;2;33;38;45m│\x1b[0m");
+
+    // Tips: [Tab] 切换输入行
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;139;148;158m[Tab] 切换输入项  (特殊命令 :custom 为自定义输入)\x1b[0m", top + 3, left);
+    int u2 = 1 + 2 + 48;
+    while (u2 < ew - 1 && pos < bs - 8) { out[pos++] = ' '; u2++; }
+    pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
+
+    // Action buttons: [Enter] 确定  [Esc] 取消
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;63;185;80;1m[Enter] 确认保存\x1b[0m           \x1b[38;2;217;119;54m[Esc] 取消\x1b[0m", top + 4, left);
+    int u3 = 1 + 2 + 16 + 11 + 9;
+    while (u3 < ew - 1 && pos < bs - 8) { out[pos++] = ' '; u3++; }
+    pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
+
+    // Bottom border
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m└", top + 5, left);
+    int ub = 1;
+    while (ub < ew - 1 && pos < bs - 8) {
+        out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
+        ub++;
+    }
+    pos += snprintf(out + pos, bs - pos, "┘\x1b[0m");
+
+    *posp = pos;
+}
+
+#define PRESET_BOX_W 48
+static void render_settings_presets(char *out, int bs, int *posp, int host_rows, int host_cols) {
+    (void)host_rows;
+    int top = 3;
+    int pw = PRESET_BOX_W;
+    if (pw > host_cols) pw = host_cols;
+    int left = (host_cols - pw) / 2;
+    if (left < 0) left = 0;
+    int pos = *posp;
+
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[38;2;255;255;255m\x1b[48;2;31;136;61m┌─ ⚡ 常用命令行预设 (按数字添加) ", top, left);
+    int used = 2 + 33;
+    while (used < pw - 1 && pos < bs - 8) {
+        out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
+        used++;
+    }
+    pos += snprintf(out + pos, bs - pos, "┐\x1b[0m");
+
+    for (int i = 0; i < g_preset_count; i++) {
+        int r = top + 1 + i;
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m[%d]\x1b[0m \x1b[38;2;230;237;243;1m%-12s\x1b[0m \x1b[38;2;139;148;158m%-24s\x1b[0m",
+                        r, left, i + 1, g_presets[i].name, g_presets[i].cmd);
+        int u = 1 + 2 + 3 + 1 + 12 + 1 + 24;
+        while (u < pw - 1 && pos < bs - 8) { out[pos++] = ' '; u++; }
+        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
+    }
+
+    int esc_r = top + 1 + g_preset_count;
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;139;148;158m[Esc] 取消\x1b[0m", esc_r, left);
+    int ue = 1 + 2 + 9;
+    while (ue < pw - 1 && pos < bs - 8) { out[pos++] = ' '; ue++; }
+    pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
+
+    int bot_r = top + 2 + g_preset_count;
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m└", bot_r, left);
+    int ub = 1;
+    while (ub < pw - 1 && pos < bs - 8) {
+        out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
+        ub++;
+    }
+    pos += snprintf(out + pos, bs - pos, "┘\x1b[0m");
+
+    *posp = pos;
+}
+
 static void update_host_title(void) {
     const char *target = NULL;
     if (g_mux.help_mode) {
@@ -2241,6 +2529,12 @@ static void render_screen(void) {
         render_rename_box(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
     } else if (g_mux.custom_cmd_mode) {
         render_custom_cmd_box(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
+    } else if (g_mux.settings_mode == 1) {
+        render_settings_main(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
+    } else if (g_mux.settings_mode == 2) {
+        render_settings_edit_dialog(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
+    } else if (g_mux.settings_mode == 3) {
+        render_settings_presets(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
     }
 
     // 3. Tab bar at top
@@ -2260,7 +2554,20 @@ static void render_screen(void) {
         if (c_left < 0) c_left = 0;
         int cx = c_left + 2 + utf8_cols(g_mux.custom_cmd_buf, g_mux.custom_cmd_len);
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", c_top + 1, cx);
-    } else if (g_mux.chooser_mode || g_mux.ctx_mode || g_mux.help_mode) {
+    } else if (g_mux.settings_mode == 2) {
+        int top = 3;
+        int ew = EDIT_BOX_W;
+        if (ew > g_mux.host_cols) ew = g_mux.host_cols;
+        int left = (g_mux.host_cols - ew) / 2;
+        if (left < 0) left = 0;
+        if (g_mux.settings_edit_field == 0) {
+            int cx = left + 1 + 2 + 6 + 1 + utf8_cols(g_mux.settings_edit_name, g_mux.settings_edit_name_pos);
+            pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", top + 1, cx);
+        } else {
+            int cx = left + 1 + 2 + 6 + 1 + utf8_cols(g_mux.settings_edit_cmd, g_mux.settings_edit_cmd_pos);
+            pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", top + 2, cx);
+        }
+    } else if (g_mux.chooser_mode || g_mux.ctx_mode || g_mux.help_mode || g_mux.settings_mode) {
         pos += snprintf(out + pos, bs - pos, "\x1b[?25l");
     } else if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
         Pane *pane = &g_mux.panes[g_mux.active_pane];
@@ -2333,12 +2640,13 @@ static unsigned __stdcall pane_read_thread(void *arg) {
 // mouse wheel). Termux renders it itself - no cmd process involved.
 static const char *const g_help_lines[] = {
     "\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m termux - 帮助",
-    "\x1b[38;2;139;148;158m  版本 v1.0.5 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
+    "\x1b[38;2;139;148;158m  版本 v1.1.1 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
     "",
     "\x1b[38;2;121;192;255;1m  键盘快捷键\x1b[0m",
-    "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mc\x1b[0m         新建 cmd pane",
+    "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mc\x1b[0m         新建默认 pane",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mn / p\x1b[0m     下一个 / 上一个 pane",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mx\x1b[0m         关闭当前 pane",
+    "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243ms\x1b[0m         打开图形化设置 (termux.ini)",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243md\x1b[0m         退出 termux",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mt\x1b[0m         轮换标签颜色 (Shift+t 反向)",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243m0-9\x1b[0m       跳转到 pane",
@@ -2347,7 +2655,8 @@ static const char *const g_help_lines[] = {
     "  \x1b[38;2;230;237;243m点击 tab\x1b[0m           切换 pane",
     "  \x1b[38;2;230;237;243m点击 [x]\x1b[0m           关闭该 pane",
     "  \x1b[38;2;230;237;243m右键 tab\x1b[0m           改颜色 / 改标题",
-    "  \x1b[38;2;230;237;243m点击 [+]\x1b[0m           新建 pane（选 cmd / PowerShell / 自定义命令）",
+    "  \x1b[38;2;230;237;243m点击 [+]\x1b[0m           新建 pane (支持选择/自定义命令行)",
+    "  \x1b[38;2;230;237;243m点击 [⚙]\x1b[0m           打开图形化设置页面",
     "  \x1b[38;2;230;237;243m点击 termux\x1b[0m       打开 / 关闭本帮助",
     "",
     "\x1b[38;2;121;192;255;1m  提示与警告\x1b[0m",
@@ -2627,6 +2936,17 @@ static void handle_prefix(WORD vk, DWORD ctrl) {
             }
             break;
         }
+        case 'S': case 's': {
+            g_mux.chooser_mode = 0;
+            g_mux.ctx_mode = 0;
+            g_mux.rename_mode = 0;
+            g_mux.custom_cmd_mode = 0;
+            g_mux.help_mode = 0;
+            g_mux.settings_mode = (g_mux.settings_mode ? 0 : 1);
+            g_mux.settings_sel = 0;
+            g_mux.needs_redraw = 1;
+            break;
+        }
         default: if (vk >= '0' && vk <= '9') { int i = vk - '0'; if (i < g_mux.pane_count && g_mux.panes[i].active) switch_pane(i); } break;
     }
 }
@@ -2654,6 +2974,213 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
 
     if (g_mux.prefix_mode) { handle_prefix(vk, ctrl); return; }
     if ((uc == 0x02) || (vk == 'B' && is_ctrl && !is_alt && !is_shift)) { g_mux.prefix_mode = 1; return; }
+
+    // Settings Mode 1: Main settings menu
+    if (g_mux.settings_mode == 1) {
+        if (vk == VK_ESCAPE) {
+            load_config(); // discard unsaved
+            g_mux.settings_mode = 0;
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (uc == 's' || uc == 'S') {
+            save_config();
+            g_mux.settings_mode = 0;
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (vk == VK_UP) {
+            if (g_mux.settings_sel > 0) g_mux.settings_sel--;
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (vk == VK_DOWN) {
+            if (g_mux.settings_sel < g_chooser_item_count - 1) g_mux.settings_sel++;
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (uc == 'u' || uc == 'U') { // Move item up
+            int i = g_mux.settings_sel;
+            if (i > 0 && i < g_chooser_item_count) {
+                ChooserItem tmp = g_chooser_items[i];
+                g_chooser_items[i] = g_chooser_items[i - 1];
+                g_chooser_items[i - 1] = tmp;
+                g_mux.settings_sel = i - 1;
+                g_mux.needs_redraw = 1;
+            }
+            return;
+        }
+        if (uc == 'd' || uc == 'D') { // Move item down
+            int i = g_mux.settings_sel;
+            if (i >= 0 && i < g_chooser_item_count - 1) {
+                ChooserItem tmp = g_chooser_items[i];
+                g_chooser_items[i] = g_chooser_items[i + 1];
+                g_chooser_items[i + 1] = tmp;
+                g_mux.settings_sel = i + 1;
+                g_mux.needs_redraw = 1;
+            }
+            return;
+        }
+        if (uc == 'x' || uc == 'X' || vk == VK_DELETE) { // Delete item
+            int i = g_mux.settings_sel;
+            if (i >= 0 && i < g_chooser_item_count) {
+                for (int k = i; k < g_chooser_item_count - 1; k++) {
+                    g_chooser_items[k] = g_chooser_items[k + 1];
+                }
+                g_chooser_item_count--;
+                if (g_mux.settings_sel >= g_chooser_item_count && g_mux.settings_sel > 0)
+                    g_mux.settings_sel = g_chooser_item_count - 1;
+                g_mux.needs_redraw = 1;
+            }
+            return;
+        }
+        if (uc == 'e' || uc == 'E' || vk == VK_RETURN) { // Edit selected item
+            int i = g_mux.settings_sel;
+            if (i >= 0 && i < g_chooser_item_count) {
+                g_mux.settings_mode = 2;
+                g_mux.settings_edit_idx = i;
+                g_mux.settings_edit_field = 0;
+                strncpy(g_mux.settings_edit_name, g_chooser_items[i].name, sizeof(g_mux.settings_edit_name) - 1);
+                g_mux.settings_edit_name_len = (int)strlen(g_mux.settings_edit_name);
+                g_mux.settings_edit_name_pos = g_mux.settings_edit_name_len;
+                strncpy(g_mux.settings_edit_cmd, g_chooser_items[i].cmd, sizeof(g_mux.settings_edit_cmd) - 1);
+                g_mux.settings_edit_cmd_len = (int)strlen(g_mux.settings_edit_cmd);
+                g_mux.settings_edit_cmd_pos = g_mux.settings_edit_cmd_len;
+                g_mux.needs_redraw = 1;
+            }
+            return;
+        }
+        if (uc == 'a' || uc == 'A' || uc == '+') { // Add new item
+            if (g_chooser_item_count < MAX_CHOOSER_ITEMS) {
+                g_mux.settings_mode = 2;
+                g_mux.settings_edit_idx = -1;
+                g_mux.settings_edit_field = 0;
+                g_mux.settings_edit_name[0] = 0;
+                g_mux.settings_edit_name_len = 0;
+                g_mux.settings_edit_name_pos = 0;
+                g_mux.settings_edit_cmd[0] = 0;
+                g_mux.settings_edit_cmd_len = 0;
+                g_mux.settings_edit_cmd_pos = 0;
+                g_mux.needs_redraw = 1;
+            }
+            return;
+        }
+        if (uc == 'p' || uc == 'P') { // Open presets menu
+            g_mux.settings_mode = 3;
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        return;
+    }
+
+    // Settings Mode 2: Edit/Add item dialog
+    if (g_mux.settings_mode == 2) {
+        if (vk == VK_ESCAPE) {
+            g_mux.settings_mode = 1;
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (vk == VK_TAB) {
+            g_mux.settings_edit_field = (g_mux.settings_edit_field == 0) ? 1 : 0;
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (vk == VK_RETURN) {
+            if (g_mux.settings_edit_name_len > 0 && g_mux.settings_edit_cmd_len > 0) {
+                if (g_mux.settings_edit_idx >= 0 && g_mux.settings_edit_idx < g_chooser_item_count) {
+                    snprintf(g_chooser_items[g_mux.settings_edit_idx].name, sizeof(g_chooser_items[0].name), "%s", g_mux.settings_edit_name);
+                    snprintf(g_chooser_items[g_mux.settings_edit_idx].cmd, sizeof(g_chooser_items[0].cmd), "%s", g_mux.settings_edit_cmd);
+                } else if (g_chooser_item_count < MAX_CHOOSER_ITEMS) {
+                    int idx = g_chooser_item_count++;
+                    snprintf(g_chooser_items[idx].name, sizeof(g_chooser_items[0].name), "%s", g_mux.settings_edit_name);
+                    snprintf(g_chooser_items[idx].cmd, sizeof(g_chooser_items[0].cmd), "%s", g_mux.settings_edit_cmd);
+                    g_mux.settings_sel = idx;
+                }
+            }
+            g_mux.settings_mode = 1;
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        char *buf = (g_mux.settings_edit_field == 0) ? g_mux.settings_edit_name : g_mux.settings_edit_cmd;
+        int *len = (g_mux.settings_edit_field == 0) ? &g_mux.settings_edit_name_len : &g_mux.settings_edit_cmd_len;
+        int *pos = (g_mux.settings_edit_field == 0) ? &g_mux.settings_edit_name_pos : &g_mux.settings_edit_cmd_pos;
+        int cap = (g_mux.settings_edit_field == 0) ? sizeof(g_mux.settings_edit_name) - 1 : sizeof(g_mux.settings_edit_cmd) - 1;
+
+        if (vk == VK_LEFT) {
+            *pos = utf8_prev_grapheme(buf, *pos);
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (vk == VK_RIGHT) {
+            *pos = utf8_next_grapheme(buf, *len, *pos);
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (vk == VK_HOME) { *pos = 0; g_mux.needs_redraw = 1; return; }
+        if (vk == VK_END) { *pos = *len; g_mux.needs_redraw = 1; return; }
+        if (vk == VK_BACK) {
+            buf_backspace(buf, len, pos);
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (vk == VK_DELETE) {
+            buf_delete(buf, len, pos);
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (uc >= 0xD800 && uc <= 0xDBFF) {
+            g_high_surrogate = uc;
+            return;
+        }
+        if (uc) {
+            char u8[8] = {0}; int u8_count = 0;
+            if (uc >= 0xDC00 && uc <= 0xDFFF && g_high_surrogate) {
+                unsigned int cp = 0x10000 + (((unsigned int)(g_high_surrogate & 0x3FF)) << 10) + (uc & 0x3FF);
+                g_high_surrogate = 0;
+                u8[0] = (char)(0xF0 | (cp >> 18));
+                u8[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+                u8[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+                u8[3] = (char)(0x80 | (cp & 0x3F));
+                u8_count = 4;
+            } else if (uc >= 0x20 || uc == 0xFE0F || (uc >= 0xFE00 && uc <= 0xFE0F)) {
+                g_high_surrogate = 0;
+                if (uc < 0x80) { u8[0] = (char)uc; u8_count = 1; }
+                else if (uc < 0x800) { u8[0] = (char)(0xC0 | (uc >> 6)); u8[1] = (char)(0x80 | (uc & 0x3F)); u8_count = 2; }
+                else { u8[0] = (char)(0xE0 | (uc >> 12)); u8[1] = (char)(0x80 | ((uc >> 6) & 0x3F)); u8[2] = (char)(0x80 | (uc & 0x3F)); u8_count = 3; }
+            }
+            if (u8_count > 0) {
+                buf_insert_utf8(buf, len, pos, cap, u8, u8_count);
+                g_mux.needs_redraw = 1;
+                return;
+            }
+        }
+        return;
+    }
+
+    // Settings Mode 3: Presets menu
+    if (g_mux.settings_mode == 3) {
+        if (vk == VK_ESCAPE) {
+            g_mux.settings_mode = 1;
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        for (int i = 0; i < g_preset_count; i++) {
+            char digit = (char)('1' + i);
+            if (uc == digit || vk == ('1' + i) || (vk == (VK_NUMPAD1 + i))) {
+                if (g_chooser_item_count < MAX_CHOOSER_ITEMS) {
+                    int idx = g_chooser_item_count++;
+                    strncpy(g_chooser_items[idx].name, g_presets[i].name, sizeof(g_chooser_items[0].name) - 1);
+                    strncpy(g_chooser_items[idx].cmd, g_presets[i].cmd, sizeof(g_chooser_items[0].cmd) - 1);
+                    g_mux.settings_sel = idx;
+                }
+                g_mux.settings_mode = 1;
+                g_mux.needs_redraw = 1;
+                return;
+            }
+        }
+        return;
+    }
+
     // v8.33: rename mode - type the new title, Enter confirms, Esc cancels
     if (g_mux.rename_mode) {
         if (vk == VK_ESCAPE) {
@@ -3052,15 +3579,26 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                     return;
                 }
                 if (t->pane_idx == -1) {
-                    // v8.21: [+] opens the shell chooser (any button - v8.30 fix:
-                    // a stuck/released middle button made btn=0x5 and the old
-                    // `mbtn != 0 return` swallowed the click before reaching here)
-                    // v8.46: close any other popup first (mutual exclusion)
+                    // v8.21: [+] opens the shell chooser
                     g_mux.ctx_mode = 0;
                     g_mux.rename_mode = 0;
                     g_mux.custom_cmd_mode = 0;
+                    g_mux.settings_mode = 0;
                     g_mux.chooser_mode = 1;
-                    g_pop_anchor_x = mx;   // v8.45: lock position
+                    g_pop_anchor_x = mx;
+                    g_mux.needs_redraw = 1;
+                    return;
+                }
+                if (t->pane_idx == -3) {
+                    // [⚙] opens graphical settings UI
+                    g_mux.chooser_mode = 0;
+                    g_mux.ctx_mode = 0;
+                    g_mux.rename_mode = 0;
+                    g_mux.custom_cmd_mode = 0;
+                    g_mux.help_mode = 0;
+                    g_mux.settings_mode = (g_mux.settings_mode ? 0 : 1);
+                    g_mux.settings_sel = 0;
+                    g_pop_anchor_x = mx;
                     g_mux.needs_redraw = 1;
                     return;
                 }
@@ -3071,6 +3609,7 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                         g_mux.chooser_mode = 0;
                         g_mux.rename_mode = 0;
                         g_mux.custom_cmd_mode = 0;
+                        g_mux.settings_mode = 0;
                         g_mux.ctx_mode = 1;
                         g_mux.ctx_pane = t->pane_idx;
                         g_pop_anchor_x = mx;   // v8.45: lock position
@@ -3121,13 +3660,182 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
     // mouse event coords are 0-based. Convert to 1-based before comparing so
     // the click target matches the drawn row exactly (previously it was off by
     // one row - clicks hit one row below the drawn option).
-    int popup_open = g_mux.chooser_mode || g_mux.ctx_mode;
+    int popup_open = g_mux.chooser_mode || g_mux.ctx_mode || g_mux.settings_mode;
     if (popup_open) {
-        // v8.30: only a NEW press/double-click acts on a popup. A held left
-        // button produces MOUSE_MOVED events that would otherwise hit "click
-        // elsewhere -> cancel" and instantly close the dialog.
+        // v8.30: only a NEW press/double-click acts on a popup.
         int pbtn = (me->dwButtonState & (FROM_LEFT_1ST_BUTTON_PRESSED | FROM_LEFT_2ND_BUTTON_PRESSED | RIGHTMOST_BUTTON_PRESSED)) != 0;
         if (pbtn && (me->dwEventFlags == 0 || me->dwEventFlags == DOUBLE_CLICK)) {
+            if (g_mux.settings_mode) {
+                if (g_mux.settings_mode == 1) {
+                    int top, left, sw, sh;
+                    settings_geom(g_mux.host_rows, g_mux.host_cols, &top, &left, &sw, &sh);
+                    int r = my + 1, c = mx + 1;
+                    int in_box = (r >= top && r < top + sh && c >= left && c < left + sw);
+                    if (in_box) {
+                        for (int i = 0; i < g_chooser_item_count; i++) {
+                            if (r == top + 4 + i) {
+                                g_mux.settings_sel = i;
+                                int right_edge = left + sw;
+                                // [↑]
+                                if (c >= right_edge - 17 && c <= right_edge - 14) {
+                                    if (i > 0) {
+                                        ChooserItem tmp = g_chooser_items[i];
+                                        g_chooser_items[i] = g_chooser_items[i - 1];
+                                        g_chooser_items[i - 1] = tmp;
+                                        g_mux.settings_sel = i - 1;
+                                    }
+                                }
+                                // [↓]
+                                else if (c >= right_edge - 13 && c <= right_edge - 10) {
+                                    if (i < g_chooser_item_count - 1) {
+                                        ChooserItem tmp = g_chooser_items[i];
+                                        g_chooser_items[i] = g_chooser_items[i + 1];
+                                        g_chooser_items[i + 1] = tmp;
+                                        g_mux.settings_sel = i + 1;
+                                    }
+                                }
+                                // [改]
+                                else if (c >= right_edge - 9 && c <= right_edge - 6) {
+                                    g_mux.settings_mode = 2;
+                                    g_mux.settings_edit_idx = i;
+                                    g_mux.settings_edit_field = 0;
+                                    strncpy(g_mux.settings_edit_name, g_chooser_items[i].name, sizeof(g_mux.settings_edit_name) - 1);
+                                    g_mux.settings_edit_name_len = (int)strlen(g_mux.settings_edit_name);
+                                    g_mux.settings_edit_name_pos = g_mux.settings_edit_name_len;
+                                    strncpy(g_mux.settings_edit_cmd, g_chooser_items[i].cmd, sizeof(g_mux.settings_edit_cmd) - 1);
+                                    g_mux.settings_edit_cmd_len = (int)strlen(g_mux.settings_edit_cmd);
+                                    g_mux.settings_edit_cmd_pos = g_mux.settings_edit_cmd_len;
+                                }
+                                // [×]
+                                else if (c >= right_edge - 5 && c <= right_edge - 2) {
+                                    for (int k = i; k < g_chooser_item_count - 1; k++) {
+                                        g_chooser_items[k] = g_chooser_items[k + 1];
+                                    }
+                                    g_chooser_item_count--;
+                                    if (g_mux.settings_sel >= g_chooser_item_count && g_mux.settings_sel > 0)
+                                        g_mux.settings_sel = g_chooser_item_count - 1;
+                                }
+                                // Click text -> edit
+                                else {
+                                    g_mux.settings_mode = 2;
+                                    g_mux.settings_edit_idx = i;
+                                    g_mux.settings_edit_field = 0;
+                                    strncpy(g_mux.settings_edit_name, g_chooser_items[i].name, sizeof(g_mux.settings_edit_name) - 1);
+                                    g_mux.settings_edit_name_len = (int)strlen(g_mux.settings_edit_name);
+                                    g_mux.settings_edit_name_pos = g_mux.settings_edit_name_len;
+                                    strncpy(g_mux.settings_edit_cmd, g_chooser_items[i].cmd, sizeof(g_mux.settings_edit_cmd) - 1);
+                                    g_mux.settings_edit_cmd_len = (int)strlen(g_mux.settings_edit_cmd);
+                                    g_mux.settings_edit_cmd_pos = g_mux.settings_edit_cmd_len;
+                                }
+                                g_mux.needs_redraw = 1;
+                                return;
+                            }
+                        }
+                        // Click [+] 添加新条目
+                        if (r == top + 4 + g_chooser_item_count) {
+                            if (c >= left + 2 && c <= left + 20) {
+                                if (g_chooser_item_count < MAX_CHOOSER_ITEMS) {
+                                    g_mux.settings_mode = 2;
+                                    g_mux.settings_edit_idx = -1;
+                                    g_mux.settings_edit_field = 0;
+                                    g_mux.settings_edit_name[0] = 0;
+                                    g_mux.settings_edit_name_len = 0;
+                                    g_mux.settings_edit_name_pos = 0;
+                                    g_mux.settings_edit_cmd[0] = 0;
+                                    g_mux.settings_edit_cmd_len = 0;
+                                    g_mux.settings_edit_cmd_pos = 0;
+                                    g_mux.needs_redraw = 1;
+                                    return;
+                                }
+                            }
+                            if (c >= left + 22 && c <= left + 45) {
+                                g_mux.settings_mode = 3;
+                                g_mux.needs_redraw = 1;
+                                return;
+                            }
+                        }
+                        // Click [S] 保存配置
+                        if (r == top + 6 + g_chooser_item_count) {
+                            if (c >= left + 2 && c <= left + 32) {
+                                save_config();
+                                g_mux.settings_mode = 0;
+                                g_mux.needs_redraw = 1;
+                                return;
+                            }
+                            if (c >= left + 35 && c <= left + sw - 2) {
+                                load_config();
+                                g_mux.settings_mode = 0;
+                                g_mux.needs_redraw = 1;
+                                return;
+                            }
+                        }
+                    }
+                    load_config();
+                    g_mux.settings_mode = 0;
+                    g_mux.needs_redraw = 1;
+                    return;
+                }
+                if (g_mux.settings_mode == 2) {
+                    int top = 3;
+                    int ew = EDIT_BOX_W;
+                    if (ew > g_mux.host_cols) ew = g_mux.host_cols;
+                    int left = (g_mux.host_cols - ew) / 2;
+                    if (left < 0) left = 0;
+                    int r = my + 1, c = mx + 1;
+                    if (r == top + 1) { g_mux.settings_edit_field = 0; g_mux.needs_redraw = 1; return; }
+                    if (r == top + 2) { g_mux.settings_edit_field = 1; g_mux.needs_redraw = 1; return; }
+                    if (r == top + 4) {
+                        if (c >= left + 2 && c <= left + 22) {
+                            if (g_mux.settings_edit_name_len > 0 && g_mux.settings_edit_cmd_len > 0) {
+                                if (g_mux.settings_edit_idx >= 0 && g_mux.settings_edit_idx < g_chooser_item_count) {
+                                    snprintf(g_chooser_items[g_mux.settings_edit_idx].name, sizeof(g_chooser_items[0].name), "%s", g_mux.settings_edit_name);
+                                    snprintf(g_chooser_items[g_mux.settings_edit_idx].cmd, sizeof(g_chooser_items[0].cmd), "%s", g_mux.settings_edit_cmd);
+                                } else if (g_chooser_item_count < MAX_CHOOSER_ITEMS) {
+                                    int idx = g_chooser_item_count++;
+                                    snprintf(g_chooser_items[idx].name, sizeof(g_chooser_items[0].name), "%s", g_mux.settings_edit_name);
+                                    snprintf(g_chooser_items[idx].cmd, sizeof(g_chooser_items[0].cmd), "%s", g_mux.settings_edit_cmd);
+                                    g_mux.settings_sel = idx;
+                                }
+                            }
+                            g_mux.settings_mode = 1;
+                            g_mux.needs_redraw = 1;
+                            return;
+                        }
+                        if (c >= left + 25 && c <= left + ew - 2) {
+                            g_mux.settings_mode = 1;
+                            g_mux.needs_redraw = 1;
+                            return;
+                        }
+                    }
+                    g_mux.settings_mode = 1;
+                    g_mux.needs_redraw = 1;
+                    return;
+                }
+                if (g_mux.settings_mode == 3) {
+                    int top = 3;
+                    int pw = PRESET_BOX_W;
+                    if (pw > g_mux.host_cols) pw = g_mux.host_cols;
+                    int left = (g_mux.host_cols - pw) / 2;
+                    if (left < 0) left = 0;
+                    int r = my + 1;
+                    for (int i = 0; i < g_preset_count; i++) {
+                        if (r == top + 1 + i) {
+                            if (g_chooser_item_count < MAX_CHOOSER_ITEMS) {
+                                int idx = g_chooser_item_count++;
+                                strncpy(g_chooser_items[idx].name, g_presets[i].name, sizeof(g_chooser_items[0].name) - 1);
+                                strncpy(g_chooser_items[idx].cmd, g_presets[i].cmd, sizeof(g_chooser_items[0].cmd) - 1);
+                                g_mux.settings_sel = idx;
+                            }
+                            g_mux.settings_mode = 1;
+                            g_mux.needs_redraw = 1;
+                            return;
+                        }
+                    }
+                    g_mux.settings_mode = 1;
+                    g_mux.needs_redraw = 1;
+                    return;
+                }
+            }
             if (g_mux.ctx_mode) {
                 // v8.50: compute top/left for BOTH menu and color picker so the
                 // hit-testing matches where they're actually drawn.
@@ -3418,7 +4126,7 @@ int main(void) {
     load_config();                               // load custom menu items from termux.ini
 
     host_printf("\x1b[?1049h\x1b[2J\x1b[H");
-    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.0.5\x1b[0m\r\n");
+    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.1.1\x1b[0m\r\n");
     host_printf("  \x1b[33mhost: %dx%d\x1b[0m   (pane screen = host minus 1 tab bar row)\r\n\n", g_mux.host_cols, g_mux.host_rows);
     host_printf("  \x1b[33mCtrl+B\x1b[0m + c/n/p/x/d/0-9   (termux = 帮助)\r\n\n");
     host_printf("  \x1b[33m右键\x1b[0m 标签 = 改颜色、改标题\r\n\n");
