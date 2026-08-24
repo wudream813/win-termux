@@ -248,11 +248,13 @@ typedef struct {
     int custom_cmd_mode; // custom command input mode
     char custom_cmd_buf[128];
     int custom_cmd_len;
+    int custom_cmd_pos;
     int ctx_mode;     // v8.33: right-click context menu (0=off, 1=menu, 2=color picker)
     int ctx_pane;     // v8.33: pane the context menu targets
     int rename_mode;  // v8.33: typing a new title (keyboard input)
     char rename_buf[64];
     int rename_len;
+    int rename_pos;
     DWORD orig_in_mode, orig_out_mode;
     UINT orig_cp, orig_input_cp;
     PaneTabInfo tab_info[MAX_PANES + 3];
@@ -304,29 +306,165 @@ static int create_pane(void);   // v8.17: used by open_help_pane
 static int create_pane_shell(const WCHAR *shell);   // v8.21
 static int screen_resize(ScreenBuffer *s, int nc, int nr);   // used by execute_csi (CSI 8t)
 
-static inline int is_wide_char(WCHAR c);   // fwd decl (defined later)
+static inline unsigned int utf8_decode_cp(const char *s, int max_len, int *adv) {
+    if (max_len <= 0) { *adv = 0; return 0; }
+    unsigned char c = (unsigned char)*s;
+    if (c < 0x80) { *adv = 1; return c; }
+    if ((c & 0xE0) == 0xC0 && max_len >= 2) {
+        *adv = 2;
+        return ((c & 0x1F) << 6) | ((unsigned char)s[1] & 0x3F);
+    }
+    if ((c & 0xF0) == 0xE0 && max_len >= 3) {
+        *adv = 3;
+        return ((c & 0x0F) << 12) | (((unsigned char)s[1] & 0x3F) << 6) | ((unsigned char)s[2] & 0x3F);
+    }
+    if ((c & 0xF8) == 0xF0 && max_len >= 4) {
+        *adv = 4;
+        return ((c & 0x07) << 18) | (((unsigned char)s[1] & 0x3F) << 12) | (((unsigned char)s[2] & 0x3F) << 6) | ((unsigned char)s[3] & 0x3F);
+    }
+    *adv = 1;
+    return c;
+}
 
-// v8.11: terminal column width of a UTF-8 string (wide chars = 2 cols).
-// Critical for tab bar layout: snprintf returns BYTE count, but the terminal
-// advances by COLUMNS - a title like "[cmd.exe×]" is 11 bytes but only 10
-// columns, so using byte counts shifted every tab's click region by 1.
+static inline int is_zero_width_cp(unsigned int cp) {
+    if (cp >= 0xFE00 && cp <= 0xFE0F) return 1;       // Variation Selectors (e.g. FE0F in emoji)
+    if (cp == 0x200D) return 1;                       // Zero-Width Joiner (ZWJ)
+    if (cp >= 0x0300 && cp <= 0x036F) return 1;       // Combining Diacritical Marks
+    if (cp >= 0x1AB0 && cp <= 0x1AFF) return 1;
+    if (cp >= 0x1DC0 && cp <= 0x1DFF) return 1;
+    if (cp >= 0x20D0 && cp <= 0x20FF) return 1;
+    if (cp >= 0xFE20 && cp <= 0xFE2F) return 1;
+    if (cp >= 0xE0100 && cp <= 0xE01EF) return 1;     // Variation Selectors Supplement
+    return 0;
+}
+
+static inline int is_wide_cp(unsigned int cp) {
+    if (cp >= 0x1100 && cp <= 0x11FF) return 1;         // Hangul Jamo
+    if (cp >= 0x2E80 && cp <= 0x9FFF) return 1;         // CJK radicals..CJK unified
+    if (cp >= 0xAC00 && cp <= 0xD7A3) return 1;         // Hangul syllables
+    if (cp >= 0xF900 && cp <= 0xFAFF) return 1;         // CJK compat ideographs
+    if (cp >= 0xFE30 && cp <= 0xFE4F) return 1;         // CJK compat forms
+    if (cp >= 0xFF00 && cp <= 0xFF60) return 1;         // fullwidth forms
+    if (cp >= 0xFFE0 && cp <= 0xFFE6) return 1;         // fullwidth signs
+    if (cp >= 0x1F000 && cp <= 0x1FFFF) return 1;       // SMP emojis
+    return 0;
+}
+
+static inline int is_wide_char(WCHAR c) {
+    return is_wide_cp((unsigned int)c);
+}
+
+static inline int is_combining_or_modifier(unsigned int cp) {
+    if (is_zero_width_cp(cp)) return 1;
+    if (cp >= 0x1F3FB && cp <= 0x1F3FF) return 1;     // Emoji skin tone modifiers
+    return 0;
+}
+
+// v8.11: terminal column width of a UTF-8 string (wide chars = 2 cols, zero-width = 0 cols).
 static int utf8_cols(const char *s, int len) {
     int cols = 0, i = 0;
     while (i < len) {
-        unsigned char c = (unsigned char)s[i];
-        if (c < 0x80) { cols++; i++; }
-        else if ((c & 0xE0) == 0xC0 && i + 1 < len) {
-            WCHAR ch = (WCHAR)(((c & 0x1F) << 6) | (s[i+1] & 0x3F));
-            cols += is_wide_char(ch) ? 2 : 1; i += 2;
+        int adv = 0;
+        unsigned int cp = utf8_decode_cp(s + i, len - i, &adv);
+        if (is_zero_width_cp(cp)) {
+            // zero width
+        } else if (is_wide_cp(cp)) {
+            cols += 2;
+        } else {
+            cols += 1;
         }
-        else if ((c & 0xF0) == 0xE0 && i + 2 < len) {
-            WCHAR ch = (WCHAR)(((c & 0x0F) << 12) | ((s[i+1] & 0x3F) << 6) | (s[i+2] & 0x3F));
-            cols += is_wide_char(ch) ? 2 : 1; i += 3;
-        }
-        else { cols++; i++; }
+        i += adv;
     }
     return cols;
 }
+
+static int utf8_prev_grapheme(const char *buf, int pos) {
+    if (pos <= 0) return 0;
+    int p = pos;
+    while (p > 0) {
+        int start = p - 1;
+        while (start > 0 && ((unsigned char)buf[start] & 0xC0) == 0x80) start--;
+        int adv = 0;
+        unsigned int cp = utf8_decode_cp(buf + start, pos - start, &adv);
+        p = start;
+        if (!is_combining_or_modifier(cp)) {
+            if (p > 0) {
+                int prev_start = p - 1;
+                while (prev_start > 0 && ((unsigned char)buf[prev_start] & 0xC0) == 0x80) prev_start--;
+                int prev_adv = 0;
+                unsigned int prev_cp = utf8_decode_cp(buf + prev_start, p - prev_start, &prev_adv);
+                if (prev_cp == 0x200D) {
+                    continue;
+                }
+            }
+            break;
+        }
+    }
+    return p;
+}
+
+static int utf8_next_grapheme(const char *buf, int len, int pos) {
+    if (pos >= len) return len;
+    int p = pos;
+    int adv = 0;
+    utf8_decode_cp(buf + p, len - p, &adv);
+    p += adv;
+    while (p < len) {
+        int next_adv = 0;
+        unsigned int cp = utf8_decode_cp(buf + p, len - p, &next_adv);
+        if (is_combining_or_modifier(cp)) {
+            p += next_adv;
+            if (cp == 0x200D && p < len) {
+                int base_adv = 0;
+                utf8_decode_cp(buf + p, len - p, &base_adv);
+                p += base_adv;
+            }
+        } else {
+            break;
+        }
+    }
+    return p;
+}
+
+static void buf_insert_utf8(char *buf, int *len, int *pos, int max_cap, const char *utf8_bytes, int byte_count) {
+    if (*len + byte_count >= max_cap) return;
+    if (*pos < *len) {
+        memmove(buf + *pos + byte_count, buf + *pos, *len - *pos);
+    }
+    memcpy(buf + *pos, utf8_bytes, byte_count);
+    *len += byte_count;
+    *pos += byte_count;
+    buf[*len] = 0;
+}
+
+static void buf_backspace(char *buf, int *len, int *pos) {
+    if (*pos <= 0 || *len <= 0) return;
+    int prev_p = utf8_prev_grapheme(buf, *pos);
+    int del_count = *pos - prev_p;
+    if (del_count > 0) {
+        if (*pos < *len) {
+            memmove(buf + prev_p, buf + *pos, *len - *pos);
+        }
+        *len -= del_count;
+        *pos = prev_p;
+        buf[*len] = 0;
+    }
+}
+
+static void buf_delete(char *buf, int *len, int *pos) {
+    if (*pos >= *len || *len <= 0) return;
+    int next_p = utf8_next_grapheme(buf, *len, *pos);
+    int del_count = next_p - *pos;
+    if (del_count > 0) {
+        if (next_p < *len) {
+            memmove(buf + *pos, buf + next_p, *len - next_p);
+        }
+        *len -= del_count;
+        buf[*len] = 0;
+    }
+}
+
+static WCHAR g_high_surrogate = 0;
 
 // v8.11: copy up to max-1 bytes of a UTF-8 string without splitting a
 // multi-byte character (so the title never shows a broken glyph).
@@ -539,17 +677,6 @@ static WORD build_attr(ScreenBuffer *s) {
 // made edit.com's Chinese menus misalign: our model counted 文件 as 2 columns
 // while the real terminal renders them as 4).
 static void screen_write_cell(ScreenBuffer *s, int row, int col, WCHAR ch, WORD attr);   // v8.7 fwd decl
-
-static inline int is_wide_char(WCHAR c) {
-    if (c >= 0x1100 && c <= 0x11FF) return 1;         // Hangul Jamo
-    if (c >= 0x2E80 && c <= 0x9FFF) return 1;         // CJK radicals..CJK unified (covers 中文 etc.)
-    if (c >= 0xAC00 && c <= 0xD7A3) return 1;         // Hangul syllables
-    if (c >= 0xF900 && c <= 0xFAFF) return 1;         // CJK compat ideographs
-    if (c >= 0xFE30 && c <= 0xFE4F) return 1;         // CJK compat forms
-    if (c >= 0xFF00 && c <= 0xFF60) return 1;         // fullwidth forms
-    if (c >= 0xFFE0 && c <= 0xFFE6) return 1;         // fullwidth signs
-    return 0;
-}
 
 // v8.7: scroll up/down keep the per-cell truecolor arrays in sync with the
 // character buffer (rows move together, new rows clear to INVALID).
@@ -2393,37 +2520,78 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
                 if (g_mux.rename_len > 31) g_mux.rename_len = 31;
                 memcpy(g_mux.panes[g_mux.ctx_pane].title, g_mux.rename_buf, g_mux.rename_len);
                 g_mux.panes[g_mux.ctx_pane].title[g_mux.rename_len] = 0;
+                if (g_mux.ctx_pane == g_mux.active_pane) update_host_title();
             }
             g_mux.rename_mode = 0;
             g_mux.needs_redraw = 1;
             return;
         }
-        if (vk == VK_BACK) {
-            // v8.35: delete the last UTF-8 character (walk back over
-            // continuation bytes) and NUL-terminate so no stale tail shows.
-            if (g_mux.rename_len > 0) {
-                int n = g_mux.rename_len - 1;
-                while (n > 0 && ((unsigned char)g_mux.rename_buf[n] & 0xC0) == 0x80) n--;
-                g_mux.rename_len = n;
-                g_mux.rename_buf[g_mux.rename_len] = 0;
-            }
+        if (vk == VK_LEFT) {
+            g_mux.rename_pos = utf8_prev_grapheme(g_mux.rename_buf, g_mux.rename_pos);
             g_mux.needs_redraw = 1;
             return;
         }
-        if (uc && uc >= 0x20 && g_mux.rename_len < 31) {
-            // store UTF-8
-            if (uc < 0x80) g_mux.rename_buf[g_mux.rename_len++] = (char)uc;
-            else if (uc < 0x800 && g_mux.rename_len + 1 < 32) {
-                g_mux.rename_buf[g_mux.rename_len++] = (char)(0xC0 | (uc >> 6));
-                g_mux.rename_buf[g_mux.rename_len++] = (char)(0x80 | (uc & 0x3F));
-            } else if (g_mux.rename_len + 2 < 32) {
-                g_mux.rename_buf[g_mux.rename_len++] = (char)(0xE0 | (uc >> 12));
-                g_mux.rename_buf[g_mux.rename_len++] = (char)(0x80 | ((uc >> 6) & 0x3F));
-                g_mux.rename_buf[g_mux.rename_len++] = (char)(0x80 | (uc & 0x3F));
-            }
-            g_mux.rename_buf[g_mux.rename_len] = 0;   // v8.35: keep it NUL-terminated
+        if (vk == VK_RIGHT) {
+            g_mux.rename_pos = utf8_next_grapheme(g_mux.rename_buf, g_mux.rename_len, g_mux.rename_pos);
             g_mux.needs_redraw = 1;
             return;
+        }
+        if (vk == VK_HOME) {
+            g_mux.rename_pos = 0;
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (vk == VK_END) {
+            g_mux.rename_pos = g_mux.rename_len;
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (vk == VK_BACK) {
+            buf_backspace(g_mux.rename_buf, &g_mux.rename_len, &g_mux.rename_pos);
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (vk == VK_DELETE) {
+            buf_delete(g_mux.rename_buf, &g_mux.rename_len, &g_mux.rename_pos);
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (uc >= 0xD800 && uc <= 0xDBFF) {
+            g_high_surrogate = uc;
+            return;
+        }
+        if (uc) {
+            char u8[8] = {0};
+            int u8_count = 0;
+            if (uc >= 0xDC00 && uc <= 0xDFFF && g_high_surrogate) {
+                unsigned int cp = 0x10000 + (((unsigned int)(g_high_surrogate & 0x3FF)) << 10) + (uc & 0x3FF);
+                g_high_surrogate = 0;
+                u8[0] = (char)(0xF0 | (cp >> 18));
+                u8[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+                u8[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+                u8[3] = (char)(0x80 | (cp & 0x3F));
+                u8_count = 4;
+            } else if (uc >= 0x20 || uc == 0xFE0F || (uc >= 0xFE00 && uc <= 0xFE0F)) {
+                g_high_surrogate = 0;
+                if (uc < 0x80) {
+                    u8[0] = (char)uc;
+                    u8_count = 1;
+                } else if (uc < 0x800) {
+                    u8[0] = (char)(0xC0 | (uc >> 6));
+                    u8[1] = (char)(0x80 | (uc & 0x3F));
+                    u8_count = 2;
+                } else {
+                    u8[0] = (char)(0xE0 | (uc >> 12));
+                    u8[1] = (char)(0x80 | ((uc >> 6) & 0x3F));
+                    u8[2] = (char)(0x80 | (uc & 0x3F));
+                    u8_count = 3;
+                }
+            }
+            if (u8_count > 0) {
+                buf_insert_utf8(g_mux.rename_buf, &g_mux.rename_len, &g_mux.rename_pos, sizeof(g_mux.rename_buf) - 1, u8, u8_count);
+                g_mux.needs_redraw = 1;
+                return;
+            }
         }
         return;   // ignore other keys while renaming
     }
@@ -2447,29 +2615,72 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
             g_mux.needs_redraw = 1;
             return;
         }
-        if (vk == VK_BACK) {
-            if (g_mux.custom_cmd_len > 0) {
-                int n = g_mux.custom_cmd_len - 1;
-                while (n > 0 && ((unsigned char)g_mux.custom_cmd_buf[n] & 0xC0) == 0x80) n--;
-                g_mux.custom_cmd_len = n;
-                g_mux.custom_cmd_buf[g_mux.custom_cmd_len] = 0;
-            }
+        if (vk == VK_LEFT) {
+            g_mux.custom_cmd_pos = utf8_prev_grapheme(g_mux.custom_cmd_buf, g_mux.custom_cmd_pos);
             g_mux.needs_redraw = 1;
             return;
         }
-        if (uc && uc >= 0x20 && g_mux.custom_cmd_len < 100) {
-            if (uc < 0x80) g_mux.custom_cmd_buf[g_mux.custom_cmd_len++] = (char)uc;
-            else if (uc < 0x800 && g_mux.custom_cmd_len + 1 < 120) {
-                g_mux.custom_cmd_buf[g_mux.custom_cmd_len++] = (char)(0xC0 | (uc >> 6));
-                g_mux.custom_cmd_buf[g_mux.custom_cmd_len++] = (char)(0x80 | (uc & 0x3F));
-            } else if (g_mux.custom_cmd_len + 2 < 120) {
-                g_mux.custom_cmd_buf[g_mux.custom_cmd_len++] = (char)(0xE0 | (uc >> 12));
-                g_mux.custom_cmd_buf[g_mux.custom_cmd_len++] = (char)(0x80 | ((uc >> 6) & 0x3F));
-                g_mux.custom_cmd_buf[g_mux.custom_cmd_len++] = (char)(0x80 | (uc & 0x3F));
-            }
-            g_mux.custom_cmd_buf[g_mux.custom_cmd_len] = 0;
+        if (vk == VK_RIGHT) {
+            g_mux.custom_cmd_pos = utf8_next_grapheme(g_mux.custom_cmd_buf, g_mux.custom_cmd_len, g_mux.custom_cmd_pos);
             g_mux.needs_redraw = 1;
             return;
+        }
+        if (vk == VK_HOME) {
+            g_mux.custom_cmd_pos = 0;
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (vk == VK_END) {
+            g_mux.custom_cmd_pos = g_mux.custom_cmd_len;
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (vk == VK_BACK) {
+            buf_backspace(g_mux.custom_cmd_buf, &g_mux.custom_cmd_len, &g_mux.custom_cmd_pos);
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (vk == VK_DELETE) {
+            buf_delete(g_mux.custom_cmd_buf, &g_mux.custom_cmd_len, &g_mux.custom_cmd_pos);
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (uc >= 0xD800 && uc <= 0xDBFF) {
+            g_high_surrogate = uc;
+            return;
+        }
+        if (uc) {
+            char u8[8] = {0};
+            int u8_count = 0;
+            if (uc >= 0xDC00 && uc <= 0xDFFF && g_high_surrogate) {
+                unsigned int cp = 0x10000 + (((unsigned int)(g_high_surrogate & 0x3FF)) << 10) + (uc & 0x3FF);
+                g_high_surrogate = 0;
+                u8[0] = (char)(0xF0 | (cp >> 18));
+                u8[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+                u8[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+                u8[3] = (char)(0x80 | (cp & 0x3F));
+                u8_count = 4;
+            } else if (uc >= 0x20 || uc == 0xFE0F || (uc >= 0xFE00 && uc <= 0xFE0F)) {
+                g_high_surrogate = 0;
+                if (uc < 0x80) {
+                    u8[0] = (char)uc;
+                    u8_count = 1;
+                } else if (uc < 0x800) {
+                    u8[0] = (char)(0xC0 | (uc >> 6));
+                    u8[1] = (char)(0x80 | (uc & 0x3F));
+                    u8_count = 2;
+                } else {
+                    u8[0] = (char)(0xE0 | (uc >> 12));
+                    u8[1] = (char)(0x80 | ((uc >> 6) & 0x3F));
+                    u8[2] = (char)(0x80 | (uc & 0x3F));
+                    u8_count = 3;
+                }
+            }
+            if (u8_count > 0) {
+                buf_insert_utf8(g_mux.custom_cmd_buf, &g_mux.custom_cmd_len, &g_mux.custom_cmd_pos, sizeof(g_mux.custom_cmd_buf) - 1, u8, u8_count);
+                g_mux.needs_redraw = 1;
+                return;
+            }
         }
         return;
     }
@@ -2759,6 +2970,7 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                         g_mux.ctx_mode = 0;
                         g_mux.rename_mode = 1;
                         g_mux.rename_len = 0;
+                        g_mux.rename_pos = 0;
                         g_mux.rename_buf[0] = 0;
                         g_mux.needs_redraw = 1;
                         return;
@@ -2813,6 +3025,7 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                 g_mux.chooser_mode = 0;
                 g_mux.custom_cmd_mode = 1;
                 g_mux.custom_cmd_len = 0;
+                g_mux.custom_cmd_pos = 0;
                 g_mux.custom_cmd_buf[0] = 0;
                 g_mux.needs_redraw = 1;
                 return;
