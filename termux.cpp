@@ -1738,6 +1738,7 @@ static void render_screen(void) {
         char *out = render_buffer_acquire(bs);
         if (!out) { LeaveCriticalSection(&g_mux.cs); return; }
         int pos = 0;
+        pos += snprintf(out + pos, bs - pos, "\x1b[?25l");
         render_chooser(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
         pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[1;1H");   // v8.22: tab bar at top
         draw_tab_bar(out, bs, &pos);
@@ -1752,6 +1753,7 @@ static void render_screen(void) {
         char *out2 = render_buffer_acquire(bs2);
         if (!out2) { LeaveCriticalSection(&g_mux.cs); return; }
         int pos2 = 0;
+        pos2 += snprintf(out2 + pos2, bs2 - pos2, "\x1b[?25l");
         if (g_mux.ctx_mode == 1)
             render_ctx_menu(out2, bs2, &pos2, g_mux.host_rows, g_mux.host_cols);
         else
@@ -1769,6 +1771,7 @@ static void render_screen(void) {
         char *out2 = render_buffer_acquire(bs2);
         if (!out2) { LeaveCriticalSection(&g_mux.cs); return; }
         int pos2 = 0;
+        pos2 += snprintf(out2 + pos2, bs2 - pos2, "\x1b[?25l");
         render_rename_box(out2, bs2, &pos2, g_mux.host_rows, g_mux.host_cols);
         pos2 += snprintf(out2 + pos2, bs2 - pos2, "\x1b[0m\x1b[1;1H");
         draw_tab_bar(out2, bs2, &pos2);
@@ -1783,6 +1786,7 @@ static void render_screen(void) {
         char *out = render_buffer_acquire(bs);
         if (!out) { LeaveCriticalSection(&g_mux.cs); return; }
         int pos = 0;
+        pos += snprintf(out + pos, bs - pos, "\x1b[?25l");
         render_help_content(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
         // draw the tab bar (help tab shown active)
         pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[1;1H");   // v8.22: tab bar at top
@@ -1954,7 +1958,6 @@ static const int g_help_line_count = (int)(sizeof(g_help_lines) / sizeof(g_help_
 static void render_help_content(char *out, int bs, int *posp, int host_rows, int host_cols) {
     (void)host_cols;
     int pos = *posp;
-    pos += snprintf(out + pos, bs - pos, "\x1b[2J");
     // v8.19/v8.22: clamp scroll to the visible range (content starts at row 2; tab bar is row 1)
     int vis = host_rows;
     int max_sc = g_help_line_count - vis;
