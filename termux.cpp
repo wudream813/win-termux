@@ -1396,28 +1396,66 @@ static int screen_resize(ScreenBuffer *s, int nc, int nr) {
     for (int i = 0; i < nr * nc; i++) { na[i].Char.UnicodeChar = L' '; na[i].Attributes = def; nafr[i] = RGB565_WHITE; nabr[i] = RGB565_BLACK; }
     int cr = s->rows < nr ? s->rows : nr, cc = s->cols < nc ? s->cols : nc;
     int nst = nt - nr;
-    for (int y = 0; y < cr; y++) for (int x = 0; x < cc; x++) {
-        CHAR_INFO *src = screen_cell(s, y, x);
-        if (src) nb[(nst + y) * nc + x] = *src;
-        // copy truecolor + valid for the visible region
-        WORD fv = RGB565_WHITE, bv = RGB565_BLACK; unsigned char vv = 0;
-        if (s->in_alt_screen) {
-            if (s->alt_fg_rgb) {
-                fv = s->alt_fg_rgb[y * s->cols + x]; bv = s->alt_bg_rgb[y * s->cols + x];
-                vv = s->alt_rgb_valid ? s->alt_rgb_valid[y * s->cols + x] : 0;
-            }
-        } else {
-            int abs_row = s->scroll_top + y;
-            if (abs_row >= 0 && abs_row < s->total_lines && s->fg_rgb) {
-                fv = s->fg_rgb[abs_row * s->cols + x];
-                bv = s->bg_rgb[abs_row * s->cols + x];
-                vv = s->rgb_valid ? s->rgb_valid[abs_row * s->cols + x] : 0;
+
+    // 1. Copy scrollback history so resizing does not wipe previous output
+    int old_hist = s->hist_lines;
+    if (old_hist > SCROLL_BUF_LINES) old_hist = SCROLL_BUF_LINES;
+    for (int h = 1; h <= old_hist; h++) {
+        int old_r = s->scroll_top - h;
+        int new_r = nst - h;
+        if (old_r >= 0 && old_r < s->total_lines && new_r >= 0 && new_r < nt) {
+            for (int x = 0; x < cc; x++) {
+                int old_idx = old_r * s->cols + x;
+                int new_idx = new_r * nc + x;
+                nb[new_idx] = s->buffer[old_idx];
+                if (s->fg_rgb) nfr[new_idx] = s->fg_rgb[old_idx];
+                if (s->bg_rgb) nbr[new_idx] = s->bg_rgb[old_idx];
+                if (s->rgb_valid) nrv[new_idx] = s->rgb_valid[old_idx];
             }
         }
-        nfr[(nst + y) * nc + x] = fv;
-        nbr[(nst + y) * nc + x] = bv;
-        nrv[(nst + y) * nc + x] = vv;
     }
+
+    // 2. Copy visible screen rows
+    for (int y = 0; y < cr; y++) {
+        int new_r = nst + y;
+        for (int x = 0; x < cc; x++) {
+            CHAR_INFO *src = screen_cell(s, y, x);
+            if (src) nb[new_r * nc + x] = *src;
+            // copy truecolor + valid for the visible region
+            WORD fv = RGB565_WHITE, bv = RGB565_BLACK; unsigned char vv = 0;
+            if (s->in_alt_screen) {
+                if (s->alt_fg_rgb) {
+                    fv = s->alt_fg_rgb[y * s->cols + x]; bv = s->alt_bg_rgb[y * s->cols + x];
+                    vv = s->alt_rgb_valid ? s->alt_rgb_valid[y * s->cols + x] : 0;
+                }
+            } else {
+                int abs_row = s->scroll_top + y;
+                if (abs_row >= 0 && abs_row < s->total_lines && s->fg_rgb) {
+                    fv = s->fg_rgb[abs_row * s->cols + x];
+                    bv = s->bg_rgb[abs_row * s->cols + x];
+                    vv = s->rgb_valid ? s->rgb_valid[abs_row * s->cols + x] : 0;
+                }
+            }
+            nfr[new_r * nc + x] = fv;
+            nbr[new_r * nc + x] = bv;
+            nrv[new_r * nc + x] = vv;
+        }
+    }
+
+    // 3. Copy alt buffer
+    if (s->alt_buffer) {
+        for (int y = 0; y < cr; y++) {
+            for (int x = 0; x < cc; x++) {
+                int old_idx = y * s->cols + x;
+                int new_idx = y * nc + x;
+                na[new_idx] = s->alt_buffer[old_idx];
+                if (s->alt_fg_rgb) nafr[new_idx] = s->alt_fg_rgb[old_idx];
+                if (s->alt_bg_rgb) nabr[new_idx] = s->alt_bg_rgb[old_idx];
+                if (s->alt_rgb_valid) nav[new_idx] = s->alt_rgb_valid[old_idx];
+            }
+        }
+    }
+
     free(s->buffer); free(s->alt_buffer);
     free(s->fg_rgb); free(s->bg_rgb); free(s->alt_fg_rgb); free(s->alt_bg_rgb);
     free(s->rgb_valid); free(s->alt_rgb_valid);
@@ -1425,8 +1463,8 @@ static int screen_resize(ScreenBuffer *s, int nc, int nr) {
     s->fg_rgb = nfr; s->bg_rgb = nbr; s->alt_fg_rgb = nafr; s->alt_bg_rgb = nabr;
     s->rgb_valid = nrv; s->alt_rgb_valid = nav;
     s->cols = nc; s->rows = nr; s->total_lines = nt; s->scroll_top = nst;
-    s->hist_lines = 0;   // v8.13: resize rebuilds the buffer - no history survives
-    s->alt_hist_lines = 0;   // v8.16: alt-screen buffer rebuilt too
+    s->hist_lines = old_hist;
+    if (s->alt_hist_lines > SCROLL_BUF_LINES) s->alt_hist_lines = SCROLL_BUF_LINES;
     if (s->cursor_x >= nc) s->cursor_x = nc - 1;
     if (s->cursor_y >= nr) s->cursor_y = nr - 1;
     s->scroll_region_top = 0; s->scroll_region_bottom = nr - 1;
