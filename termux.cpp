@@ -243,6 +243,9 @@ typedef struct {
     int help_mode;   // v8.18: show the built-in help view (no child process)
     int help_scroll; // v8.19: scroll offset inside the help view (PgUp/PgDn/wheel)
     int chooser_mode; // v8.21: [+] clicked - choose cmd or powershell
+    int custom_cmd_mode; // custom command input mode
+    char custom_cmd_buf[128];
+    int custom_cmd_len;
     int ctx_mode;     // v8.33: right-click context menu (0=off, 1=menu, 2=color picker)
     int ctx_pane;     // v8.33: pane the context menu targets
     int rename_mode;  // v8.33: typing a new title (keyboard input)
@@ -1722,7 +1725,7 @@ static void draw_tab_bar(char *out, int bs, int *posp) {
 // underlying pane content visible - no full-screen clear). All rows are
 // exactly CHOOSER_W columns wide.
 #define CHOOSER_W 26
-#define CHOOSER_H 5
+#define CHOOSER_H 6
 static void render_chooser(char *out, int bs, int *posp, int host_rows, int host_cols) {
     (void)host_rows;
     int pos = *posp;
@@ -1735,8 +1738,29 @@ static void render_chooser(char *out, int bs, int *posp, int host_rows, int host
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m┌─ 新建 pane ────────────┐\x1b[0m", top, left);
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m[1]\x1b[0m \x1b[38;2;230;237;243mcmd\x1b[0m               \x1b[48;2;33;38;45m│\x1b[0m", top + 1, left);
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m[2]\x1b[0m \x1b[38;2;230;237;243mPowerShell\x1b[0m        \x1b[48;2;33;38;45m│\x1b[0m", top + 2, left);
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;139;148;158mEsc 取消\x1b[0m              \x1b[48;2;33;38;45m│\x1b[0m", top + 3, left);
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m└────────────────────────┘\x1b[0m", top + 4, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m[3]\x1b[0m \x1b[38;2;230;237;243m自定义命令行\x1b[0m      \x1b[48;2;33;38;45m│\x1b[0m", top + 3, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;139;148;158mEsc 取消\x1b[0m              \x1b[48;2;33;38;45m│\x1b[0m", top + 4, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m└────────────────────────┘\x1b[0m", top + 5, left);
+    *posp = pos;
+}
+
+#define CMD_BOX_W 36
+#define CMD_BOX_H 4
+static void render_custom_cmd_box(char *out, int bs, int *posp, int host_rows, int host_cols) {
+    (void)host_rows;
+    int pos = *posp;
+    int top = 2;   // below the tab bar
+    int ax = (g_pop_anchor_x >= 0) ? g_pop_anchor_x : g_mouse_x;
+    int left = ax;
+    if (left + CMD_BOX_W > host_cols) left = ax - CMD_BOX_W;
+    if (left < 0) left = 0;
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m┌─ 自定义命令行 ─────────────────────┐\x1b[0m", top, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m \x1b[38;2;230;237;243m%s\x1b[0m", top + 1, left, g_mux.custom_cmd_buf);
+    int used = 2 + utf8_cols(g_mux.custom_cmd_buf, (int)strlen(g_mux.custom_cmd_buf));
+    while (used < CMD_BOX_W - 1 && pos < bs - 8) { out[pos++] = ' '; used++; }
+    pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m└────────────────────────────────────┘\x1b[0m", top + 2, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[30;43m[Enter=启动 Esc=取消]\x1b[0m", top + 3, left);
     *posp = pos;
 }
 // v8.46: rename box - a bordered dialog where the new title is typed.
@@ -1915,6 +1939,20 @@ static void render_screen(void) {
         LeaveCriticalSection(&g_mux.cs);
         return;
     }
+    if (g_mux.custom_cmd_mode) {
+        int bs2 = (g_mux.host_rows + 4) * 256;
+        char *out2 = render_buffer_acquire(bs2);
+        if (!out2) { LeaveCriticalSection(&g_mux.cs); return; }
+        int pos2 = 0;
+        pos2 += snprintf(out2 + pos2, bs2 - pos2, "\x1b[?25l");
+        render_custom_cmd_box(out2, bs2, &pos2, g_mux.host_rows, g_mux.host_cols);
+        pos2 += snprintf(out2 + pos2, bs2 - pos2, "\x1b[0m\x1b[1;1H");
+        draw_tab_bar(out2, bs2, &pos2);
+        host_write(out2, pos2);
+        g_mux.needs_redraw = 0;
+        LeaveCriticalSection(&g_mux.cs);
+        return;
+    }
     // v8.18: built-in help view - works even without any active pane
     if (g_mux.help_mode) {
         int bs = (g_mux.host_rows + 4) * 256;
@@ -2078,7 +2116,7 @@ static const char *const g_help_lines[] = {
     "  \x1b[38;2;230;237;243m点击 tab\x1b[0m           切换 pane",
     "  \x1b[38;2;230;237;243m点击 [x]\x1b[0m           关闭该 pane",
     "  \x1b[38;2;230;237;243m右键 tab\x1b[0m           改颜色 / 改标题",
-    "  \x1b[38;2;230;237;243m点击 [+]\x1b[0m           新建 pane（选 cmd / PowerShell）",
+    "  \x1b[38;2;230;237;243m点击 [+]\x1b[0m           新建 pane（选 cmd / PowerShell / 自定义命令）",
     "  \x1b[38;2;230;237;243m点击 termux\x1b[0m       打开 / 关闭本帮助",
     "",
     "\x1b[38;2;121;192;255;1m  提示与警告\x1b[0m",
@@ -2131,7 +2169,7 @@ static int create_pane_shell(const WCHAR *shell) {
     STARTUPINFOEXW si = {0};
     SIZE_T as = 0;
     PROCESS_INFORMATION pi = {0};
-    WCHAR cmdline[64] = {0};
+    WCHAR cmdline[256] = {0};
     BOOL created = FALSE;
     si.StartupInfo.cb = sizeof(si);
 
@@ -2151,8 +2189,8 @@ static int create_pane_shell(const WCHAR *shell) {
         goto attr_fail;
     }
 
-    // v8.21: shell is now selectable (cmd / powershell); copy into a writable buffer
-    wcsncpy(cmdline, shell, 63); cmdline[63] = 0;
+    // v8.21: shell is now selectable (cmd / powershell / custom); copy into a writable buffer
+    wcsncpy(cmdline, shell, 255); cmdline[255] = 0;
     created = CreateProcessW(NULL, cmdline, NULL, NULL, FALSE,
                              EXTENDED_STARTUPINFO_PRESENT, NULL, NULL,
                              &si.StartupInfo, &pi);
@@ -2164,7 +2202,17 @@ static int create_pane_shell(const WCHAR *shell) {
     CloseHandle(pi_r); pi_r = NULL;
     CloseHandle(po_w); po_w = NULL;
     pane->pipe_in = pi_w; pane->pipe_out = po_r; pane->process = pi.hProcess; pane->thread = pi.hThread; pane->active = 1;
-    strcpy(pane->title, _wcsicmp(shell, L"powershell.exe") == 0 ? "PowerShell" : "cmd");
+    if (_wcsicmp(shell, L"powershell.exe") == 0 || _wcsicmp(shell, L"powershell") == 0) {
+        strcpy(pane->title, "PowerShell");
+    } else if (_wcsicmp(shell, L"cmd.exe") == 0 || _wcsicmp(shell, L"cmd") == 0) {
+        strcpy(pane->title, "cmd");
+    } else {
+        char u8cmd[64] = {0};
+        WideCharToMultiByte(CP_UTF8, 0, shell, -1, u8cmd, 63, NULL, NULL);
+        char *space = strchr(u8cmd, ' ');
+        if (space) *space = 0;
+        sanitize_title(u8cmd, (int)strlen(u8cmd), pane->title, sizeof(pane->title));
+    }
     if (idx >= g_mux.pane_count) g_mux.pane_count = idx + 1;
     pane->read_thread = (HANDLE)_beginthreadex(NULL, 0, pane_read_thread, (void*)(intptr_t)idx, 0, NULL);
     if (!pane->read_thread) {
@@ -2347,6 +2395,52 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
         }
         return;   // ignore other keys while renaming
     }
+    // custom command mode - type command line, Enter runs, Esc cancels
+    if (g_mux.custom_cmd_mode) {
+        if (vk == VK_ESCAPE) {
+            g_mux.custom_cmd_mode = 0;
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (vk == VK_RETURN) {
+            g_mux.custom_cmd_mode = 0;
+            WCHAR wcmd[256] = {0};
+            if (g_mux.custom_cmd_len > 0) {
+                MultiByteToWideChar(CP_UTF8, 0, g_mux.custom_cmd_buf, -1, wcmd, 255);
+            } else {
+                wcscpy(wcmd, L"cmd.exe");
+            }
+            int ni = create_pane_shell(wcmd);
+            if (ni >= 0) switch_pane(ni);
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (vk == VK_BACK) {
+            if (g_mux.custom_cmd_len > 0) {
+                int n = g_mux.custom_cmd_len - 1;
+                while (n > 0 && ((unsigned char)g_mux.custom_cmd_buf[n] & 0xC0) == 0x80) n--;
+                g_mux.custom_cmd_len = n;
+                g_mux.custom_cmd_buf[g_mux.custom_cmd_len] = 0;
+            }
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (uc && uc >= 0x20 && g_mux.custom_cmd_len < 100) {
+            if (uc < 0x80) g_mux.custom_cmd_buf[g_mux.custom_cmd_len++] = (char)uc;
+            else if (uc < 0x800 && g_mux.custom_cmd_len + 1 < 120) {
+                g_mux.custom_cmd_buf[g_mux.custom_cmd_len++] = (char)(0xC0 | (uc >> 6));
+                g_mux.custom_cmd_buf[g_mux.custom_cmd_len++] = (char)(0x80 | (uc & 0x3F));
+            } else if (g_mux.custom_cmd_len + 2 < 120) {
+                g_mux.custom_cmd_buf[g_mux.custom_cmd_len++] = (char)(0xE0 | (uc >> 12));
+                g_mux.custom_cmd_buf[g_mux.custom_cmd_len++] = (char)(0x80 | ((uc >> 6) & 0x3F));
+                g_mux.custom_cmd_buf[g_mux.custom_cmd_len++] = (char)(0x80 | (uc & 0x3F));
+            }
+            g_mux.custom_cmd_buf[g_mux.custom_cmd_len] = 0;
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        return;
+    }
     // v8.33: context menu - 1 = color, 2 = rename, Esc cancels
     if (g_mux.ctx_mode == 1) {
         if (uc == '1' || vk == '1') { g_mux.ctx_mode = 2; g_mux.needs_redraw = 1; return; }
@@ -2391,6 +2485,14 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
             g_mux.chooser_mode = 0;
             int ni = create_pane_shell(L"powershell.exe");
             if (ni >= 0) switch_pane(ni);
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (uc == '3' || vk == '3') {
+            g_mux.chooser_mode = 0;
+            g_mux.custom_cmd_mode = 1;
+            g_mux.custom_cmd_len = 0;
+            g_mux.custom_cmd_buf[0] = 0;
             g_mux.needs_redraw = 1;
             return;
         }
@@ -2466,7 +2568,7 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
         // picker's swatches need live hover highlights (previously the picker
         // was never redrawn on mouse move, so hovering did nothing).
         if (now_in || (prev_in && !now_in) ||
-            g_mux.chooser_mode || g_mux.ctx_mode || g_mux.rename_mode)
+            g_mux.chooser_mode || g_mux.ctx_mode || g_mux.rename_mode || g_mux.custom_cmd_mode)
             g_mux.needs_redraw = 1;
         g_mouse_prev_in_tabbar = now_in;
     }
@@ -2475,10 +2577,11 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
         // only closes it - never opens another popup on top (mutual exclusion).
         int press2 = (me->dwButtonState & (FROM_LEFT_1ST_BUTTON_PRESSED | FROM_LEFT_2ND_BUTTON_PRESSED | RIGHTMOST_BUTTON_PRESSED)) != 0;
         if (press2 && (me->dwEventFlags == 0 || me->dwEventFlags == DOUBLE_CLICK) &&
-            (g_mux.chooser_mode || g_mux.ctx_mode || g_mux.rename_mode)) {
+            (g_mux.chooser_mode || g_mux.ctx_mode || g_mux.rename_mode || g_mux.custom_cmd_mode)) {
             g_mux.chooser_mode = 0;
             g_mux.ctx_mode = 0;
             g_mux.rename_mode = 0;
+            g_mux.custom_cmd_mode = 0;
             g_mux.needs_redraw = 1;
             return;
         }
@@ -2537,6 +2640,7 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                     // v8.46: close any other popup first (mutual exclusion)
                     g_mux.ctx_mode = 0;
                     g_mux.rename_mode = 0;
+                    g_mux.custom_cmd_mode = 0;
                     g_mux.chooser_mode = 1;
                     g_pop_anchor_x = mx;   // v8.45: lock position
                     g_mux.needs_redraw = 1;
@@ -2548,6 +2652,7 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                         // v8.46: close any other popup first (mutual exclusion)
                         g_mux.chooser_mode = 0;
                         g_mux.rename_mode = 0;
+                        g_mux.custom_cmd_mode = 0;
                         g_mux.ctx_mode = 1;
                         g_mux.ctx_pane = t->pane_idx;
                         g_pop_anchor_x = mx;   // v8.45: lock position
@@ -2672,6 +2777,14 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                 g_mux.needs_redraw = 1;
                 return;
             }
+            if (in_box && r == top + 3) {   // [3] 自定义命令行
+                g_mux.chooser_mode = 0;
+                g_mux.custom_cmd_mode = 1;
+                g_mux.custom_cmd_len = 0;
+                g_mux.custom_cmd_buf[0] = 0;
+                g_mux.needs_redraw = 1;
+                return;
+            }
             // click anywhere else cancels
             g_mux.chooser_mode = 0;
             g_mux.needs_redraw = 1;
@@ -2680,10 +2793,8 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
         // swallow everything else while a popup is open (moves, wheel, releases)
         return;
     }
-    // v8.52: rename box is keyboard-driven (Esc/Enter); swallow clicks so they
-    // don't leak into the pane behind the box (tab-bar clicks were already
-    // handled above and close the box).
-    if (g_mux.rename_mode) {
+    // v8.52: rename box & custom cmd box are keyboard-driven (Esc/Enter); swallow clicks
+    if (g_mux.rename_mode || g_mux.custom_cmd_mode) {
         return;
     }
     // v8.19: in help view, the mouse wheel scrolls the help content
