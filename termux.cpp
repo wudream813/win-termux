@@ -505,9 +505,11 @@ static inline int is_zero_width_cp(unsigned int cp) {
     if (cp >= 0x0300 && cp <= 0x036F) return 1;       // Combining Diacritical Marks
     if (cp >= 0x1AB0 && cp <= 0x1AFF) return 1;
     if (cp >= 0x1DC0 && cp <= 0x1DFF) return 1;
-    if (cp >= 0x20D0 && cp <= 0x20FF) return 1;
+    if (cp >= 0x20D0 && cp <= 0x20FF) return 1;       // Combining Diacritical Marks for Symbols (Keycaps 0x20E3)
     if (cp >= 0xFE20 && cp <= 0xFE2F) return 1;
+    if (cp >= 0xE0020 && cp <= 0xE007F) return 1;     // Tag characters
     if (cp >= 0xE0100 && cp <= 0xE01EF) return 1;     // Variation Selectors Supplement
+    if (cp >= 0x1F3FB && cp <= 0x1F3FF) return 1;     // Emoji skin tone modifiers
     return 0;
 }
 
@@ -527,9 +529,12 @@ static inline int is_wide_char(WCHAR c) {
     return is_wide_cp((unsigned int)c);
 }
 
+static inline int is_ri(unsigned int cp) {
+    return (cp >= 0x1F1E6 && cp <= 0x1F1FF); // Regional Indicator Symbol
+}
+
 static inline int is_combining_or_modifier(unsigned int cp) {
     if (is_zero_width_cp(cp)) return 1;
-    if (cp >= 0x1F3FB && cp <= 0x1F3FF) return 1;     // Emoji skin tone modifiers
     return 0;
 }
 
@@ -591,27 +596,52 @@ static void pad_to_right_border(char *out, int bs, int *posp, int *colsp, int ta
     *colsp = cols;
 }
 
+static int utf8_prev_char(const char *buf, int p) {
+    if (p <= 0) return 0;
+    int start = p - 1;
+    while (start > 0 && ((unsigned char)buf[start] & 0xC0) == 0x80) start--;
+    return start;
+}
+
 static int utf8_prev_grapheme(const char *buf, int pos) {
     if (pos <= 0) return 0;
     int p = pos;
     while (p > 0) {
-        int start = p - 1;
-        while (start > 0 && ((unsigned char)buf[start] & 0xC0) == 0x80) start--;
+        int prev = utf8_prev_char(buf, p);
         int adv = 0;
-        unsigned int cp = utf8_decode_cp(buf + start, pos - start, &adv);
-        p = start;
-        if (!is_combining_or_modifier(cp)) {
-            if (p > 0) {
-                int prev_start = p - 1;
-                while (prev_start > 0 && ((unsigned char)buf[prev_start] & 0xC0) == 0x80) prev_start--;
-                int prev_adv = 0;
-                unsigned int prev_cp = utf8_decode_cp(buf + prev_start, p - prev_start, &prev_adv);
-                if (prev_cp == 0x200D) {
-                    continue;
+        unsigned int cp = utf8_decode_cp(buf + prev, pos - prev, &adv);
+        if (is_combining_or_modifier(cp)) {
+            p = prev;
+            continue;
+        }
+        p = prev;
+        if (p > 0) {
+            int before = utf8_prev_char(buf, p);
+            int zadv = 0;
+            unsigned int zcp = utf8_decode_cp(buf + before, p - before, &zadv);
+            if (zcp == 0x200D || is_combining_or_modifier(zcp)) {
+                continue;
+            }
+        }
+        if (is_ri(cp)) {
+            int ri_count = 1;
+            int temp = p;
+            while (temp > 0) {
+                int prev_ri = utf8_prev_char(buf, temp);
+                int radv = 0;
+                unsigned int rcp = utf8_decode_cp(buf + prev_ri, temp - prev_ri, &radv);
+                if (is_ri(rcp)) {
+                    ri_count++;
+                    temp = prev_ri;
+                } else {
+                    break;
                 }
             }
-            break;
+            if (ri_count % 2 == 0) {
+                p = utf8_prev_char(buf, p);
+            }
         }
+        break;
     }
     return p;
 }
@@ -620,17 +650,25 @@ static int utf8_next_grapheme(const char *buf, int len, int pos) {
     if (pos >= len) return len;
     int p = pos;
     int adv = 0;
-    utf8_decode_cp(buf + p, len - p, &adv);
+    unsigned int base_cp = utf8_decode_cp(buf + p, len - p, &adv);
     p += adv;
+    if (is_ri(base_cp) && p < len) {
+        int nadv = 0;
+        unsigned int ncp = utf8_decode_cp(buf + p, len - p, &nadv);
+        if (is_ri(ncp)) {
+            p += nadv;
+            return p;
+        }
+    }
     while (p < len) {
         int next_adv = 0;
         unsigned int cp = utf8_decode_cp(buf + p, len - p, &next_adv);
         if (is_combining_or_modifier(cp)) {
             p += next_adv;
             if (cp == 0x200D && p < len) {
-                int base_adv = 0;
-                utf8_decode_cp(buf + p, len - p, &base_adv);
-                p += base_adv;
+                int b_adv = 0;
+                utf8_decode_cp(buf + p, len - p, &b_adv);
+                p += b_adv;
             }
         } else {
             break;
@@ -3282,7 +3320,7 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
                 u8[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
                 u8[3] = (char)(0x80 | (cp & 0x3F));
                 u8_count = 4;
-            } else if (uc >= 0x20 || uc == 0xFE0F || (uc >= 0xFE00 && uc <= 0xFE0F)) {
+            } else if (uc >= 0x20 || uc == 0x200D || (uc >= 0xFE00 && uc <= 0xFE0F)) {
                 g_high_surrogate = 0;
                 if (uc < 0x80) { u8[0] = (char)uc; u8_count = 1; }
                 else if (uc < 0x800) { u8[0] = (char)(0xC0 | (uc >> 6)); u8[1] = (char)(0x80 | (uc & 0x3F)); u8_count = 2; }
@@ -3385,7 +3423,7 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
                 u8[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
                 u8[3] = (char)(0x80 | (cp & 0x3F));
                 u8_count = 4;
-            } else if (uc >= 0x20 || uc == 0xFE0F || (uc >= 0xFE00 && uc <= 0xFE0F)) {
+            } else if (uc >= 0x20 || uc == 0x200D || (uc >= 0xFE00 && uc <= 0xFE0F)) {
                 g_high_surrogate = 0;
                 if (uc < 0x80) {
                     u8[0] = (char)uc;
@@ -3474,7 +3512,7 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
                 u8[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
                 u8[3] = (char)(0x80 | (cp & 0x3F));
                 u8_count = 4;
-            } else if (uc >= 0x20 || uc == 0xFE0F || (uc >= 0xFE00 && uc <= 0xFE0F)) {
+            } else if (uc >= 0x20 || uc == 0x200D || (uc >= 0xFE00 && uc <= 0xFE0F)) {
                 g_high_surrogate = 0;
                 if (uc < 0x80) {
                     u8[0] = (char)uc;
