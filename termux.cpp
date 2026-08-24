@@ -2279,7 +2279,7 @@ static void render_settings_main(char *out, int bs, int *posp, int host_rows, in
 
     // Header: ┌─ * termux 设置 ────────────────────────────┐
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[38;2;255;255;255m\x1b[48;2;137;87;229m┌─ * termux 设置 ", top, left);
-    int cols = 2 + 14; // "┌─" (2) + " * termux 设置 " (14)
+    int cols = utf8_cols("┌─ * termux 设置 ", (int)strlen("┌─ * termux 设置 "));
     while (cols < sw - 1 && pos < bs - 8) {
         out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
         cols++;
@@ -2437,9 +2437,8 @@ static void render_settings_edit_dialog(char *out, int bs, int *posp, int host_r
     int pos = *posp;
 
     const char *title = (g_mux.settings_edit_idx >= 0) ? "┌─ [*] 编辑菜单项 " : "┌─ [*] 添加新菜单项 ";
-    int title_cols = (g_mux.settings_edit_idx >= 0) ? 17 : 19;
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m%s", top, left, title);
-    int cols = title_cols;
+    int cols = utf8_cols(title, (int)strlen(title));
     while (cols < ew - 1 && pos < bs - 8) {
         out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
         cols++;
