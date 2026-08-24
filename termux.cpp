@@ -541,7 +541,6 @@ static inline int is_wide_char(WCHAR c) {
     if (c >= 0xFE30 && c <= 0xFE4F) return 1;         // CJK compat forms
     if (c >= 0xFF00 && c <= 0xFF60) return 1;         // fullwidth forms
     if (c >= 0xFFE0 && c <= 0xFFE6) return 1;         // fullwidth signs
-    if (c >= 0x20000 && c <= 0x2FFFD) return 1;       // CJK ext B+ (not reachable, WCHAR is 16-bit)
     return 0;
 }
 
@@ -937,7 +936,7 @@ static void execute_csi(ScreenBuffer *s, char final, char prefix, const char *pa
                         break;
                     case 1048: s->saved_cx = s->cursor_x; s->saved_cy = s->cursor_y; break;   // v8: save cursor
                     case 1000: case 1002: case 1003: s->mouse_tracking = params[i]; break;
-                    case 1006: s->mouse_sgr = 1; s->mouse_tracking = 1006; break;
+                    case 1006: s->mouse_sgr = 1; break;
                     case 2004: s->bracketed_paste = 1; break;
                     case 6: s->origin_mode = 1; break;
                 }
@@ -965,7 +964,8 @@ static void execute_csi(ScreenBuffer *s, char final, char prefix, const char *pa
                         }
                         break;
                     case 1048: s->cursor_x = s->saved_cx; s->cursor_y = s->saved_cy; s->wraparound_pending = 0; break;   // v8: restore cursor
-                    case 1000: case 1002: case 1003: case 1006: s->mouse_tracking = 0; s->mouse_sgr = 0; break;
+                    case 1000: case 1002: case 1003: s->mouse_tracking = 0; break;
+                    case 1006: s->mouse_sgr = 0; break;
                     case 2004: s->bracketed_paste = 0; break;
                     case 6: s->origin_mode = 0; break;
                 }
@@ -1610,6 +1610,7 @@ static void draw_tab_bar(char *out, int bs, int *posp) {
 #define CHOOSER_W 26
 #define CHOOSER_H 5
 static void render_chooser(char *out, int bs, int *posp, int host_rows, int host_cols) {
+    (void)host_rows;
     int pos = *posp;
     // v8.47: top = row 2 (below the tab bar) so the ┌──┐ border is visible
     int top = 2;
@@ -1628,6 +1629,7 @@ static void render_chooser(char *out, int bs, int *posp, int host_rows, int host
 #define RENAME_W 30
 #define RENAME_H 3
 static void render_rename_box(char *out, int bs, int *posp, int host_rows, int host_cols) {
+    (void)host_rows;
     int pos = *posp;
     int top = 2;   // v8.47: below the tab bar
     int ax = (g_pop_anchor_x >= 0) ? g_pop_anchor_x : g_mouse_x;
@@ -1652,6 +1654,7 @@ static void render_rename_box(char *out, int bs, int *posp, int host_rows, int h
 #define CTX_W 24
 #define CTX_H 4
 static void render_ctx_menu(char *out, int bs, int *posp, int host_rows, int host_cols) {
+    (void)host_rows;
     int pos = *posp;
     // v8.47: top = row 2 (below the tab bar) so the ┌──┐ border is visible
     int top = 2;
@@ -1672,6 +1675,7 @@ static void render_ctx_menu(char *out, int bs, int *posp, int host_rows, int hos
 #define CP_W 30
 #define CP_H 4
 static void render_color_picker(char *out, int bs, int *posp, int host_rows, int host_cols) {
+    (void)host_rows;
     int pos = *posp;
     // v8.47: top = row 2 (below the tab bar)
     int top = 2;
@@ -1717,6 +1721,7 @@ static void render_color_picker(char *out, int bs, int *posp, int host_rows, int
 
 // v8.23: chooser geometry shared with the mouse handler
 static void chooser_geom(int host_rows, int host_cols, int *top, int *left) {
+    (void)host_rows;
     // v8.42: match render_chooser's near-mouse placement
     *top = 2;   // v8.47: below the tab bar
     *left = (g_pop_anchor_x >= 0) ? g_pop_anchor_x : g_mouse_x;
@@ -2186,7 +2191,7 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
             g_mux.needs_redraw = 1;
             return;
         }
-        if (uc && uc >= 0x20 && uc < 0x10000 && g_mux.rename_len < 31) {
+        if (uc && uc >= 0x20 && g_mux.rename_len < 31) {
             // store UTF-8
             if (uc < 0x80) g_mux.rename_buf[g_mux.rename_len++] = (char)uc;
             else if (uc < 0x800 && g_mux.rename_len + 1 < 32) {
@@ -2551,8 +2556,35 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
         }
         return;
     }
-    if (g_mux.active_pane < 0) return; Pane *p = &g_mux.panes[g_mux.active_pane]; if (!p->active) return; ScreenBuffer *s = &p->screen;
-    if (me->dwEventFlags == MOUSE_WHEELED) { int d = (short)HIWORD(me->dwButtonState); if (s->mouse_tracking) { int x = mx + 1, y = my + 1; char seq[64]; int len = 0; if (s->mouse_sgr) { int btn = d > 0 ? 64 : 65; len = snprintf(seq, sizeof(seq), "\x1b[<%d;%d;%dM", btn, x, y); } else if (x <= 223 && y <= 223) { seq[0] = '\x1b'; seq[1] = '['; seq[2] = 'M'; seq[3] = 32 + (d > 0 ? 64 : 65); seq[4] = 32 + x; seq[5] = 32 + y; len = 6; } if (len > 0) write_to_pane(seq, len); return; } if (!s->in_alt_screen) do_scroll(d > 0 ? 3 : -3); return; }
+    if (g_mux.active_pane < 0) return;
+    Pane *p = &g_mux.panes[g_mux.active_pane];
+    if (!p->active) return;
+    ScreenBuffer *s = &p->screen;
+
+    if (me->dwEventFlags == MOUSE_WHEELED) {
+        int d = (short)HIWORD(me->dwButtonState);
+        if (s->mouse_tracking) {
+            int x = mx + 1, y = my;
+            if (x < 1) x = 1;
+            if (x > s->cols) x = s->cols;
+            if (y < 1) y = 1;
+            if (y > s->rows) y = s->rows;
+            char seq[64]; int len = 0;
+            if (s->mouse_sgr) {
+                int btn = d > 0 ? 64 : 65;
+                len = snprintf(seq, sizeof(seq), "\x1b[<%d;%d;%dM", btn, x, y);
+            } else if (x <= 223 && y <= 223) {
+                seq[0] = '\x1b'; seq[1] = '['; seq[2] = 'M';
+                seq[3] = 32 + (d > 0 ? 64 : 65);
+                seq[4] = 32 + x; seq[5] = 32 + y;
+                len = 6;
+            }
+            if (len > 0) write_to_pane(seq, len);
+            return;
+        }
+        if (!s->in_alt_screen) do_scroll(d > 0 ? 3 : -3);
+        return;
+    }
     if (s->mouse_tracking == 0) {
         // v8.57: pane right-click no longer opens the context menu. v8.53
         // added this as a fallback for a stuck middle button, but the mbtn
@@ -2562,9 +2594,68 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
         // now opens ONLY on right-click of a tab.
         return;
     }
-    int x = mx + 1, y = my + 1; char seq[64]; int len = 0;
-    if (s->mouse_sgr) { int btn = 0; char act = 'M'; if (me->dwEventFlags == 0) { if (me->dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED) btn = 0; else if (me->dwButtonState & RIGHTMOST_BUTTON_PRESSED) btn = 2; else if (me->dwButtonState & FROM_LEFT_2ND_BUTTON_PRESSED) btn = 1; else { btn = 0; act = 'm'; } } else if (me->dwEventFlags == MOUSE_MOVED) { btn = 32; if (me->dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED) btn += 0; else if (me->dwButtonState & RIGHTMOST_BUTTON_PRESSED) btn += 2; else btn += 3; } else return; if (me->dwControlKeyState & SHIFT_PRESSED) btn |= 4; if (me->dwControlKeyState & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) btn |= 8; if (me->dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) btn |= 16; len = snprintf(seq, sizeof(seq), "\x1b[<%d;%d;%d%c", btn, x, y, act); }
-    else { int btn = 0; if (me->dwEventFlags == 0) { if (me->dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED) btn = 0; else if (me->dwButtonState & FROM_LEFT_2ND_BUTTON_PRESSED) btn = 1; else if (me->dwButtonState & RIGHTMOST_BUTTON_PRESSED) btn = 2; else btn = 3; } else if (me->dwEventFlags == MOUSE_MOVED) { if (s->mouse_tracking < 1002) return; btn = 32; if (!(me->dwButtonState & (FROM_LEFT_1ST_BUTTON_PRESSED | RIGHTMOST_BUTTON_PRESSED))) if (s->mouse_tracking < 1003) return; } else return; if (x > 223 || y > 223) return; seq[0] = '\x1b'; seq[1] = '['; seq[2] = 'M'; seq[3] = 32 + btn; seq[4] = 32 + x; seq[5] = 32 + y; len = 6; }
+    int x = mx + 1, y = my;
+    if (x < 1) x = 1;
+    if (x > s->cols) x = s->cols;
+    if (y < 1) y = 1;
+    if (y > s->rows) y = s->rows;
+    char seq[64]; int len = 0;
+
+    static DWORD prev_btn_state = 0;
+    DWORD changed = me->dwButtonState ^ prev_btn_state;
+    DWORD released = changed & ~me->dwButtonState;
+    prev_btn_state = me->dwButtonState;
+
+    if (s->mouse_sgr) {
+        int btn = 0; char act = 'M';
+        if (me->dwEventFlags == 0 || me->dwEventFlags == DOUBLE_CLICK) {
+            if (me->dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED) btn = 0;
+            else if (me->dwButtonState & RIGHTMOST_BUTTON_PRESSED) btn = 2;
+            else if (me->dwButtonState & FROM_LEFT_2ND_BUTTON_PRESSED) btn = 1;
+            else {
+                act = 'm';
+                if (released & RIGHTMOST_BUTTON_PRESSED) btn = 2;
+                else if (released & FROM_LEFT_2ND_BUTTON_PRESSED) btn = 1;
+                else btn = 0;
+            }
+        } else if (me->dwEventFlags == MOUSE_MOVED) {
+            if (s->mouse_tracking < 1002) return;
+            if (s->mouse_tracking == 1002 && !(me->dwButtonState & (FROM_LEFT_1ST_BUTTON_PRESSED | RIGHTMOST_BUTTON_PRESSED | FROM_LEFT_2ND_BUTTON_PRESSED)))
+                return;
+            btn = 32;
+            if (me->dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED) btn += 0;
+            else if (me->dwButtonState & RIGHTMOST_BUTTON_PRESSED) btn += 2;
+            else if (me->dwButtonState & FROM_LEFT_2ND_BUTTON_PRESSED) btn += 1;
+            else btn += 3;
+        } else return;
+        if (me->dwControlKeyState & SHIFT_PRESSED) btn |= 4;
+        if (me->dwControlKeyState & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) btn |= 8;
+        if (me->dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) btn |= 16;
+        len = snprintf(seq, sizeof(seq), "\x1b[<%d;%d;%d%c", btn, x, y, act);
+    }
+    else {
+        int btn = 0;
+        if (me->dwEventFlags == 0 || me->dwEventFlags == DOUBLE_CLICK) {
+            if (me->dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED) btn = 0;
+            else if (me->dwButtonState & FROM_LEFT_2ND_BUTTON_PRESSED) btn = 1;
+            else if (me->dwButtonState & RIGHTMOST_BUTTON_PRESSED) btn = 2;
+            else btn = 3;
+        } else if (me->dwEventFlags == MOUSE_MOVED) {
+            if (s->mouse_tracking < 1002) return;
+            btn = 32;
+            if (me->dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED) btn += 0;
+            else if (me->dwButtonState & RIGHTMOST_BUTTON_PRESSED) btn += 2;
+            else if (me->dwButtonState & FROM_LEFT_2ND_BUTTON_PRESSED) btn += 1;
+            else if (s->mouse_tracking < 1003) return;
+            else btn += 3;
+        } else return;
+        if (me->dwControlKeyState & SHIFT_PRESSED) btn |= 4;
+        if (me->dwControlKeyState & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) btn |= 8;
+        if (me->dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) btn |= 16;
+        if (x > 223 || y > 223) return;
+        seq[0] = '\x1b'; seq[1] = '['; seq[2] = 'M';
+        seq[3] = 32 + btn; seq[4] = 32 + x; seq[5] = 32 + y; len = 6;
+    }
     if (len > 0) write_to_pane(seq, len);
 }
 
