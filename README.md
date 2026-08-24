@@ -1,5 +1,7 @@
 # win-termux
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Windows 终端复用器（Terminal Multiplexer）—— 单文件 C 实现，基于 Windows ConPTY。
 在 Windows 控制台里管理多个 cmd / PowerShell 会话，像 tmux 一样分标签页。
 
@@ -95,3 +97,7 @@ python3 verify_color8.py    # color=8 渲染用色回归
   - 启动提速（移除启动横幅 800ms 人为延迟）
   - 8 号粉色调色板修复（修复 `color & 7` 索引折叠）
   - 鼠标全量诊断日志支持（`TERMUX_DUMP=1`）
+
+## 开源协议
+
+本项目基于 [MIT 许可证](LICENSE) 开源。
