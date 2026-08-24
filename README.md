@@ -50,7 +50,7 @@ Windows 终端复用器（Terminal Multiplexer）—— 单文件 C 实现，基
 cl /O2 termux.cpp /link user32.lib
 
 :: MinGW-w64
-x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -x c -o termux-v1.0.1.exe termux.cpp -luser32
+x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -x c -o termux-v1.0.2.exe termux.cpp -luser32
 ```
 
 > 注意：`-x c` 必须保留 —— 文件扩展名是 `.cpp`，但代码是纯 C，
@@ -59,9 +59,9 @@ x86_64-w64-mingw32-gcc -O2 -Wall -Wextra -x c -o termux-v1.0.1.exe termux.cpp -l
 ## 运行
 
 ```bat
-termux-v1.0.1.exe          :: 正常启动
+termux-v1.0.2.exe          :: 正常启动
 set TERMUX_DUMP=1   :: 启用诊断日志（termux_dump.log / render_dump.log / mouse_dump.log）
-termux-v1.0.1.exe
+termux-v1.0.2.exe
 ```
 
 ## 系统要求
@@ -91,12 +91,14 @@ python3 verify_color8.py    # color=8 渲染用色回归
 
 ## 版本历史
 
-- **v1.0.1**
+- **v1.0.2**
   - 新增在新建 Pane 弹窗中支持 `[3]` 自定义命令行启动（可输入指定命令如 `wsl`、`bash`、`python`、`pwsh` 等运行）
   - 新增终端窗口标题自动同步当前活动子 Pane 标题（支持 OSC 标题及改名实时同步，退出自动恢复原标题）
   - 修复 Windows cmd / ConPTY `title` 命令产生前缀冒号（`:   T`）的解析问题
+  - 增加控制台必须使用等宽字体的警告提示
+- **v1.0.1**
   - 修复终端窗口调整大小（Resize）导致历史滚动记录丢失被清空的问题
-  - 修复帮助页面中在标签栏滑动鼠标导致全屏剧烈闪烁的问题
+  - 修复帮助页面中在标签栏滑动鼠标导致全屏剧烈闪烁的问题（移除 2J 屏幕清除）
   - 修复 Pane 区域鼠标点击与滚轮事件 Y 坐标整体下偏 1 行（未扣除 Tab Bar 高度）的问题
   - 修复 Pane 双击（`DOUBLE_CLICK`）事件在子程序中被误丢弃的问题
   - 解耦 SGR `1006` 与跟踪模式 `1000/1002/1003`，修复 SGR 模式下移动事件泛滥及模式覆盖问题
