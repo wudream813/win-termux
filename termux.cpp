@@ -263,6 +263,8 @@ static int g_mouse_prev_in_tabbar = 0;
 // v8.45: anchor column captured when a popup (ctx menu / chooser) opens, so
 // the popup stays put even if the mouse keeps moving afterwards.
 static int g_pop_anchor_x = -1;
+static WCHAR g_orig_title[256] = {0};
+static char g_current_host_title[128] = {0};
 
 // Rendering happens frequently while pane output is streaming. Reuse one
 // scratch buffer instead of allocating and freeing a multi-megabyte block on
@@ -1767,9 +1769,30 @@ static void chooser_geom(int host_rows, int host_cols, int *top, int *left) {
     if (*left < 0) *left = 0;
 }
 
+static void update_host_title(void) {
+    const char *target = NULL;
+    if (g_mux.help_mode) {
+        target = "termux - 帮助";
+    } else if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
+        const char *t = g_mux.panes[g_mux.active_pane].title;
+        target = (t && t[0]) ? t : "cmd";
+    } else {
+        target = "termux";
+    }
+    if (strcmp(g_current_host_title, target) != 0) {
+        strncpy(g_current_host_title, target, sizeof(g_current_host_title) - 1);
+        g_current_host_title[sizeof(g_current_host_title) - 1] = 0;
+        SetConsoleTitleA(g_current_host_title);
+        char seq[256];
+        int len = snprintf(seq, sizeof(seq), "\x1b]0;%s\x07", g_current_host_title);
+        if (len > 0) host_write(seq, len);
+    }
+}
+
 static void render_screen(void) {
     EnterCriticalSection(&g_mux.cs);
     if (g_mux.host_cols < 1 || g_mux.host_rows < 1 || g_mux.total_host_rows < 1) { LeaveCriticalSection(&g_mux.cs); return; }
+    update_host_title();
     // v8.21: new-pane chooser
     if (g_mux.chooser_mode) {
         int bs = (g_mux.host_rows + 4) * 256;
@@ -2777,6 +2800,7 @@ int main(void) {
     g_mux.host_rows = g_mux.total_host_rows - 1;
 
     GetConsoleMode(g_mux.hIn, &g_mux.orig_in_mode); GetConsoleMode(g_mux.hOut, &g_mux.orig_out_mode);
+    GetConsoleTitleW(g_orig_title, 255);
     DWORD im = g_mux.orig_in_mode; im &= ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT | ENABLE_QUICK_EDIT_MODE); im |= ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT | ENABLE_EXTENDED_FLAGS; SetConsoleMode(g_mux.hIn, im);
     DWORD om = g_mux.orig_out_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_PROCESSED_OUTPUT | DISABLE_NEWLINE_AUTO_RETURN; SetConsoleMode(g_mux.hOut, om);
     g_mux.orig_cp = GetConsoleOutputCP(); g_mux.orig_input_cp = GetConsoleCP(); SetConsoleOutputCP(65001); SetConsoleCP(65001);
@@ -2808,6 +2832,12 @@ int main(void) {
     for (int i = 0; i < g_mux.pane_count; i++) close_pane(i);   // v7: close ALL panes (live or dead)
 cleanup:
     host_printf("\x1b[?1049l\x1b[0m");
+    if (g_orig_title[0]) {
+        SetConsoleTitleW(g_orig_title);
+        char tbuf[512];
+        int tl = WideCharToMultiByte(CP_UTF8, 0, g_orig_title, -1, tbuf, sizeof(tbuf), NULL, NULL);
+        if (tl > 0) host_printf("\x1b]0;%s\x07", tbuf);
+    }
     SetConsoleCtrlHandler(ctrl_handler, FALSE);
     SetConsoleMode(g_mux.hIn, g_mux.orig_in_mode); SetConsoleMode(g_mux.hOut, g_mux.orig_out_mode);
     SetConsoleOutputCP(g_mux.orig_cp); SetConsoleCP(g_mux.orig_input_cp);
