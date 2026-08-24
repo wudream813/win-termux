@@ -2394,7 +2394,7 @@ static void render_settings_main(char *out, int bs, int *posp, int host_rows, in
     // Footer: [Ctrl+S] 保存配置          [Esc] 取消并返回
     int f_r = top + 6 + g_chooser_item_count;
     int h_save = (g_mouse_y == f_r - 1 && g_mouse_x >= left + 2 && g_mouse_x <= left + 20);
-    int h_esc = (g_mouse_y == f_r - 1 && g_mouse_x >= left + 31 && g_mouse_x <= left + 47);
+    int h_esc = (g_mouse_y == f_r - 1 && g_mouse_x >= left + 31 && g_mouse_x <= left + 48);
 
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  ", f_r, left);
     cols = 1 + 2;
@@ -2402,13 +2402,13 @@ static void render_settings_main(char *out, int bs, int *posp, int host_rows, in
         pos += snprintf(out + pos, bs - pos, "\x1b[48;2;63;185;80m\x1b[38;2;255;255;255;1m [Ctrl+S] 保存配置 \x1b[0m          ");
     else
         pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m\x1b[38;2;63;185;80;1m [Ctrl+S] 保存配置 \x1b[0m          ");
-    cols += 19 + 10;
+    cols += utf8_cols(" [Ctrl+S] 保存配置 ", (int)strlen(" [Ctrl+S] 保存配置 ")) + 10;
 
     if (h_esc)
         pos += snprintf(out + pos, bs - pos, "\x1b[48;2;217;119;54m\x1b[38;2;255;255;255;1m [Esc] 取消并返回 \x1b[0m");
     else
         pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m\x1b[38;2;217;119;54;1m [Esc] 取消并返回 \x1b[0m");
-    cols += 17;
+    cols += utf8_cols(" [Esc] 取消并返回 ", (int)strlen(" [Esc] 取消并返回 "));
 
     pad_to_right_border(out, bs, &pos, &cols, sw);
 
