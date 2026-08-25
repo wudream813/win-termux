@@ -2136,7 +2136,6 @@ static void draw_tab_bar(char *out, int bs, int *posp) {
         // v8.38: no color dot anymore - hover target is the 'x' right after head
         int hovering = (g_mouse_y == 0 &&   // v8.22: tab bar at top
                         g_mouse_x >= col + hc && g_mouse_x < col + lc);
-        int tab_hover = (g_mouse_y == 0 && g_mouse_x >= col && g_mouse_x < col + lc + 1);
         g_mux.tab_info[g_mux.tab_count].start_col = col;
         g_mux.tab_info[g_mux.tab_count].pane_idx = i;
         int act = (i == g_mux.active_pane);
@@ -2157,16 +2156,14 @@ static void draw_tab_bar(char *out, int bs, int *posp) {
         // edge (no stray space before the bracket).
         if (act)
             pos += snprintf(out + pos, bs - pos, "%s" TAB_ACT_FG "\x1b[1m%s\x1b[22m", actbg, head);
-        else if (tab_hover && !hovering)
-            pos += snprintf(out + pos, bs - pos, "%s\x1b[38;2;255;255;255;1m%s\x1b[22m", actbg, head);
         else
             pos += snprintf(out + pos, bs - pos, "%s\x1b[38;2;139;148;158m%s", dimbg, head);
         if (hovering)
-            pos += snprintf(out + pos, bs - pos, X_RED_BG "\x1b[38;2;255;255;255;1m\xc3\x97\x1b[22m");
+            pos += snprintf(out + pos, bs - pos, X_RED_BG "\x1b[38;2;255;255;255m\xc3\x97");
         else
             pos += snprintf(out + pos, bs - pos, X_RED "\xc3\x97");
         // restore the tab's own colors before ']' (same bg as the tab body)
-        if (act || (tab_hover && !hovering))
+        if (act)
             pos += snprintf(out + pos, bs - pos, "%s" TAB_ACT_FG "]", actbg);
         else
             pos += snprintf(out + pos, bs - pos, "%s\x1b[38;2;139;148;158m]", dimbg);
@@ -3990,6 +3987,28 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
     // v8.54: log EVERY mouse event up front (throttled for moves) so any
     // interaction - including ones that don't hit a UI path - is traceable.
     log_mouse_event("ev", me);
+
+    // If out-of-bounds coordinate received from parent (e.g. my < 0):
+    if (my < 0) {
+        if (g_mouse_y >= 0) {
+            g_mouse_x = -1;
+            g_mouse_y = -1;
+            g_mouse_prev_in_tabbar = 0;
+            g_mux.needs_redraw = 1;
+        }
+        if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
+            ScreenBuffer *s = &g_mux.panes[g_mux.active_pane].screen;
+            if (s->mouse_tracking) {
+                int x = mx + 1;
+                char seq[64]; int len = 0;
+                if (s->mouse_sgr) len = snprintf(seq, sizeof(seq), "\x1b[<35;%d;0M", x);
+                else if (x <= 223) { seq[0] = '\x1b'; seq[1] = '['; seq[2] = 'M'; seq[3] = 32 + 35; seq[4] = 32 + x; seq[5] = 32 + 0; len = 6; }
+                if (len > 0) write_to_pane(seq, len);
+            }
+        }
+        return;
+    }
+
     // v8.11/v8.26: track mouse position. Redraw whenever the mouse enters OR
     // leaves the tab bar row, so hover highlights appear when over a button and
     // clear as soon as the pointer moves away (previously they stuck).
@@ -4009,7 +4028,7 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
         g_mouse_prev_in_tabbar = now_in;
 
         // When mouse transitions into outer tab bar (!prev_in && now_in), notify
-        // child pane ONCE with a safe non-tabbar coordinate (y = 2, i.e. child row 1)
+        // child pane ONCE with out-of-bounds coordinate (y = 0, i.e. child my = -1)
         // so nested child termux or app immediately clears its tab hover highlight!
         if (!prev_in && now_in) {
             if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
@@ -4018,10 +4037,10 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                     int x = mx + 1;
                     char seq[64]; int len = 0;
                     if (s->mouse_sgr) {
-                        len = snprintf(seq, sizeof(seq), "\x1b[<35;%d;2M", x);
+                        len = snprintf(seq, sizeof(seq), "\x1b[<35;%d;0M", x);
                     } else if (x <= 223) {
                         seq[0] = '\x1b'; seq[1] = '['; seq[2] = 'M';
-                        seq[3] = 32 + 35; seq[4] = 32 + x; seq[5] = 32 + 2;
+                        seq[3] = 32 + 35; seq[4] = 32 + x; seq[5] = 32 + 0;
                         len = 6;
                     }
                     if (len > 0) write_to_pane(seq, len);
