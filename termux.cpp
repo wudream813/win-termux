@@ -2136,6 +2136,7 @@ static void draw_tab_bar(char *out, int bs, int *posp) {
         // v8.38: no color dot anymore - hover target is the 'x' right after head
         int hovering = (g_mouse_y == 0 &&   // v8.22: tab bar at top
                         g_mouse_x >= col + hc && g_mouse_x < col + lc);
+        int tab_hover = (g_mouse_y == 0 && g_mouse_x >= col && g_mouse_x < col + lc + 1);
         g_mux.tab_info[g_mux.tab_count].start_col = col;
         g_mux.tab_info[g_mux.tab_count].pane_idx = i;
         int act = (i == g_mux.active_pane);
@@ -2156,14 +2157,16 @@ static void draw_tab_bar(char *out, int bs, int *posp) {
         // edge (no stray space before the bracket).
         if (act)
             pos += snprintf(out + pos, bs - pos, "%s" TAB_ACT_FG "\x1b[1m%s\x1b[22m", actbg, head);
+        else if (tab_hover && !hovering)
+            pos += snprintf(out + pos, bs - pos, "%s\x1b[38;2;255;255;255;1m%s\x1b[22m", actbg, head);
         else
             pos += snprintf(out + pos, bs - pos, "%s\x1b[38;2;139;148;158m%s", dimbg, head);
         if (hovering)
-            pos += snprintf(out + pos, bs - pos, X_RED_BG "\x1b[38;2;255;255;255m\xc3\x97");
+            pos += snprintf(out + pos, bs - pos, X_RED_BG "\x1b[38;2;255;255;255;1m\xc3\x97\x1b[22m");
         else
             pos += snprintf(out + pos, bs - pos, X_RED "\xc3\x97");
         // restore the tab's own colors before ']' (same bg as the tab body)
-        if (act)
+        if (act || (tab_hover && !hovering))
             pos += snprintf(out + pos, bs - pos, "%s" TAB_ACT_FG "]", actbg);
         else
             pos += snprintf(out + pos, bs - pos, "%s\x1b[38;2;139;148;158m]", dimbg);
