@@ -2870,11 +2870,7 @@ static void render_screen(void) {
                         }
                     } else {
                         if (mouse_on_track) {
-                            if (y == g_mouse_y - 1) {
-                                pos += snprintf(out + pos, bs - pos, "\x1b[48;2;76;91;115m\x1b[38;2;255;255;255;1m│\x1b[0m");
-                            } else {
-                                pos += snprintf(out + pos, bs - pos, "\x1b[48;2;54;67;87m\x1b[38;2;215;228;245m│\x1b[0m");
-                            }
+                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;54;67;87m\x1b[38;2;230;240;255;1m│\x1b[0m");
                         } else if (mouse_on_thumb) {
                             pos += snprintf(out + pos, bs - pos, "\x1b[48;2;36;44;56m\x1b[38;2;122;135;153m│\x1b[0m");
                         } else if (dist <= 5) {
