@@ -517,14 +517,40 @@ static inline int is_zero_width_cp(unsigned int cp) {
 }
 
 static inline int is_wide_cp(unsigned int cp) {
-    if (cp >= 0x1100 && cp <= 0x11FF) return 1;         // Hangul Jamo
-    if (cp >= 0x2E80 && cp <= 0x9FFF) return 1;         // CJK radicals..CJK unified
-    if (cp >= 0xAC00 && cp <= 0xD7A3) return 1;         // Hangul syllables
-    if (cp >= 0xF900 && cp <= 0xFAFF) return 1;         // CJK compat ideographs
-    if (cp >= 0xFE30 && cp <= 0xFE4F) return 1;         // CJK compat forms
-    if (cp >= 0xFF00 && cp <= 0xFF60) return 1;         // fullwidth forms
-    if (cp >= 0xFFE0 && cp <= 0xFFE6) return 1;         // fullwidth signs
-    if (cp >= 0x1F000 && cp <= 0x1FFFF) return 1;       // SMP emojis
+    if (cp < 0x1100) return 0;
+    if (cp <= 0x115F) return 1;                         // Hangul Jamo
+    if (cp == 0x231A || cp == 0x231B) return 1;         // ⌚, ⌛
+    if (cp >= 0x23E9 && cp <= 0x23EC) return 1;         // ⏩..⏬
+    if (cp == 0x23F0 || cp == 0x23F3) return 1;         // ⏰, ⏳
+    if (cp >= 0x25FD && cp <= 0x25FE) return 1;         // ◽, ◾
+    if (cp >= 0x2614 && cp <= 0x2615) return 1;         // ☔, ☕
+    if (cp >= 0x2648 && cp <= 0x2653) return 1;         // ♈..♓
+    if (cp == 0x267F || cp == 0x2693 || cp == 0x26A1) return 1; // ♿, ⚓, ⚡
+    if (cp >= 0x26AA && cp <= 0x26AB) return 1;         // ⚪, ⚫
+    if (cp >= 0x26BD && cp <= 0x26BE) return 1;         // ⚽, ⚾
+    if (cp >= 0x26C4 && cp <= 0x26C5) return 1;         // ⛄, ⛅
+    if (cp == 0x26CE || cp == 0x26D4 || cp == 0x26EA) return 1; // ⛎, ⛔, ⛪
+    if (cp >= 0x26F2 && cp <= 0x26F3) return 1;         // ⛲, ⛳
+    if (cp == 0x26F5 || cp == 0x26FA || cp == 0x26FD) return 1; // ⛵, ⛺, ⛽
+    if (cp == 0x2705) return 1;                         // ✅
+    if (cp >= 0x270A && cp <= 0x270B) return 1;         // ✊, ✋
+    if (cp == 0x2728) return 1;                         // ✨
+    if (cp == 0x274C || cp == 0x274E) return 1;         // ❌, ❎
+    if (cp >= 0x2753 && cp <= 0x2755) return 1;         // ❓..❕
+    if (cp == 0x2757) return 1;                         // ❗
+    if (cp >= 0x2795 && cp <= 0x2797) return 1;         // ➕..➗
+    if (cp == 0x27B0 || cp == 0x27BF) return 1;         // ➰, ➿
+    if (cp >= 0x2B1B && cp <= 0x2B1C) return 1;         // ⬛, ⬜
+    if (cp == 0x2B50 || cp == 0x2B55) return 1;         // ⭐, ⭕
+    if (cp >= 0x2E80 && cp <= 0xA4C6) return 1;         // CJK radicals, Kangxi, Hiragana, Katakana, Bopomofo, CJK ideographs, Yi
+    if (cp >= 0xA960 && cp <= 0xA97C) return 1;         // Hangul Jamo Extended-A
+    if (cp >= 0xAC00 && cp <= 0xD7A3) return 1;         // Hangul Syllables
+    if (cp >= 0xF900 && cp <= 0xFAFF) return 1;         // CJK Compatibility Ideographs
+    if (cp >= 0xFE10 && cp <= 0xFE19) return 1;         // Vertical forms
+    if (cp >= 0xFE30 && cp <= 0xFE6B) return 1;         // CJK Compatibility Forms, small forms
+    if (cp >= 0xFF01 && cp <= 0xFF60) return 1;         // Fullwidth forms
+    if (cp >= 0xFFE0 && cp <= 0xFFE6) return 1;         // Fullwidth symbols
+    if (cp >= 0x1F000 && cp <= 0x1FFFF) return 1;       // SMP Emoji (😀, 🎉, etc.)
     return 0;
 }
 
