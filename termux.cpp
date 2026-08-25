@@ -230,6 +230,7 @@ typedef struct {
     HANDLE pipe_in, pipe_out, process, thread, read_thread;
     ScreenBuffer screen;
     char title[64];
+    char full_title[256];
     int scroll_offset;
     int color;   // v8.32: tab color index 0=default, 1..8 = palette
     int exited_hold; // 1 = process exited with error, holding screen for user
@@ -1699,6 +1700,13 @@ static void execute_osc(ScreenBuffer *s) {
     if ((s->osc_num == 0 || s->osc_num == 1 || s->osc_num == 2) && s->osc_len > 0) {
         int idx = s->pane_index;
         if (idx >= 0 && idx < g_mux.pane_count && g_mux.panes[idx].active) {
+            char raw[256];
+            int rlen = s->osc_len < 255 ? s->osc_len : 255;
+            memcpy(raw, s->osc_buf, rlen);
+            raw[rlen] = 0;
+            while (rlen > 0 && ((unsigned char)raw[rlen - 1] <= ' ' || raw[rlen - 1] == 0x07)) raw[--rlen] = 0;
+            snprintf(g_mux.panes[idx].full_title, sizeof(g_mux.panes[idx].full_title), "%s", raw);
+
             sanitize_title(s->osc_buf, s->osc_len, g_mux.panes[idx].title, sizeof(g_mux.panes[idx].title));
         }
     }
@@ -2847,14 +2855,15 @@ static void render_screen(void) {
     pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[1;1H");
     draw_tab_bar(out, bs, &pos);
 
-    // 3.5 Floating title preview tooltip (hovering over tab for 2 seconds)
+    // 3.5 Floating title preview tooltip (hovering over tab for 1.5 seconds)
     if (g_hover_preview_pane >= 0 && g_hover_preview_active &&
         !g_mux.chooser_mode && !g_mux.ctx_mode && !g_mux.rename_mode &&
         !g_mux.custom_cmd_mode && !g_mux.settings_mode && !g_mux.help_mode) {
         if (g_hover_preview_pane >= 0 && g_hover_preview_pane < g_mux.pane_count &&
             g_mux.panes[g_hover_preview_pane].active) {
-            const char *full_title = g_mux.panes[g_hover_preview_pane].title[0] ?
-                                     g_mux.panes[g_hover_preview_pane].title : "cmd";
+            Pane *hp = &g_mux.panes[g_hover_preview_pane];
+            const char *full_title = hp->full_title[0] ? hp->full_title :
+                                     (hp->title[0] ? hp->title : "cmd");
             int tab_col = 0;
             for (int i = 0; i < g_mux.tab_count; i++) {
                 if (g_mux.tab_info[i].pane_idx == g_hover_preview_pane) {
@@ -2868,7 +2877,7 @@ static void render_screen(void) {
             int left = tab_col;
             if (left + tw > g_mux.host_cols) left = g_mux.host_cols - tw;
             if (left < 0) left = 0;
-            pos += snprintf(out + pos, bs - pos, "\x1b[2;%dH\x1b[48;2;33;38;45m\x1b[38;2;121;192;255;1m [标题预览] \x1b[38;2;255;255;255;1m%s \x1b[0m", left + 1, full_title);
+            pos += snprintf(out + pos, bs - pos, "\x1b[2;%dH\x1b[48;2;33;38;45m\x1b[38;2;121;192;255;1m [完整标题] \x1b[38;2;255;255;255;1m%s \x1b[0m", left + 1, full_title);
         }
     }
 
@@ -3107,11 +3116,14 @@ static int create_pane_shell(const WCHAR *shell) {
     pane->pipe_in = pi_w; pane->pipe_out = po_r; pane->process = pi.hProcess; pane->thread = pi.hThread; pane->active = 1;
     if (_wcsicmp(shell, L"powershell.exe") == 0 || _wcsicmp(shell, L"powershell") == 0) {
         strcpy(pane->title, "PowerShell");
+        strcpy(pane->full_title, "powershell.exe");
     } else if (_wcsicmp(shell, L"cmd.exe") == 0 || _wcsicmp(shell, L"cmd") == 0) {
         strcpy(pane->title, "cmd");
+        strcpy(pane->full_title, "cmd.exe");
     } else {
-        char u8cmd[64] = {0};
-        WideCharToMultiByte(CP_UTF8, 0, shell, -1, u8cmd, 63, NULL, NULL);
+        char u8cmd[256] = {0};
+        WideCharToMultiByte(CP_UTF8, 0, shell, -1, u8cmd, 255, NULL, NULL);
+        snprintf(pane->full_title, sizeof(pane->full_title), "%s", u8cmd);
         char *space = strchr(u8cmd, ' ');
         if (space) *space = 0;
         sanitize_title(u8cmd, (int)strlen(u8cmd), pane->title, sizeof(pane->title));
@@ -3547,9 +3559,11 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
         if (vk == VK_RETURN) {
             if (g_mux.ctx_pane >= 0 && g_mux.ctx_pane < g_mux.pane_count && g_mux.rename_len > 0) {
                 g_mux.rename_buf[g_mux.rename_len] = 0;
-                if (g_mux.rename_len > 31) g_mux.rename_len = 31;
+                if (g_mux.rename_len > 63) g_mux.rename_len = 63;
                 memcpy(g_mux.panes[g_mux.ctx_pane].title, g_mux.rename_buf, g_mux.rename_len);
                 g_mux.panes[g_mux.ctx_pane].title[g_mux.rename_len] = 0;
+                strncpy(g_mux.panes[g_mux.ctx_pane].full_title, g_mux.rename_buf, sizeof(g_mux.panes[g_mux.ctx_pane].full_title) - 1);
+                g_mux.panes[g_mux.ctx_pane].full_title[sizeof(g_mux.panes[g_mux.ctx_pane].full_title) - 1] = 0;
                 if (g_mux.ctx_pane == g_mux.active_pane) update_host_title();
             }
             g_mux.rename_mode = 0;
@@ -4649,9 +4663,9 @@ static void handle_input(void) {
         if (WaitForSingleObject(g_mux.hIn, 30) == WAIT_OBJECT_0 && ReadConsoleInputW(g_mux.hIn, rec, 128, &cnt))
             for (DWORD i = 0; i < cnt; i++) { if (rec[i].EventType == KEY_EVENT) handle_key(&rec[i].Event.KeyEvent); else if (rec[i].EventType == MOUSE_EVENT) handle_mouse(&rec[i].Event.MouseEvent); else if (rec[i].EventType == WINDOW_BUFFER_SIZE_EVENT) handle_resize(); }
 
-        // v1.1.5: hover preview 2s timer check
+        // v1.1.5: hover preview 1.5s timer check
         if (g_hover_preview_pane >= 0 && !g_hover_preview_active) {
-            if (GetTickCount64() - g_hover_preview_start >= 2000) {
+            if (GetTickCount64() - g_hover_preview_start >= 1500) {
                 g_hover_preview_active = 1;
                 g_mux.needs_redraw = 1;
             }
