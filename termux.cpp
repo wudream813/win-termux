@@ -1266,26 +1266,31 @@ static void screen_write_cell(ScreenBuffer *s, int row, int col, WCHAR ch, WORD 
     }
 }
 
-static void screen_put_char(ScreenBuffer *s, WCHAR ch) {
+static void screen_put_cp(ScreenBuffer *s, unsigned int cp) {
     if (s->wraparound_pending) {
         s->cursor_x = 0;
         screen_newline(s);
         s->wraparound_pending = 0;
     }
-    int wide = is_wide_char(ch);
+    int wide = is_wide_cp(cp);
     WORD attr = build_attr(s);
-    screen_write_cell(s, s->cursor_y, s->cursor_x, ch, attr);
-    if (wide) {
-        // v8.2: store the wide char in TWO cells (char + 0-fill), matching the
-        // real console buffer so model columns == terminal columns.
-        screen_write_cell(s, s->cursor_y, s->cursor_x + 1, 0, attr);
+    if (cp >= 0x10000) {
+        WCHAR high = (WCHAR)(0xD800 + ((cp - 0x10000) >> 10));
+        WCHAR low = (WCHAR)(0xDC00 + ((cp - 0x10000) & 0x3FF));
+        screen_write_cell(s, s->cursor_y, s->cursor_x, high, attr);
+        if (s->cursor_x + 1 < s->cols) {
+            screen_write_cell(s, s->cursor_y, s->cursor_x + 1, low, attr);
+        }
+    } else {
+        screen_write_cell(s, s->cursor_y, s->cursor_x, (WCHAR)cp, attr);
+        if (wide) {
+            screen_write_cell(s, s->cursor_y, s->cursor_x + 1, 0, attr);
+        }
     }
     if (s->cursor_x + (wide ? 2 : 1) < s->cols) {
         s->cursor_x += (wide ? 2 : 1);
     } else if (s->auto_wrap) {
         s->wraparound_pending = 1;
-        // v8.3: a row just filled up - check whether it was actually wider than
-        // the ConPTY rows (content packed onto a padded tail).
         if (s->detect_count <= 100) detect_conpty_width(s);
     }
 }
@@ -1748,7 +1753,7 @@ static void screen_process_byte(ScreenBuffer *s, unsigned char c) {
                     case 0x9C: break; // ST - ignore
                 }
             } else {
-                screen_put_char(s, (WCHAR)c);
+                screen_put_cp(s, (unsigned char)c);
             }
             break;
 
@@ -1915,7 +1920,7 @@ static void screen_process_output(ScreenBuffer *s, const char *data, int len) {
                 s->utf8_cp = (s->utf8_cp << 6) | (c & 0x3F);
                 if (--s->utf8_state == 0) {
                     if (s->state == ST_NORMAL)
-                        screen_put_char(s, s->utf8_cp < 0x10000 ? (WCHAR)s->utf8_cp : L'?');
+                        screen_put_cp(s, s->utf8_cp);
                 }
                 continue;
             } else {
@@ -2766,6 +2771,22 @@ static void render_screen(void) {
                         else pos += snprintf(out + pos, bs - pos, "\x1b[0%s;%d;%dm", ul, 30 + m[fg & 7], 40 + m[bg & 7]);
                     }
                     la_attr = attr; la_fr = frgb; la_br = brgb; la_fv = fgv; la_bv = bgv;
+                }
+                if (wc >= 0xD800 && wc <= 0xDBFF && x + 1 < rc) {
+                    CHAR_INFO *next_cell = NULL;
+                    if (vo > 0 && !s->in_alt_screen) { if (ar >= 0 && ar < s->total_lines) next_cell = &s->buffer[ar * s->cols + x + 1]; }
+                    else next_cell = screen_cell(s, y, x + 1);
+                    if (next_cell && next_cell->Char.UnicodeChar >= 0xDC00 && next_cell->Char.UnicodeChar <= 0xDFFF) {
+                        WCHAR low = next_cell->Char.UnicodeChar;
+                        unsigned int cp = 0x10000 + (((unsigned int)(wc & 0x3FF)) << 10) + (low & 0x3FF);
+                        out[pos++] = (char)(0xF0 | (cp >> 18));
+                        out[pos++] = (char)(0x80 | ((cp >> 12) & 0x3F));
+                        out[pos++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+                        out[pos++] = (char)(0x80 | (cp & 0x3F));
+                        x++; // skip low surrogate cell
+                        if (pos > bs - 256) break;
+                        continue;
+                    }
                 }
                 if (wc < 0x80) out[pos++] = (char)wc;
                 else if (wc < 0x800) { out[pos++] = 0xC0 | (wc >> 6); out[pos++] = 0x80 | (wc & 0x3F); }
