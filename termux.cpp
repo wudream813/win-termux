@@ -1,4 +1,4 @@
-// termux.cpp - Windows Terminal Multiplexer v1.1.6
+// termux.cpp - Windows Terminal Multiplexer v1.1.8
 // ---------------------------------------------------------------------------
 // v8.3 changes:
 //  19. ConPTY line-width autodetect: legacy full-screen apps (edit.com...) can
@@ -2781,6 +2781,10 @@ static void render_screen(void) {
         }
         int text_rc = (show_sb && rc >= g_mux.host_cols) ? (g_mux.host_cols - 1) : rc;
 
+        int dist = (g_mouse_y >= 1 && g_mouse_x >= 0) ? ((g_mux.host_cols - 1) - g_mouse_x) : 99;
+        if (dist < 0) dist = 0;
+        int is_hover = (dist == 0 && g_mouse_y >= 1);
+
         for (int y = 0; y < rr; y++) {
             pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H", y + 2);   // v8.22: tab bar is on row 1
             for (int x = 0; x < text_rc; x++) {
@@ -2840,10 +2844,28 @@ static void render_screen(void) {
             }
             if (show_sb) {
                 pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH", y + 2, g_mux.host_cols);
-                if (y >= sb_top && y < sb_bot)
-                    pos += snprintf(out + pos, bs - pos, "\x1b[48;2;110;118;129m \x1b[0m");
-                else
-                    pos += snprintf(out + pos, bs - pos, "\x1b[48;2;22;27;34m\x1b[38;2;48;54;61m│\x1b[0m");
+                int in_thumb = (y >= sb_top && y < sb_bot);
+                if (in_thumb) {
+                    if (is_hover) {
+                        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;175;185;205m \x1b[0m");
+                    } else if (dist <= 6) {
+                        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;110;118;129m \x1b[0m");
+                    } else if (dist <= 18) {
+                        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;65;72;82m \x1b[0m");
+                    } else {
+                        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;38;44;52m \x1b[0m");
+                    }
+                } else {
+                    if (is_hover) {
+                        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m\x1b[38;2;110;118;129m│\x1b[0m");
+                    } else if (dist <= 6) {
+                        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;22;27;34m\x1b[38;2;48;54;61m│\x1b[0m");
+                    } else if (dist <= 18) {
+                        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;16;20;26m\x1b[38;2;33;38;45m│\x1b[0m");
+                    } else {
+                        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;13;17;23m \x1b[0m");
+                    }
+                }
                 la_attr = 0xFFFF;
             } else {
                 if (rc < g_mux.host_cols) pos += snprintf(out + pos, bs - pos, "\x1b[K");
@@ -3009,7 +3031,7 @@ static unsigned __stdcall pane_read_thread(void *arg) {
 // mouse wheel). Termux renders it itself - no cmd process involved.
 static const char *const g_help_lines[] = {
     "\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m termux - 帮助",
-    "\x1b[38;2;139;148;158m  版本 v1.1.6 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
+    "\x1b[38;2;139;148;158m  版本 v1.1.8 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
     "",
     "\x1b[38;2;121;192;255;1m  键盘快捷键\x1b[0m",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mc\x1b[0m         新建默认 pane",
@@ -3070,11 +3092,12 @@ static int create_pane_shell(const WCHAR *shell) {
     if (idx < 0) return -1;
 
     Pane *pane = &g_mux.panes[idx]; memset(pane, 0, sizeof(*pane));
-    if (!screen_init(&pane->screen, g_mux.host_cols, g_mux.host_rows)) return -1;
+    int pane_cols = g_mux.host_cols > 1 ? g_mux.host_cols - 1 : 1;
+    if (!screen_init(&pane->screen, pane_cols, g_mux.host_rows)) return -1;
     pane->screen.pane_index = idx;   // v7: needed for OSC title routing
 
     HANDLE pi_r = NULL, pi_w = NULL, po_r = NULL, po_w = NULL;
-    COORD sz = {(SHORT)g_mux.host_cols, (SHORT)g_mux.host_rows};
+    COORD sz = {(SHORT)pane_cols, (SHORT)g_mux.host_rows};
     STARTUPINFOEXW si = {0};
     SIZE_T as = 0;
     PROCESS_INFORMATION pi = {0};
@@ -4108,7 +4131,15 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
         // v8.52: while ANY popup is open, redraw on every move too - the color
         // picker's swatches need live hover highlights (previously the picker
         // was never redrawn on mouse move, so hovering did nothing).
-        if (now_in || (prev_in && !now_in) ||
+        // v1.1.8: if scrollbar is active in pane and mouse moved in pane area, redraw for dynamic distance-based fading
+        int sb_fade_active = 0;
+        if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
+            Pane *p = &g_mux.panes[g_mux.active_pane];
+            if (p->screen.hist_lines > 0 && !p->screen.in_alt_screen && (my >= 1 || prev_in == 0)) {
+                sb_fade_active = 1;
+            }
+        }
+        if (now_in || (prev_in && !now_in) || sb_fade_active ||
             g_mux.chooser_mode || g_mux.ctx_mode || g_mux.rename_mode || g_mux.custom_cmd_mode || g_mux.settings_mode)
             g_mux.needs_redraw = 1;
         g_mouse_prev_in_tabbar = now_in;
@@ -4748,9 +4779,10 @@ static void handle_resize(void) {
     int nr = nt - 1;
     if (nc == g_mux.host_cols && nt == g_mux.total_host_rows) return;
     g_mux.host_cols = nc; g_mux.total_host_rows = nt; g_mux.host_rows = nr;
+    int pane_cols = nc > 1 ? nc - 1 : 1;
     for (int i = 0; i < g_mux.pane_count; i++) if (g_mux.panes[i].active) {
         EnterCriticalSection(&g_mux.cs);
-        screen_resize(&g_mux.panes[i].screen, nc, nr);
+        screen_resize(&g_mux.panes[i].screen, pane_cols, nr);
         g_mux.panes[i].screen.detect_count = 0;   // v8.3: host resized - allow re-adapt
         // v7: clamp scroll offset to the (possibly shorter) new scrollback;
         // v8.14: use hist_lines (real depth) - screen_resize resets it to 0,
@@ -4758,7 +4790,7 @@ static void handle_resize(void) {
         if (g_mux.panes[i].scroll_offset > g_mux.panes[i].screen.hist_lines)
             g_mux.panes[i].scroll_offset = g_mux.panes[i].screen.hist_lines;
         LeaveCriticalSection(&g_mux.cs);
-        COORD sz = {(SHORT)nc, (SHORT)nr};
+        COORD sz = {(SHORT)pane_cols, (SHORT)nr};
         ResizePseudoConsole(g_mux.panes[i].hpc, sz);
     }
     g_mux.needs_redraw = 1;
@@ -4840,7 +4872,7 @@ int main(void) {
     load_config();                               // load custom menu items from termux.ini
 
     host_printf("\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[2J\x1b[H");
-    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.1.6\x1b[0m\r\n");
+    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.1.8\x1b[0m\r\n");
     host_printf("  \x1b[33mhost: %dx%d\x1b[0m   (pane screen = host minus 1 tab bar row)\r\n\n", g_mux.host_cols, g_mux.host_rows);
     host_printf("  \x1b[33mCtrl+B\x1b[0m + c/n/p/x/d/0-9   (termux = 帮助)\r\n\n");
     host_printf("  \x1b[33m右键\x1b[0m 标签 = 改颜色、改标题\r\n\n");
