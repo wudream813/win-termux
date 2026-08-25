@@ -1,4 +1,4 @@
-// termux.cpp - Windows Terminal Multiplexer v1.2.0
+// termux.cpp - Windows Terminal Multiplexer v1.2.1
 // ---------------------------------------------------------------------------
 // v8.3 changes:
 //  19. ConPTY line-width autodetect: legacy full-screen apps (edit.com...) can
@@ -1071,55 +1071,37 @@ static void screen_scroll_up(ScreenBuffer *s, int top, int bottom, int count) {
         return;
     }
     if (top == 0 && bottom == s->rows - 1) {
-        // v8.13: count real scrollback depth (clamped to the ring size)
+        // v8.13/v1.2.1: count real scrollback depth (clamped to the ring size)
         s->hist_lines += count;
         if (s->hist_lines > SCROLL_BUF_LINES) s->hist_lines = SCROLL_BUF_LINES;
-        if (s->scroll_top + s->rows + count <= s->total_lines) {
-            for (int i = 0; i < count; i++) {
-                int line = s->scroll_top + s->rows + i;
-                for (int j = 0; j < s->cols; j++) {
-                    s->buffer[line * s->cols + j].Char.UnicodeChar = L' ';
-                    s->buffer[line * s->cols + j].Attributes = s->current_attr;
-                    if (s->fg_rgb) { s->fg_rgb[line * s->cols + j] = RGB565_WHITE; s->bg_rgb[line * s->cols + j] = RGB565_BLACK; s->rgb_valid[line * s->cols + j] = 0; }
-                }
+
+        // Shift buffer and parallel truecolor arrays up by count rows
+        if (count < s->total_lines) {
+            memmove(s->buffer, s->buffer + count * s->cols, (s->total_lines - count) * s->cols * sizeof(CHAR_INFO));
+            if (s->fg_rgb) {
+                memmove(s->fg_rgb, s->fg_rgb + count * s->cols, (s->total_lines - count) * s->cols * sizeof(WORD));
+                memmove(s->bg_rgb, s->bg_rgb + count * s->cols, (s->total_lines - count) * s->cols * sizeof(WORD));
             }
-            s->scroll_top += count;
-        } else {
-            int need = (s->scroll_top + s->rows + count) - s->total_lines;
-            int shift = SCROLL_BUF_LINES / 4;   // v1.2.0: amortized batch shift (2500 lines at once)
-            if (shift < need) shift = need;
-            if (shift > s->scroll_top) shift = s->scroll_top;
-            if (shift > 0) {
-                memmove(s->buffer, s->buffer + shift * s->cols, (s->total_lines - shift) * s->cols * sizeof(CHAR_INFO));
-                if (s->fg_rgb) {
-                    memmove(s->fg_rgb, s->fg_rgb + shift * s->cols, (s->total_lines - shift) * s->cols * sizeof(WORD));
-                    memmove(s->bg_rgb, s->bg_rgb + shift * s->cols, (s->total_lines - shift) * s->cols * sizeof(WORD));
-                }
-                if (s->rgb_valid) {
-                    memmove(s->rgb_valid, s->rgb_valid + shift * s->cols, (s->total_lines - shift) * s->cols * sizeof(unsigned char));
-                }
-                s->scroll_top -= shift;
-                for (int i = s->total_lines - shift; i < s->total_lines; i++)
-                    for (int j = 0; j < s->cols; j++) {
-                        s->buffer[i * s->cols + j].Char.UnicodeChar = L' ';
-                        s->buffer[i * s->cols + j].Attributes = s->current_attr;
-                        if (s->fg_rgb) { s->fg_rgb[i * s->cols + j] = RGB565_WHITE; s->bg_rgb[i * s->cols + j] = RGB565_BLACK; }
-                        if (s->rgb_valid) s->rgb_valid[i * s->cols + j] = 0;
-                    }
-            }
-            if (s->scroll_top + s->rows + count <= s->total_lines) {
-                for (int i = 0; i < count; i++) {
-                    int line = s->scroll_top + s->rows + i;
-                    for (int j = 0; j < s->cols; j++) {
-                        s->buffer[line * s->cols + j].Char.UnicodeChar = L' ';
-                        s->buffer[line * s->cols + j].Attributes = s->current_attr;
-                        if (s->fg_rgb) { s->fg_rgb[line * s->cols + j] = RGB565_WHITE; s->bg_rgb[line * s->cols + j] = RGB565_BLACK; }
-                        if (s->rgb_valid) s->rgb_valid[line * s->cols + j] = 0;
-                    }
-                }
-                s->scroll_top += count;
+            if (s->rgb_valid) {
+                memmove(s->rgb_valid, s->rgb_valid + count * s->cols, (s->total_lines - count) * s->cols * sizeof(unsigned char));
             }
         }
+
+        // Initialize new bottom rows with blank cells and current attribute
+        int start_row = s->total_lines - count;
+        if (start_row < 0) start_row = 0;
+        for (int i = start_row; i < s->total_lines; i++) {
+            for (int j = 0; j < s->cols; j++) {
+                int idx = i * s->cols + j;
+                s->buffer[idx].Char.UnicodeChar = L' ';
+                s->buffer[idx].Attributes = s->current_attr;
+                if (s->fg_rgb) { s->fg_rgb[idx] = RGB565_WHITE; s->bg_rgb[idx] = RGB565_BLACK; }
+                if (s->rgb_valid) s->rgb_valid[idx] = 0;
+            }
+        }
+        // v1.2.1: scroll_top is strictly maintained at total_lines - rows so history
+        // indexing (scroll_top - vo + y) is valid and non-negative across 0%~100% of hist_lines
+        s->scroll_top = s->total_lines - s->rows;
     } else {
         int abs_top = s->scroll_top + top, abs_bottom = s->scroll_top + bottom;
         for (int i = abs_top; i <= abs_bottom - count; i++) {
@@ -1162,6 +1144,10 @@ static void screen_scroll_down(ScreenBuffer *s, int top, int bottom, int count) 
         if (fgb) {
             memcpy(&fgb[i * s->cols], &fgb[(i - count) * s->cols], s->cols * sizeof(WORD));
             memcpy(&bgb[i * s->cols], &bgb[(i - count) * s->cols], s->cols * sizeof(WORD));
+        }
+        if (s->in_alt_screen ? s->alt_rgb_valid : s->rgb_valid) {
+            unsigned char *v = s->in_alt_screen ? s->alt_rgb_valid : s->rgb_valid;
+            memcpy(&v[i * s->cols], &v[(i - count) * s->cols], s->cols * sizeof(unsigned char));
         }
     }
     for (int i = abs_top; i < abs_top + count && i <= abs_bottom; i++)
@@ -3088,7 +3074,7 @@ static unsigned __stdcall pane_read_thread(void *arg) {
 // mouse wheel). Termux renders it itself - no cmd process involved.
 static const char *const g_help_lines[] = {
     "\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m termux - 帮助",
-    "\x1b[38;2;139;148;158m  版本 v1.2.0 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
+    "\x1b[38;2;139;148;158m  版本 v1.2.1 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
     "",
     "\x1b[38;2;121;192;255;1m  键盘快捷键\x1b[0m",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mc\x1b[0m         新建默认 pane",
@@ -4943,7 +4929,7 @@ int main(void) {
     load_config();                               // load custom menu items from termux.ini
 
     host_printf("\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[2J\x1b[H");
-    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.2.0\x1b[0m\r\n");
+    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.2.1\x1b[0m\r\n");
     host_printf("  \x1b[33mhost: %dx%d\x1b[0m   (pane screen = host minus 1 tab bar row)\r\n\n", g_mux.host_cols, g_mux.host_rows);
     host_printf("  \x1b[33mCtrl+B\x1b[0m + c/n/p/x/d/0-9   (termux = 帮助)\r\n\n");
     host_printf("  \x1b[33m右键\x1b[0m 标签 = 改颜色、改标题\r\n\n");
