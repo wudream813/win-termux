@@ -522,6 +522,9 @@ static inline int is_wide_cp(unsigned int cp) {
     if (cp >= 0xFF00 && cp <= 0xFF60) return 1;         // fullwidth forms
     if (cp >= 0xFFE0 && cp <= 0xFFE6) return 1;         // fullwidth signs
     if (cp >= 0x1F000 && cp <= 0x1FFFF) return 1;       // SMP emojis
+    if (cp >= 0x2600 && cp <= 0x27BF) return 1;         // Symbols & Dingbats
+    if (cp >= 0x2300 && cp <= 0x23FF) return 1;         // Misc Technical
+    if (cp >= 0x2B50 && cp <= 0x2B55) return 1;         // Stars
     return 0;
 }
 
@@ -596,85 +599,59 @@ static void pad_to_right_border(char *out, int bs, int *posp, int *colsp, int ta
     *colsp = cols;
 }
 
-static int utf8_prev_char(const char *buf, int p) {
-    if (p <= 0) return 0;
-    int start = p - 1;
-    while (start > 0 && ((unsigned char)buf[start] & 0xC0) == 0x80) start--;
-    return start;
-}
-
-static int utf8_prev_grapheme(const char *buf, int pos) {
-    if (pos <= 0) return 0;
+static int utf8_next_grapheme(const char *buf, int len, int pos) {
+    if (pos >= len) return len;
     int p = pos;
-    while (p > 0) {
-        int prev = utf8_prev_char(buf, p);
-        int adv = 0;
-        unsigned int cp = utf8_decode_cp(buf + prev, pos - prev, &adv);
-        if (is_combining_or_modifier(cp)) {
-            p = prev;
+    int adv = 0;
+    unsigned int cp = utf8_decode_cp(buf + p, len - p, &adv);
+    p += adv;
+
+    // CRLF
+    if (cp == 0x0D && p < len && (unsigned char)buf[p] == 0x0A) {
+        return p + 1;
+    }
+
+    // Regional Indicator pair (e.g. flags)
+    if (is_ri(cp)) {
+        if (p < len) {
+            int nadv = 0;
+            unsigned int next_cp = utf8_decode_cp(buf + p, len - p, &nadv);
+            if (is_ri(next_cp)) {
+                p += nadv;
+                return p;
+            }
+        }
+    }
+
+    unsigned int prev_cp = cp;
+    while (p < len) {
+        int next_adv = 0;
+        unsigned int next_cp = utf8_decode_cp(buf + p, len - p, &next_adv);
+        if (prev_cp == 0x200D) {
+            // After ZWJ, consume the joined character
+            p += next_adv;
+            prev_cp = next_cp;
             continue;
         }
-        p = prev;
-        if (p > 0) {
-            int before = utf8_prev_char(buf, p);
-            int zadv = 0;
-            unsigned int zcp = utf8_decode_cp(buf + before, p - before, &zadv);
-            if (zcp == 0x200D || is_combining_or_modifier(zcp)) {
-                continue;
-            }
-        }
-        if (is_ri(cp)) {
-            int ri_count = 1;
-            int temp = p;
-            while (temp > 0) {
-                int prev_ri = utf8_prev_char(buf, temp);
-                int radv = 0;
-                unsigned int rcp = utf8_decode_cp(buf + prev_ri, temp - prev_ri, &radv);
-                if (is_ri(rcp)) {
-                    ri_count++;
-                    temp = prev_ri;
-                } else {
-                    break;
-                }
-            }
-            if (ri_count % 2 == 0) {
-                p = utf8_prev_char(buf, p);
-            }
+        if (is_combining_or_modifier(next_cp)) {
+            p += next_adv;
+            prev_cp = next_cp;
+            continue;
         }
         break;
     }
     return p;
 }
 
-static int utf8_next_grapheme(const char *buf, int len, int pos) {
-    if (pos >= len) return len;
-    int p = pos;
-    int adv = 0;
-    unsigned int base_cp = utf8_decode_cp(buf + p, len - p, &adv);
-    p += adv;
-    if (is_ri(base_cp) && p < len) {
-        int nadv = 0;
-        unsigned int ncp = utf8_decode_cp(buf + p, len - p, &nadv);
-        if (is_ri(ncp)) {
-            p += nadv;
-            return p;
-        }
+static int utf8_prev_grapheme(const char *buf, int pos) {
+    if (pos <= 0) return 0;
+    int cur = 0;
+    while (cur < pos) {
+        int next = utf8_next_grapheme(buf, pos, cur);
+        if (next >= pos) return cur;
+        cur = next;
     }
-    while (p < len) {
-        int next_adv = 0;
-        unsigned int cp = utf8_decode_cp(buf + p, len - p, &next_adv);
-        if (is_combining_or_modifier(cp)) {
-            p += next_adv;
-            if (cp == 0x200D && p < len) {
-                int b_adv = 0;
-                utf8_decode_cp(buf + p, len - p, &b_adv);
-                p += b_adv;
-            }
-        } else {
-            break;
-        }
-    }
-    return p;
+    return 0;
 }
 
 static void buf_insert_utf8(char *buf, int *len, int *pos, int max_cap, const char *utf8_bytes, int byte_count) {
@@ -2717,13 +2694,13 @@ static void render_screen(void) {
         int r_top = 2, r_left = (g_pop_anchor_x >= 0) ? g_pop_anchor_x : g_mouse_x;
         if (r_left + RENAME_W > g_mux.host_cols) r_left = (g_pop_anchor_x >= 0 ? g_pop_anchor_x : g_mouse_x) - RENAME_W;
         if (r_left < 0) r_left = 0;
-        int cx = r_left + 2 + utf8_cols(g_mux.rename_buf, g_mux.rename_len);
+        int cx = r_left + 2 + utf8_cols(g_mux.rename_buf, g_mux.rename_pos);
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", r_top + 1, cx);
     } else if (g_mux.custom_cmd_mode) {
         int c_top = 2, c_left = (g_pop_anchor_x >= 0) ? g_pop_anchor_x : g_mouse_x;
         if (c_left + CMD_BOX_W > g_mux.host_cols) c_left = (g_pop_anchor_x >= 0 ? g_pop_anchor_x : g_mouse_x) - CMD_BOX_W;
         if (c_left < 0) c_left = 0;
-        int cx = c_left + 2 + utf8_cols(g_mux.custom_cmd_buf, g_mux.custom_cmd_len);
+        int cx = c_left + 2 + utf8_cols(g_mux.custom_cmd_buf, g_mux.custom_cmd_pos);
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", c_top + 1, cx);
     } else if (g_mux.settings_mode == 2) {
         int top = 3;

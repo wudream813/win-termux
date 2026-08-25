@@ -11,6 +11,7 @@ CHECKS = (
     "verify_flow.py",
     "verify_mouse53.py",
     "verify_color8.py",
+    "verify_emoji.py",
 )
 
 
