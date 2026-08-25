@@ -1,4 +1,4 @@
-// termux.cpp - Windows Terminal Multiplexer v1.2.1
+// termux.cpp - Windows Terminal Multiplexer v1.2.2
 // ---------------------------------------------------------------------------
 // v8.3 changes:
 //  19. ConPTY line-width autodetect: legacy full-screen apps (edit.com...) can
@@ -982,7 +982,7 @@ static int screen_init(ScreenBuffer *s, int cols, int rows) {
         s->alt_fg_rgb[i] = RGB565_WHITE;
         s->alt_bg_rgb[i] = 0;
     }
-    s->scroll_top = s->total_lines - rows;
+    s->scroll_top = 0;
     s->cursor_visible = 1;
     s->current_attr = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
     s->fg_color = 7;
@@ -1016,15 +1016,21 @@ static void screen_free(ScreenBuffer *s) {
     s->rgb_valid = s->alt_rgb_valid = NULL;
 }
 
+static inline int screen_phys_row(ScreenBuffer *s, int rel_row) {
+    int r = (s->scroll_top + rel_row) % s->total_lines;
+    if (r < 0) r += s->total_lines;
+    return r;
+}
+
 static CHAR_INFO *screen_cell(ScreenBuffer *s, int row, int col) {
     if (row < 0 || col < 0 || col >= s->cols) return NULL;
     if (s->in_alt_screen) {
         if (row >= s->rows) return NULL;
         return &s->alt_buffer[row * s->cols + col];
     }
-    int abs_row = s->scroll_top + row;
-    if (abs_row < 0 || abs_row >= s->total_lines) return NULL;
-    return &s->buffer[abs_row * s->cols + col];
+    if (row >= s->rows) return NULL;
+    int pr = screen_phys_row(s, row);
+    return &s->buffer[pr * s->cols + col];
 }
 
 static WORD build_attr(ScreenBuffer *s) {
@@ -1071,37 +1077,21 @@ static void screen_scroll_up(ScreenBuffer *s, int top, int bottom, int count) {
         return;
     }
     if (top == 0 && bottom == s->rows - 1) {
-        // v8.13/v1.2.1: count real scrollback depth (clamped to the ring size)
+        // v1.2.2: O(1) Zero-Copy Ring Buffer advance - ZERO memmove!
         s->hist_lines += count;
         if (s->hist_lines > SCROLL_BUF_LINES) s->hist_lines = SCROLL_BUF_LINES;
 
-        // Shift buffer and parallel truecolor arrays up by count rows
-        if (count < s->total_lines) {
-            memmove(s->buffer, s->buffer + count * s->cols, (s->total_lines - count) * s->cols * sizeof(CHAR_INFO));
-            if (s->fg_rgb) {
-                memmove(s->fg_rgb, s->fg_rgb + count * s->cols, (s->total_lines - count) * s->cols * sizeof(WORD));
-                memmove(s->bg_rgb, s->bg_rgb + count * s->cols, (s->total_lines - count) * s->cols * sizeof(WORD));
-            }
-            if (s->rgb_valid) {
-                memmove(s->rgb_valid, s->rgb_valid + count * s->cols, (s->total_lines - count) * s->cols * sizeof(unsigned char));
-            }
-        }
-
-        // Initialize new bottom rows with blank cells and current attribute
-        int start_row = s->total_lines - count;
-        if (start_row < 0) start_row = 0;
-        for (int i = start_row; i < s->total_lines; i++) {
+        for (int c = 0; c < count; c++) {
+            int pr = screen_phys_row(s, s->rows + c);
             for (int j = 0; j < s->cols; j++) {
-                int idx = i * s->cols + j;
+                int idx = pr * s->cols + j;
                 s->buffer[idx].Char.UnicodeChar = L' ';
                 s->buffer[idx].Attributes = s->current_attr;
                 if (s->fg_rgb) { s->fg_rgb[idx] = RGB565_WHITE; s->bg_rgb[idx] = RGB565_BLACK; }
                 if (s->rgb_valid) s->rgb_valid[idx] = 0;
             }
         }
-        // v1.2.1: scroll_top is strictly maintained at total_lines - rows so history
-        // indexing (scroll_top - vo + y) is valid and non-negative across 0%~100% of hist_lines
-        s->scroll_top = s->total_lines - s->rows;
+        s->scroll_top = (s->scroll_top + count) % s->total_lines;
     } else {
         int abs_top = s->scroll_top + top, abs_bottom = s->scroll_top + bottom;
         for (int i = abs_top; i <= abs_bottom - count; i++) {
@@ -1122,40 +1112,67 @@ static void screen_scroll_up(ScreenBuffer *s, int top, int bottom, int count) {
 
 static void screen_scroll_down(ScreenBuffer *s, int top, int bottom, int count) {
     if (count <= 0) return;
-    // v7: validate region + clamp count (same reasoning as screen_scroll_up)
     if (top < 0) top = 0;
     if (bottom >= s->rows) bottom = s->rows - 1;
     if (bottom < top) return;
     if (count > bottom - top + 1) count = bottom - top + 1;
 
-    CHAR_INFO *buf = s->in_alt_screen ? s->alt_buffer : s->buffer;
-    WORD *fgb = s->in_alt_screen ? s->alt_fg_rgb : s->fg_rgb;
-    WORD *bgb = s->in_alt_screen ? s->alt_bg_rgb : s->bg_rgb;
-    int base = s->in_alt_screen ? 0 : s->scroll_top;
-    int abs_top = base + top, abs_bottom = base + bottom;
-    // v8.13: a full-screen scroll down pulls lines back from the top, so the
-    // available scrollback depth shrinks.
-    if (!s->in_alt_screen && top == 0 && bottom == s->rows - 1) {
+    if (s->in_alt_screen) {
+        for (int i = bottom; i >= top + count; i--) {
+            memcpy(&s->alt_buffer[i * s->cols], &s->alt_buffer[(i - count) * s->cols], s->cols * sizeof(CHAR_INFO));
+            if (s->alt_fg_rgb) {
+                memcpy(&s->alt_fg_rgb[i * s->cols], &s->alt_fg_rgb[(i - count) * s->cols], s->cols * sizeof(WORD));
+                memcpy(&s->alt_bg_rgb[i * s->cols], &s->alt_bg_rgb[(i - count) * s->cols], s->cols * sizeof(WORD));
+            }
+            if (s->alt_rgb_valid) {
+                memcpy(&s->alt_rgb_valid[i * s->cols], &s->alt_rgb_valid[(i - count) * s->cols], s->cols * sizeof(unsigned char));
+            }
+        }
+        for (int i = top; i < top + count && i <= bottom; i++) {
+            for (int j = 0; j < s->cols; j++)
+                screen_write_cell(s, i, j, L' ', s->current_attr);
+        }
+        return;
+    }
+
+    if (top == 0 && bottom == s->rows - 1) {
         s->hist_lines -= count;
         if (s->hist_lines < 0) s->hist_lines = 0;
+        s->scroll_top = (s->scroll_top - count % s->total_lines + s->total_lines) % s->total_lines;
+        for (int c = 0; c < count; c++) {
+            int pr = screen_phys_row(s, c);
+            for (int j = 0; j < s->cols; j++) {
+                int idx = pr * s->cols + j;
+                s->buffer[idx].Char.UnicodeChar = L' ';
+                s->buffer[idx].Attributes = s->current_attr;
+                if (s->fg_rgb) { s->fg_rgb[idx] = RGB565_WHITE; s->bg_rgb[idx] = RGB565_BLACK; }
+                if (s->rgb_valid) s->rgb_valid[idx] = 0;
+            }
+        }
+    } else {
+        for (int i = bottom; i >= top + count; i--) {
+            int dst_pr = screen_phys_row(s, i);
+            int src_pr = screen_phys_row(s, i - count);
+            memcpy(&s->buffer[dst_pr * s->cols], &s->buffer[src_pr * s->cols], s->cols * sizeof(CHAR_INFO));
+            if (s->fg_rgb) {
+                memcpy(&s->fg_rgb[dst_pr * s->cols], &s->fg_rgb[src_pr * s->cols], s->cols * sizeof(WORD));
+                memcpy(&s->bg_rgb[dst_pr * s->cols], &s->bg_rgb[src_pr * s->cols], s->cols * sizeof(WORD));
+            }
+            if (s->rgb_valid) {
+                memcpy(&s->rgb_valid[dst_pr * s->cols], &s->rgb_valid[src_pr * s->cols], s->cols * sizeof(unsigned char));
+            }
+        }
+        for (int i = top; i < top + count && i <= bottom; i++) {
+            int pr = screen_phys_row(s, i);
+            for (int j = 0; j < s->cols; j++) {
+                int idx = pr * s->cols + j;
+                s->buffer[idx].Char.UnicodeChar = L' ';
+                s->buffer[idx].Attributes = s->current_attr;
+                if (s->fg_rgb) { s->fg_rgb[idx] = RGB565_WHITE; s->bg_rgb[idx] = RGB565_BLACK; }
+                if (s->rgb_valid) s->rgb_valid[idx] = 0;
+            }
+        }
     }
-    for (int i = abs_bottom; i >= abs_top + count; i--) {
-        memcpy(&buf[i * s->cols], &buf[(i - count) * s->cols], s->cols * sizeof(CHAR_INFO));
-        if (fgb) {
-            memcpy(&fgb[i * s->cols], &fgb[(i - count) * s->cols], s->cols * sizeof(WORD));
-            memcpy(&bgb[i * s->cols], &bgb[(i - count) * s->cols], s->cols * sizeof(WORD));
-        }
-        if (s->in_alt_screen ? s->alt_rgb_valid : s->rgb_valid) {
-            unsigned char *v = s->in_alt_screen ? s->alt_rgb_valid : s->rgb_valid;
-            memcpy(&v[i * s->cols], &v[(i - count) * s->cols], s->cols * sizeof(unsigned char));
-        }
-    }
-    for (int i = abs_top; i < abs_top + count && i <= abs_bottom; i++)
-        for (int j = 0; j < s->cols; j++) {
-            buf[i * s->cols + j].Char.UnicodeChar = L' ';
-            buf[i * s->cols + j].Attributes = s->current_attr;
-            if (fgb) { fgb[i * s->cols + j] = RGB565_WHITE; bgb[i * s->cols + j] = RGB565_BLACK; s->in_alt_screen ? (s->alt_rgb_valid[i * s->cols + j] = 0) : (s->rgb_valid[i * s->cols + j] = 0); }
-        }
 }
 
 static void screen_newline(ScreenBuffer *s) {
@@ -1260,6 +1277,7 @@ static void detect_conpty_width(ScreenBuffer *s) {
 // the per-cell truecolor RGB565 arrays (or clear them to INVALID if the current
 // color is not truecolor).
 static void screen_write_cell(ScreenBuffer *s, int row, int col, WCHAR ch, WORD attr) {
+    if (row < 0 || row >= s->rows || col < 0 || col >= s->cols) return;
     CHAR_INFO *cell = screen_cell(s, row, col);
     if (!cell) return;
     cell->Char.UnicodeChar = ch;
@@ -1270,14 +1288,14 @@ static void screen_write_cell(ScreenBuffer *s, int row, int col, WCHAR ch, WORD 
         if (s->alt_fg_rgb) {
             s->alt_fg_rgb[row * s->cols + col] = s->fg_rgb_on ? rgb565(s->fg_r, s->fg_g, s->fg_b) : RGB565_WHITE;
             s->alt_bg_rgb[row * s->cols + col] = s->bg_rgb_on ? rgb565(s->bg_r, s->bg_g, s->bg_b) : RGB565_BLACK;
-            s->alt_rgb_valid[row * s->cols + col] = v;
+            if (s->alt_rgb_valid) s->alt_rgb_valid[row * s->cols + col] = v;
         }
     } else {
-        int abs_row = s->scroll_top + row;
-        if (abs_row >= 0 && abs_row < s->total_lines && s->fg_rgb) {
-            s->fg_rgb[abs_row * s->cols + col] = s->fg_rgb_on ? rgb565(s->fg_r, s->fg_g, s->fg_b) : RGB565_WHITE;
-            s->bg_rgb[abs_row * s->cols + col] = s->bg_rgb_on ? rgb565(s->bg_r, s->bg_g, s->bg_b) : RGB565_BLACK;
-            s->rgb_valid[abs_row * s->cols + col] = v;
+        int pr = screen_phys_row(s, row);
+        if (s->fg_rgb) {
+            s->fg_rgb[pr * s->cols + col] = s->fg_rgb_on ? rgb565(s->fg_r, s->fg_g, s->fg_b) : RGB565_WHITE;
+            s->bg_rgb[pr * s->cols + col] = s->bg_rgb_on ? rgb565(s->bg_r, s->bg_g, s->bg_b) : RGB565_BLACK;
+            if (s->rgb_valid) s->rgb_valid[pr * s->cols + col] = v;
         }
     }
 }
@@ -1977,7 +1995,7 @@ static int screen_resize(ScreenBuffer *s, int nc, int nr) {
     int old_hist = s->hist_lines;
     if (old_hist > SCROLL_BUF_LINES) old_hist = SCROLL_BUF_LINES;
     for (int h = 1; h <= old_hist; h++) {
-        int old_r = s->scroll_top - h;
+        int old_r = screen_phys_row(s, -h);
         int new_r = nst - h;
         if (old_r >= 0 && old_r < s->total_lines && new_r >= 0 && new_r < nt) {
             for (int x = 0; x < cc; x++) {
@@ -1994,6 +2012,7 @@ static int screen_resize(ScreenBuffer *s, int nc, int nr) {
     // 2. Copy visible screen rows
     for (int y = 0; y < cr; y++) {
         int new_r = nst + y;
+        int old_r = screen_phys_row(s, y);
         for (int x = 0; x < cc; x++) {
             CHAR_INFO *src = screen_cell(s, y, x);
             if (src) nb[new_r * nc + x] = *src;
@@ -2005,11 +2024,10 @@ static int screen_resize(ScreenBuffer *s, int nc, int nr) {
                     vv = s->alt_rgb_valid ? s->alt_rgb_valid[y * s->cols + x] : 0;
                 }
             } else {
-                int abs_row = s->scroll_top + y;
-                if (abs_row >= 0 && abs_row < s->total_lines && s->fg_rgb) {
-                    fv = s->fg_rgb[abs_row * s->cols + x];
-                    bv = s->bg_rgb[abs_row * s->cols + x];
-                    vv = s->rgb_valid ? s->rgb_valid[abs_row * s->cols + x] : 0;
+                if (old_r >= 0 && old_r < s->total_lines && s->fg_rgb) {
+                    fv = s->fg_rgb[old_r * s->cols + x];
+                    bv = s->bg_rgb[old_r * s->cols + x];
+                    vv = s->rgb_valid ? s->rgb_valid[old_r * s->cols + x] : 0;
                 }
             }
             nfr[new_r * nc + x] = fv;
@@ -2068,12 +2086,13 @@ static void cell_truecolor(ScreenBuffer *s, int row, int col, int ar, WORD *out_
         }
         return;
     }
-    if (ar >= 0 && ar < s->total_lines && s->fg_rgb) {
-        unsigned char v = s->rgb_valid ? s->rgb_valid[ar * s->cols + col] : 0;
+    int pr = (ar >= 0) ? ar : screen_phys_row(s, row);
+    if (pr >= 0 && pr < s->total_lines && s->fg_rgb) {
+        unsigned char v = s->rgb_valid ? s->rgb_valid[pr * s->cols + col] : 0;
         *out_fv = (v & 1) ? 1 : 0;
         *out_bv = (v & 2) ? 1 : 0;
-        *out_f = s->fg_rgb[ar * s->cols + col];
-        *out_b = s->bg_rgb[ar * s->cols + col];
+        *out_f = s->fg_rgb[pr * s->cols + col];
+        *out_b = s->bg_rgb[pr * s->cols + col];
     }
 }
 
@@ -2821,11 +2840,9 @@ static void render_screen(void) {
 
         for (int y = 0; y < rr; y++) {
             pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H", y + 2);   // v8.22: tab bar is on row 1
+            int ar = (vo > 0 && !s->in_alt_screen) ? screen_phys_row(s, y - vo) : -1;
             for (int x = 0; x < text_rc; x++) {
-                CHAR_INFO *cell = NULL;
-                int ar = -1;
-                if (vo > 0 && !s->in_alt_screen) { ar = s->scroll_top + y - vo; if (ar >= 0 && ar < s->total_lines) cell = &s->buffer[ar * s->cols + x]; }
-                else cell = screen_cell(s, y, x);
+                CHAR_INFO *cell = (ar >= 0) ? &s->buffer[ar * s->cols + x] : screen_cell(s, y, x);
                 WCHAR wc = L' '; WORD attr = 0x07;
                 if (cell) { wc = cell->Char.UnicodeChar; attr = cell->Attributes; }
                 if (wc == 0) continue;   // v8.2: right half of a wide char
@@ -2851,9 +2868,7 @@ static void render_screen(void) {
                     la_attr = attr; la_fr = frgb; la_br = brgb; la_fv = fgv; la_bv = bgv;
                 }
                 if (wc >= 0xD800 && wc <= 0xDBFF && x + 1 < text_rc) {
-                    CHAR_INFO *next_cell = NULL;
-                    if (vo > 0 && !s->in_alt_screen) { if (ar >= 0 && ar < s->total_lines) next_cell = &s->buffer[ar * s->cols + x + 1]; }
-                    else next_cell = screen_cell(s, y, x + 1);
+                    CHAR_INFO *next_cell = (ar >= 0) ? &s->buffer[ar * s->cols + x + 1] : screen_cell(s, y, x + 1);
                     if (next_cell && next_cell->Char.UnicodeChar >= 0xDC00 && next_cell->Char.UnicodeChar <= 0xDFFF) {
                         WCHAR low = next_cell->Char.UnicodeChar;
                         unsigned int cp = 0x10000 + (((unsigned int)(wc & 0x3FF)) << 10) + (low & 0x3FF);
@@ -3074,7 +3089,7 @@ static unsigned __stdcall pane_read_thread(void *arg) {
 // mouse wheel). Termux renders it itself - no cmd process involved.
 static const char *const g_help_lines[] = {
     "\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m termux - 帮助",
-    "\x1b[38;2;139;148;158m  版本 v1.2.1 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
+    "\x1b[38;2;139;148;158m  版本 v1.2.2 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
     "",
     "\x1b[38;2;121;192;255;1m  键盘快捷键\x1b[0m",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mc\x1b[0m         新建默认 pane",
@@ -4929,7 +4944,7 @@ int main(void) {
     load_config();                               // load custom menu items from termux.ini
 
     host_printf("\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[2J\x1b[H");
-    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.2.1\x1b[0m\r\n");
+    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.2.2\x1b[0m\r\n");
     host_printf("  \x1b[33mhost: %dx%d\x1b[0m   (pane screen = host minus 1 tab bar row)\r\n\n", g_mux.host_cols, g_mux.host_rows);
     host_printf("  \x1b[33mCtrl+B\x1b[0m + c/n/p/x/d/0-9   (termux = 帮助)\r\n\n");
     host_printf("  \x1b[33m右键\x1b[0m 标签 = 改颜色、改标题\r\n\n");
