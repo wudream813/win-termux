@@ -1,4 +1,4 @@
-// termux.cpp - Windows Terminal Multiplexer v1.2.2
+// termux.cpp - Windows Terminal Multiplexer v1.2.3
 // ---------------------------------------------------------------------------
 // v8.3 changes:
 //  19. ConPTY line-width autodetect: legacy full-screen apps (edit.com...) can
@@ -1077,9 +1077,21 @@ static void screen_scroll_up(ScreenBuffer *s, int top, int bottom, int count) {
         return;
     }
     if (top == 0 && bottom == s->rows - 1) {
-        // v1.2.2: O(1) Zero-Copy Ring Buffer advance - ZERO memmove!
+        // v1.2.2/v1.2.3: O(1) Zero-Copy Ring Buffer advance - ZERO memmove!
         s->hist_lines += count;
         if (s->hist_lines > SCROLL_BUF_LINES) s->hist_lines = SCROLL_BUF_LINES;
+
+        // v1.2.3: if user is scrolled up (scroll_offset > 0), anchor the view to
+        // the current content by incrementing scroll_offset by count, so the view
+        // stays stable and the scrollbar thumb/percentage moves upward as output increases.
+        int pi = s->pane_index;
+        if (pi >= 0 && pi < MAX_PANES && g_mux.panes[pi].active) {
+            if (g_mux.panes[pi].scroll_offset > 0) {
+                g_mux.panes[pi].scroll_offset += count;
+                if (g_mux.panes[pi].scroll_offset > s->hist_lines)
+                    g_mux.panes[pi].scroll_offset = s->hist_lines;
+            }
+        }
 
         for (int c = 0; c < count; c++) {
             int pr = screen_phys_row(s, s->rows + c);
@@ -1138,6 +1150,14 @@ static void screen_scroll_down(ScreenBuffer *s, int top, int bottom, int count) 
     if (top == 0 && bottom == s->rows - 1) {
         s->hist_lines -= count;
         if (s->hist_lines < 0) s->hist_lines = 0;
+        int pi = s->pane_index;
+        if (pi >= 0 && pi < MAX_PANES && g_mux.panes[pi].active) {
+            if (g_mux.panes[pi].scroll_offset > 0) {
+                g_mux.panes[pi].scroll_offset -= count;
+                if (g_mux.panes[pi].scroll_offset < 0)
+                    g_mux.panes[pi].scroll_offset = 0;
+            }
+        }
         s->scroll_top = (s->scroll_top - count % s->total_lines + s->total_lines) % s->total_lines;
         for (int c = 0; c < count; c++) {
             int pr = screen_phys_row(s, c);
@@ -3089,7 +3109,7 @@ static unsigned __stdcall pane_read_thread(void *arg) {
 // mouse wheel). Termux renders it itself - no cmd process involved.
 static const char *const g_help_lines[] = {
     "\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m termux - 帮助",
-    "\x1b[38;2;139;148;158m  版本 v1.2.2 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
+    "\x1b[38;2;139;148;158m  版本 v1.2.3 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
     "",
     "\x1b[38;2;121;192;255;1m  键盘快捷键\x1b[0m",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mc\x1b[0m         新建默认 pane",
@@ -4944,7 +4964,7 @@ int main(void) {
     load_config();                               // load custom menu items from termux.ini
 
     host_printf("\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[2J\x1b[H");
-    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.2.2\x1b[0m\r\n");
+    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.2.3\x1b[0m\r\n");
     host_printf("  \x1b[33mhost: %dx%d\x1b[0m   (pane screen = host minus 1 tab bar row)\r\n\n", g_mux.host_cols, g_mux.host_rows);
     host_printf("  \x1b[33mCtrl+B\x1b[0m + c/n/p/x/d/0-9   (termux = 帮助)\r\n\n");
     host_printf("  \x1b[33m右键\x1b[0m 标签 = 改颜色、改标题\r\n\n");
