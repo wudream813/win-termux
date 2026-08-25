@@ -1,4 +1,4 @@
-// termux.cpp - Windows Terminal Multiplexer v1.1.9
+// termux.cpp - Windows Terminal Multiplexer v1.2.0
 // ---------------------------------------------------------------------------
 // v8.3 changes:
 //  19. ConPTY line-width autodetect: legacy full-screen apps (edit.com...) can
@@ -116,7 +116,7 @@
 
 #define MAX_PANES         16
 #define SCROLL_BUF_LINES  10000
-#define READ_BUF_SIZE     8192
+#define READ_BUF_SIZE     32768
 
 // VT Parser States
 enum {
@@ -1086,19 +1086,25 @@ static void screen_scroll_up(ScreenBuffer *s, int top, int bottom, int count) {
             s->scroll_top += count;
         } else {
             int need = (s->scroll_top + s->rows + count) - s->total_lines;
-            if (need > s->scroll_top) need = s->scroll_top;
-            if (need > 0) {
-                memmove(s->buffer, s->buffer + need * s->cols, (s->total_lines - need) * s->cols * sizeof(CHAR_INFO));
+            int shift = SCROLL_BUF_LINES / 4;   // v1.2.0: amortized batch shift (2500 lines at once)
+            if (shift < need) shift = need;
+            if (shift > s->scroll_top) shift = s->scroll_top;
+            if (shift > 0) {
+                memmove(s->buffer, s->buffer + shift * s->cols, (s->total_lines - shift) * s->cols * sizeof(CHAR_INFO));
                 if (s->fg_rgb) {
-                    memmove(s->fg_rgb, s->fg_rgb + need * s->cols, (s->total_lines - need) * s->cols * sizeof(WORD));
-                    memmove(s->bg_rgb, s->bg_rgb + need * s->cols, (s->total_lines - need) * s->cols * sizeof(WORD));
+                    memmove(s->fg_rgb, s->fg_rgb + shift * s->cols, (s->total_lines - shift) * s->cols * sizeof(WORD));
+                    memmove(s->bg_rgb, s->bg_rgb + shift * s->cols, (s->total_lines - shift) * s->cols * sizeof(WORD));
                 }
-                s->scroll_top -= need;
-                for (int i = s->total_lines - need; i < s->total_lines; i++)
+                if (s->rgb_valid) {
+                    memmove(s->rgb_valid, s->rgb_valid + shift * s->cols, (s->total_lines - shift) * s->cols * sizeof(unsigned char));
+                }
+                s->scroll_top -= shift;
+                for (int i = s->total_lines - shift; i < s->total_lines; i++)
                     for (int j = 0; j < s->cols; j++) {
                         s->buffer[i * s->cols + j].Char.UnicodeChar = L' ';
                         s->buffer[i * s->cols + j].Attributes = s->current_attr;
-                        if (s->fg_rgb) { s->fg_rgb[i * s->cols + j] = RGB565_WHITE; s->bg_rgb[i * s->cols + j] = RGB565_BLACK; s->rgb_valid[i * s->cols + j] = 0; }
+                        if (s->fg_rgb) { s->fg_rgb[i * s->cols + j] = RGB565_WHITE; s->bg_rgb[i * s->cols + j] = RGB565_BLACK; }
+                        if (s->rgb_valid) s->rgb_valid[i * s->cols + j] = 0;
                     }
             }
             if (s->scroll_top + s->rows + count <= s->total_lines) {
@@ -1107,7 +1113,8 @@ static void screen_scroll_up(ScreenBuffer *s, int top, int bottom, int count) {
                     for (int j = 0; j < s->cols; j++) {
                         s->buffer[line * s->cols + j].Char.UnicodeChar = L' ';
                         s->buffer[line * s->cols + j].Attributes = s->current_attr;
-                        if (s->fg_rgb) { s->fg_rgb[line * s->cols + j] = RGB565_WHITE; s->bg_rgb[line * s->cols + j] = RGB565_BLACK; s->rgb_valid[line * s->cols + j] = 0; }
+                        if (s->fg_rgb) { s->fg_rgb[line * s->cols + j] = RGB565_WHITE; s->bg_rgb[line * s->cols + j] = RGB565_BLACK; }
+                        if (s->rgb_valid) s->rgb_valid[line * s->cols + j] = 0;
                     }
                 }
                 s->scroll_top += count;
@@ -3011,11 +3018,13 @@ static void render_screen(void) {
         pos += snprintf(out + pos, bs - pos, "\x1b[?25l");
     }
 
-    host_write(out, pos);
     if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active)
         dump_render_output(out, pos, g_mux.panes[g_mux.active_pane].screen.cols, g_mux.panes[g_mux.active_pane].screen.rows, g_mux.host_cols, g_mux.host_rows);
     g_mux.needs_redraw = 0;
     LeaveCriticalSection(&g_mux.cs);
+
+    // v1.2.0: perform host console I/O outside critical section to prevent blocking pane read threads
+    host_write(out, pos);
 }
 
 // ============================================================
@@ -3052,7 +3061,19 @@ static unsigned __stdcall pane_read_thread(void *arg) {
         dump_pane_bytes(idx, buf, (int)br);   // v8.2: diagnostic raw dump
         EnterCriticalSection(&g_mux.cs);
         screen_process_output(&pane->screen, buf, br);
-        if (pane->screen.response_len > 0) { write_to_pane_internal(pane, pane->screen.response_buf, pane->screen.response_len); pane->screen.response_len = 0; }
+        // v1.2.0: High-throughput batching - drain available pipe bytes before releasing lock
+        DWORD avail = 0;
+        while (PeekNamedPipe(pane->pipe_out, NULL, 0, NULL, &avail, NULL) && avail > 0) {
+            DWORD to_read = avail > sizeof(buf) ? sizeof(buf) : avail;
+            DWORD br2 = 0;
+            if (!ReadFile(pane->pipe_out, buf, to_read, &br2, NULL) || br2 == 0) break;
+            dump_pane_bytes(idx, buf, (int)br2);
+            screen_process_output(&pane->screen, buf, br2);
+        }
+        if (pane->screen.response_len > 0) {
+            write_to_pane_internal(pane, pane->screen.response_buf, pane->screen.response_len);
+            pane->screen.response_len = 0;
+        }
         if (idx == g_mux.active_pane) g_mux.needs_redraw = 1;
         LeaveCriticalSection(&g_mux.cs);
     }
@@ -3067,7 +3088,7 @@ static unsigned __stdcall pane_read_thread(void *arg) {
 // mouse wheel). Termux renders it itself - no cmd process involved.
 static const char *const g_help_lines[] = {
     "\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m termux - 帮助",
-    "\x1b[38;2;139;148;158m  版本 v1.1.9 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
+    "\x1b[38;2;139;148;158m  版本 v1.2.0 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
     "",
     "\x1b[38;2;121;192;255;1m  键盘快捷键\x1b[0m",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mc\x1b[0m         新建默认 pane",
@@ -4834,9 +4855,17 @@ static void handle_resize(void) {
 
 static void handle_input(void) {
     INPUT_RECORD rec[128]; DWORD cnt;
+    ULONGLONG last_render = 0;
     while (g_mux.running) {
-        if (WaitForSingleObject(g_mux.hIn, 30) == WAIT_OBJECT_0 && ReadConsoleInputW(g_mux.hIn, rec, 128, &cnt))
-            for (DWORD i = 0; i < cnt; i++) { if (rec[i].EventType == KEY_EVENT) handle_key(&rec[i].Event.KeyEvent); else if (rec[i].EventType == MOUSE_EVENT) handle_mouse(&rec[i].Event.MouseEvent); else if (rec[i].EventType == WINDOW_BUFFER_SIZE_EVENT) handle_resize(); }
+        DWORD wait_ms = g_mux.needs_redraw ? 8 : 25;
+        int has_input = (WaitForSingleObject(g_mux.hIn, wait_ms) == WAIT_OBJECT_0 && ReadConsoleInputW(g_mux.hIn, rec, 128, &cnt));
+        if (has_input) {
+            for (DWORD i = 0; i < cnt; i++) {
+                if (rec[i].EventType == KEY_EVENT) handle_key(&rec[i].Event.KeyEvent);
+                else if (rec[i].EventType == MOUSE_EVENT) handle_mouse(&rec[i].Event.MouseEvent);
+                else if (rec[i].EventType == WINDOW_BUFFER_SIZE_EVENT) handle_resize();
+            }
+        }
 
         // v1.1.5: hover preview 1.5s timer check
         if (g_hover_preview_pane >= 0 && !g_hover_preview_active) {
@@ -4854,7 +4883,13 @@ static void handle_input(void) {
             for (int i = 0; i < g_mux.pane_count; i++) if (g_mux.panes[i].active) { f = i; break; }
             if (f >= 0) g_mux.active_pane = f; else { g_mux.running = 0; break; }
         }
-        if (g_mux.needs_redraw) render_screen();
+        if (g_mux.needs_redraw) {
+            ULONGLONG now = GetTickCount64();
+            if (has_input || (now - last_render >= 12)) {
+                render_screen();
+                last_render = now;
+            }
+        }
     }
 }
 
@@ -4908,7 +4943,7 @@ int main(void) {
     load_config();                               // load custom menu items from termux.ini
 
     host_printf("\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[2J\x1b[H");
-    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.1.9\x1b[0m\r\n");
+    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.2.0\x1b[0m\r\n");
     host_printf("  \x1b[33mhost: %dx%d\x1b[0m   (pane screen = host minus 1 tab bar row)\r\n\n", g_mux.host_cols, g_mux.host_rows);
     host_printf("  \x1b[33mCtrl+B\x1b[0m + c/n/p/x/d/0-9   (termux = 帮助)\r\n\n");
     host_printf("  \x1b[33m右键\x1b[0m 标签 = 改颜色、改标题\r\n\n");
