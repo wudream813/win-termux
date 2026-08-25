@@ -2790,7 +2790,7 @@ static void render_screen(void) {
                 else { out[pos++] = 0xE0 | (wc >> 12); out[pos++] = 0x80 | ((wc >> 6) & 0x3F); out[pos++] = 0x80 | (wc & 0x3F); }
                 if (pos > bs - 256) break;
             }
-            pos += snprintf(out + pos, bs - pos, "\x1b[K");
+            if (rc < g_mux.host_cols) pos += snprintf(out + pos, bs - pos, "\x1b[K");
             if (pos > bs - 256) break;
         }
 
@@ -4643,7 +4643,7 @@ int main(void) {
     SetConsoleCtrlHandler(ctrl_handler, TRUE);   // v7: restore console on Ctrl+C/close
     load_config();                               // load custom menu items from termux.ini
 
-    host_printf("\x1b[?1049h\x1b[2J\x1b[H");
+    host_printf("\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[2J\x1b[H");
     host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.1.1\x1b[0m\r\n");
     host_printf("  \x1b[33mhost: %dx%d\x1b[0m   (pane screen = host minus 1 tab bar row)\r\n\n", g_mux.host_cols, g_mux.host_rows);
     host_printf("  \x1b[33mCtrl+B\x1b[0m + c/n/p/x/d/0-9   (termux = 帮助)\r\n\n");
@@ -4660,7 +4660,7 @@ int main(void) {
     handle_input();
     for (int i = 0; i < g_mux.pane_count; i++) close_pane(i);   // v7: close ALL panes (live or dead)
 cleanup:
-    host_printf("\x1b[?1049l\x1b[0m");
+    host_printf("\x1b[?1003l\x1b[?1006l\x1b[?1049l\x1b[0m");
     if (g_orig_title[0]) {
         SetConsoleTitleW(g_orig_title);
         char tbuf[512];
