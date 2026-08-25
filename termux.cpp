@@ -234,6 +234,8 @@ typedef struct {
     int color;   // v8.32: tab color index 0=default, 1..8 = palette
     int exited_hold; // 1 = process exited with error, holding screen for user
     DWORD exit_code;
+    WCHAR input_history[256];
+    int input_history_len;
 } Pane;
 
 typedef struct {
@@ -690,6 +692,65 @@ static void buf_delete(char *buf, int *len, int *pos) {
         *len -= del_count;
         buf[*len] = 0;
     }
+}
+
+// Convert UTF-16 WCHAR buffer to UTF-8
+static int wchars_to_utf8(const WCHAR *wbuf, int wlen, char *u8buf, int max_u8) {
+    int u8pos = 0;
+    for (int i = 0; i < wlen && u8pos < max_u8 - 4; i++) {
+        WCHAR uc = wbuf[i];
+        if (uc >= 0xD800 && uc <= 0xDBFF && i + 1 < wlen && wbuf[i+1] >= 0xDC00 && wbuf[i+1] <= 0xDFFF) {
+            unsigned int cp = 0x10000 + (((unsigned int)(uc & 0x3FF)) << 10) + (wbuf[i+1] & 0x3FF);
+            u8buf[u8pos++] = (char)(0xF0 | (cp >> 18));
+            u8buf[u8pos++] = (char)(0x80 | ((cp >> 12) & 0x3F));
+            u8buf[u8pos++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+            u8buf[u8pos++] = (char)(0x80 | (cp & 0x3F));
+            i++;
+        } else if (uc < 0x80) {
+            u8buf[u8pos++] = (char)uc;
+        } else if (uc < 0x800) {
+            u8buf[u8pos++] = (char)(0xC0 | (uc >> 6));
+            u8buf[u8pos++] = (char)(0x80 | (uc & 0x3F));
+        } else {
+            u8buf[u8pos++] = (char)(0xE0 | (uc >> 12));
+            u8buf[u8pos++] = (char)(0x80 | ((uc >> 6) & 0x3F));
+            u8buf[u8pos++] = (char)(0x80 | (uc & 0x3F));
+        }
+    }
+    u8buf[u8pos] = 0;
+    return u8pos;
+}
+
+// Calculate how many WCHARs to delete for the last grapheme in WCHAR buffer
+static int get_last_grapheme_wchars_count(const WCHAR *wbuf, int wlen) {
+    if (wlen <= 0) return 1;
+    char u8[1024];
+    int u8len = wchars_to_utf8(wbuf, wlen, u8, (int)sizeof(u8));
+    int prev_u8 = utf8_prev_grapheme(u8, u8len);
+    int del_u8_bytes = u8len - prev_u8;
+    if (del_u8_bytes <= 0) return 1;
+
+    int matched_wchars = 0;
+    int cur_u8 = 0;
+    for (int i = 0; i < wlen; i++) {
+        int w_start_u8 = cur_u8;
+        WCHAR uc = wbuf[i];
+        if (uc >= 0xD800 && uc <= 0xDBFF && i + 1 < wlen && wbuf[i+1] >= 0xDC00 && wbuf[i+1] <= 0xDFFF) {
+            cur_u8 += 4;
+            i++;
+        } else if (uc < 0x80) {
+            cur_u8 += 1;
+        } else if (uc < 0x800) {
+            cur_u8 += 2;
+        } else {
+            cur_u8 += 3;
+        }
+        if (w_start_u8 >= prev_u8) {
+            if (uc >= 0xD800 && uc <= 0xDBFF) matched_wchars += 2;
+            else matched_wchars += 1;
+        }
+    }
+    return matched_wchars > 0 ? matched_wchars : 1;
 }
 
 static WCHAR g_high_surrogate = 0;
@@ -3616,6 +3677,37 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
     if (pane->scroll_offset > 0 && !pane->screen.in_alt_screen && vk != VK_PRIOR && vk != VK_NEXT) { pane->scroll_offset = 0; g_mux.needs_redraw = 1; }
     ScreenBuffer *scr = &pane->screen;
 
+    if (vk == VK_BACK) {
+        int del_wchars = get_last_grapheme_wchars_count(pane->input_history, pane->input_history_len);
+        if (del_wchars < 1) del_wchars = 1;
+        pane->input_history_len -= del_wchars;
+        if (pane->input_history_len < 0) pane->input_history_len = 0;
+
+        if (scr->win32_input_mode) {
+            for (int b = 0; b < del_wchars; b++) {
+                char seq_d[64], seq_u[64];
+                int sld = snprintf(seq_d, sizeof(seq_d), "\x1b[8;14;8;1;%lu;1_", (unsigned long)ke->dwControlKeyState);
+                write_to_pane(seq_d, sld);
+                int slu = snprintf(seq_u, sizeof(seq_u), "\x1b[8;14;8;0;%lu;1_", (unsigned long)ke->dwControlKeyState);
+                write_to_pane(seq_u, slu);
+            }
+            return;
+        } else {
+            for (int b = 0; b < del_wchars; b++) {
+                char c = is_ctrl ? 0x08 : 0x7F;
+                write_to_pane(&c, 1);
+            }
+            return;
+        }
+    }
+
+    if (vk == VK_LEFT || vk == VK_RIGHT || vk == VK_HOME || vk == VK_END ||
+        vk == VK_UP || vk == VK_DOWN || vk == VK_RETURN || vk == VK_ESCAPE) {
+        pane->input_history_len = 0;
+    } else if ((uc >= 0x20 || uc == 0x200D || (uc >= 0xFE00 && uc <= 0xFE0F) || (uc >= 0xD800 && uc <= 0xDFFF)) && !is_ctrl && !is_alt) {
+        if (pane->input_history_len < 255) pane->input_history[pane->input_history_len++] = uc;
+    }
+
     if (scr->win32_input_mode) {
         char win32_seq[64];
         int win32_sl = snprintf(win32_seq, sizeof(win32_seq), "\x1b[%u;%u;%u;1;%lu;%u_",
@@ -3652,7 +3744,6 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
         case VK_F10: sl = snprintf(seq, sizeof(seq), "\x1b[21~"); break;
         case VK_F11: sl = snprintf(seq, sizeof(seq), "\x1b[23~"); break;
         case VK_F12: sl = snprintf(seq, sizeof(seq), "\x1b[24~"); break;
-        case VK_BACK: seq[0] = is_ctrl ? 0x08 : 0x7F; sl = 1; break;
         case VK_TAB: if (is_shift) sl = snprintf(seq, sizeof(seq), "\x1b[Z"); else { seq[0] = '\t'; sl = 1; } break;
         case VK_ESCAPE: seq[0] = 0x1B; sl = 1; break;
         case VK_RETURN: seq[0] = is_ctrl ? 0x0A : 0x0D; sl = 1; break;   // v7: Ctrl+Enter = LF
@@ -4150,6 +4241,9 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
     Pane *p = &g_mux.panes[g_mux.active_pane];
     if (!p->active) return;
     ScreenBuffer *s = &p->screen;
+    if (me->dwButtonState & (FROM_LEFT_1ST_BUTTON_PRESSED | FROM_LEFT_2ND_BUTTON_PRESSED | RIGHTMOST_BUTTON_PRESSED)) {
+        p->input_history_len = 0;
+    }
 
     if (me->dwEventFlags == MOUSE_WHEELED) {
         int d = (short)HIWORD(me->dwButtonState);
