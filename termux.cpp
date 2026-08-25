@@ -1273,6 +1273,11 @@ static void screen_put_cp(ScreenBuffer *s, unsigned int cp) {
         s->wraparound_pending = 0;
     }
     int wide = is_wide_cp(cp);
+    if (wide && s->cursor_x >= s->cols - 1) {
+        s->cursor_x = 0;
+        screen_newline(s);
+        s->wraparound_pending = 0;
+    }
     WORD attr = build_attr(s);
     if (cp >= 0x10000) {
         WCHAR high = (WCHAR)(0xD800 + ((cp - 0x10000) >> 10));
@@ -2787,6 +2792,11 @@ static void render_screen(void) {
                         if (pos > bs - 256) break;
                         continue;
                     }
+                }
+                if (wc >= 0xD800 && wc <= 0xDFFF) {
+                    out[pos++] = ' ';
+                    if (pos > bs - 256) break;
+                    continue;
                 }
                 if (wc < 0x80) out[pos++] = (char)wc;
                 else if (wc < 0x800) { out[pos++] = 0xC0 | (wc >> 6); out[pos++] = 0x80 | (wc & 0x3F); }
