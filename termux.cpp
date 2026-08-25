@@ -2771,7 +2771,9 @@ static void render_screen(void) {
             if (th < 1) th = 1;
             if (th >= rr) th = rr - 1;
             int vtop = hist - vo;
-            int tpos = (vtop * (rr - th)) / hist;
+            int max_tpos = rr - th;
+            if (max_tpos <= 0) max_tpos = 1;
+            int tpos = (vtop * max_tpos + hist / 2) / hist;
             if (tpos < 0) tpos = 0;
             if (tpos + th > rr) tpos = rr - th;
             sb_top = tpos;
@@ -4576,7 +4578,9 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                 if (max_tpos <= 0) max_tpos = 1;
 
                 int vtop = hist - p->scroll_offset;
-                int cur_tpos = (vtop * max_tpos) / hist;
+                int cur_tpos = (vtop * max_tpos + hist / 2) / hist;
+                if (cur_tpos < 0) cur_tpos = 0;
+                if (cur_tpos + th > pane_rows) cur_tpos = pane_rows - th;
                 int sb_top = cur_tpos;
                 int sb_bot = cur_tpos + th;
 
@@ -4592,13 +4596,13 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                             g_sb_grab_offset = click_y - sb_top;
                             return;
                         } else {
-                            // Clicked track: move center of thumb to click_y
+                            // Clicked track: move center of thumb directly to click_y
                             g_sb_dragging = 1;
                             g_sb_grab_offset = th / 2;
                             int desired_tpos = click_y - th / 2;
                             if (desired_tpos < 0) desired_tpos = 0;
                             if (desired_tpos > max_tpos) desired_tpos = max_tpos;
-                            int new_vtop = (desired_tpos * hist) / max_tpos;
+                            int new_vtop = (desired_tpos * hist + max_tpos / 2) / max_tpos;
                             p->scroll_offset = hist - new_vtop;
                             if (p->scroll_offset < 0) p->scroll_offset = 0;
                             if (p->scroll_offset > hist) p->scroll_offset = hist;
@@ -4611,7 +4615,7 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                     int desired_tpos = click_y - g_sb_grab_offset;
                     if (desired_tpos < 0) desired_tpos = 0;
                     if (desired_tpos > max_tpos) desired_tpos = max_tpos;
-                    int new_vtop = (desired_tpos * hist) / max_tpos;
+                    int new_vtop = (desired_tpos * hist + max_tpos / 2) / max_tpos;
                     int new_vo = hist - new_vtop;
                     if (new_vo < 0) new_vo = 0;
                     if (new_vo > hist) new_vo = hist;
