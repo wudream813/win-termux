@@ -160,7 +160,7 @@ typedef struct {
     int origin_mode, auto_wrap, wraparound_pending;
     int scroll_region_top, scroll_region_bottom;
     int app_cursor_keys, app_keypad;
-    int mouse_tracking, mouse_sgr, bracketed_paste;
+    int mouse_tracking, mouse_sgr, bracketed_paste, win32_input_mode;
     char tab_stops[512];
     char response_buf[256];
     int response_len;
@@ -1300,6 +1300,7 @@ static void execute_csi(ScreenBuffer *s, char final, char prefix, const char *pa
                     case 1000: case 1002: case 1003: s->mouse_tracking = params[i]; break;
                     case 1006: s->mouse_sgr = 1; break;
                     case 2004: s->bracketed_paste = 1; break;
+                    case 9001: s->win32_input_mode = 1; break;
                     case 6: s->origin_mode = 1; break;
                 }
             }
@@ -1329,6 +1330,7 @@ static void execute_csi(ScreenBuffer *s, char final, char prefix, const char *pa
                     case 1000: case 1002: case 1003: s->mouse_tracking = 0; break;
                     case 1006: s->mouse_sgr = 0; break;
                     case 2004: s->bracketed_paste = 0; break;
+                    case 9001: s->win32_input_mode = 0; break;
                     case 6: s->origin_mode = 0; break;
                 }
             }
@@ -3100,7 +3102,25 @@ static void handle_prefix(WORD vk, DWORD ctrl) {
 }
 
 static void handle_key(KEY_EVENT_RECORD *ke) {
-    if (!ke->bKeyDown) return;
+    if (!ke->bKeyDown) {
+        if (!g_mux.prefix_mode && !g_mux.settings_mode && !g_mux.rename_mode && !g_mux.custom_cmd_mode &&
+            !g_mux.chooser_mode && !g_mux.ctx_mode && !g_mux.help_mode) {
+            if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
+                Pane *pane = &g_mux.panes[g_mux.active_pane];
+                if (pane->screen.win32_input_mode) {
+                    char seq[64];
+                    int sl = snprintf(seq, sizeof(seq), "\x1b[%u;%u;%u;0;%lu;%u_",
+                                      (unsigned int)ke->wVirtualKeyCode,
+                                      (unsigned int)ke->wVirtualScanCode,
+                                      (unsigned int)ke->uChar.UnicodeChar,
+                                      (unsigned long)ke->dwControlKeyState,
+                                      (unsigned int)ke->wRepeatCount);
+                    write_to_pane(seq, sl);
+                }
+            }
+        }
+        return;
+    }
     WORD vk = ke->wVirtualKeyCode; DWORD ctrl = ke->dwControlKeyState; WCHAR uc = ke->uChar.UnicodeChar;
     BOOL is_ctrl = (ctrl & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0, is_alt = (ctrl & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) != 0, is_shift = (ctrl & SHIFT_PRESSED) != 0;
 
@@ -3594,7 +3614,21 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
     if (g_mux.active_pane < 0 || g_mux.active_pane >= g_mux.pane_count) return;
     Pane *pane = &g_mux.panes[g_mux.active_pane]; if (!pane->active) return;
     if (pane->scroll_offset > 0 && !pane->screen.in_alt_screen && vk != VK_PRIOR && vk != VK_NEXT) { pane->scroll_offset = 0; g_mux.needs_redraw = 1; }
-    ScreenBuffer *scr = &pane->screen; char seq[32]; int sl = 0;
+    ScreenBuffer *scr = &pane->screen;
+
+    if (scr->win32_input_mode) {
+        char win32_seq[64];
+        int win32_sl = snprintf(win32_seq, sizeof(win32_seq), "\x1b[%u;%u;%u;1;%lu;%u_",
+                                (unsigned int)ke->wVirtualKeyCode,
+                                (unsigned int)ke->wVirtualScanCode,
+                                (unsigned int)ke->uChar.UnicodeChar,
+                                (unsigned long)ke->dwControlKeyState,
+                                (unsigned int)ke->wRepeatCount);
+        write_to_pane(win32_seq, win32_sl);
+        return;
+    }
+
+    char seq[32]; int sl = 0;
     switch (vk) {
         case VK_UP: sl = snprintf(seq, sizeof(seq), scr->app_cursor_keys ? "\x1bOA" : "\x1b[A"); break;
         case VK_DOWN: sl = snprintf(seq, sizeof(seq), scr->app_cursor_keys ? "\x1bOB" : "\x1b[B"); break;
