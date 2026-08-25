@@ -114,6 +114,12 @@ python3 verify_color8.py    # color=8 渲染用色回归
 
 ## 版本历史
 
+- **v1.1.2** (Emoji 与字素簇全面优化)
+  - **彻底解决 Emoji 单次回退删除（Backspace）与向前删除（Delete）**：在终端内部与内置弹窗中全面升级 Unicode UAX #29 字素簇（Grapheme Cluster）引擎，并引入会话级多码元原子回退机制，确保 `cmd.exe` 与 `PowerShell` 下复杂 Emoji（如 `✔️`、`😀`、`👍🏽`、`1️⃣`、`👨‍💻`）只需按 1 次 Backspace 即可完整干净删除
+  - **支持光标 $\leftarrow / \rightarrow$ 跨越 Emoji 导航**：在子终端命令行中移动光标时自动感知 Emoji 码元总数，实现整字符跨越，消除光标停留在 Emoji 中间断裂的问题
+  - **支持 SMP 全平面 Emoji（如 💯, 😀, 🎉, 💻, 🤖 等）无损渲染与重组**：虚拟屏幕支持高低代理对（Surrogate Pair）存储与还原，彻底解决 SMP 字符渲染为 `??` 或菱形问号 `` 的问题
+  - **消除 8-bit C1 控制码误判与吞行故障**：彻底移除 UTF-8 流对过时 8-bit C1 控制字节的误触发，杜绝 Emoji 输出与系统 OSC 提示导致的解析截断和双重滚屏吞行
+  - **优化嵌套运行体验**：初始化启用标准 SGR 鼠标全向事件捕获，修复 termux 嵌套运行时子 termux 鼠标 hover 响应及最右侧 `[*]` 边缘渲染
 - **v1.1.1** (重大功能发布)
   - **新增图形化交互式 TUI 设置面板 (`[*]` / `Ctrl+B s`)**：内置可视化配置编辑器，支持鼠标与键盘全套快捷操作：`Ctrl+↑/↓` 切换选择项、`↑/↓` 直接调整项目排序、`Enter` 编辑条目、`Ctrl+D` 删除条目，右侧操作按钮（`[↑][↓][改][删]`）支持实时鼠标悬停高亮（Hover）
   - **支持快捷预设加载**：预设面板提供 cmd、PowerShell、WSL Ubuntu、Git Bash、Python、Node.js 及自定义命令行等常用开发环境一键填充
