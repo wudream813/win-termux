@@ -524,9 +524,6 @@ static inline int is_wide_cp(unsigned int cp) {
     if (cp >= 0xFF00 && cp <= 0xFF60) return 1;         // fullwidth forms
     if (cp >= 0xFFE0 && cp <= 0xFFE6) return 1;         // fullwidth signs
     if (cp >= 0x1F000 && cp <= 0x1FFFF) return 1;       // SMP emojis
-    if (cp >= 0x2600 && cp <= 0x27BF) return 1;         // Symbols & Dingbats
-    if (cp >= 0x2300 && cp <= 0x23FF) return 1;         // Misc Technical
-    if (cp >= 0x2B50 && cp <= 0x2B55) return 1;         // Stars
     return 0;
 }
 
