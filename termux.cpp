@@ -1,4 +1,4 @@
-// termux.cpp - Windows Terminal Multiplexer v1.1.4
+// termux.cpp - Windows Terminal Multiplexer v1.1.6
 // ---------------------------------------------------------------------------
 // v8.3 changes:
 //  19. ConPTY line-width autodetect: legacy full-screen apps (edit.com...) can
@@ -2760,10 +2760,26 @@ static void render_screen(void) {
         if (pane->scroll_offset > s->hist_lines) pane->scroll_offset = s->hist_lines;
         if (pane->scroll_offset < 0) pane->scroll_offset = 0;
         int vo = pane->scroll_offset, rr = s->rows < g_mux.host_rows ? s->rows : g_mux.host_rows, rc = s->cols < g_mux.host_cols ? s->cols : g_mux.host_cols;
+        int show_sb = (s->hist_lines > 0 && !s->in_alt_screen && g_mux.host_cols >= 10);
+        int sb_top = 0, sb_bot = 0;
+        if (show_sb) {
+            int hist = s->hist_lines;
+            int total = hist + rr;
+            int th = (rr * rr) / total;
+            if (th < 1) th = 1;
+            if (th >= rr) th = rr - 1;
+            int vtop = hist - vo;
+            int tpos = (vtop * (rr - th)) / hist;
+            if (tpos < 0) tpos = 0;
+            if (tpos + th > rr) tpos = rr - th;
+            sb_top = tpos;
+            sb_bot = tpos + th;
+        }
+        int text_rc = (show_sb && rc >= g_mux.host_cols) ? (g_mux.host_cols - 1) : rc;
 
         for (int y = 0; y < rr; y++) {
             pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H", y + 2);   // v8.22: tab bar is on row 1
-            for (int x = 0; x < rc; x++) {
+            for (int x = 0; x < text_rc; x++) {
                 CHAR_INFO *cell = NULL;
                 int ar = -1;
                 if (vo > 0 && !s->in_alt_screen) { ar = s->scroll_top + y - vo; if (ar >= 0 && ar < s->total_lines) cell = &s->buffer[ar * s->cols + x]; }
@@ -2792,7 +2808,7 @@ static void render_screen(void) {
                     }
                     la_attr = attr; la_fr = frgb; la_br = brgb; la_fv = fgv; la_bv = bgv;
                 }
-                if (wc >= 0xD800 && wc <= 0xDBFF && x + 1 < rc) {
+                if (wc >= 0xD800 && wc <= 0xDBFF && x + 1 < text_rc) {
                     CHAR_INFO *next_cell = NULL;
                     if (vo > 0 && !s->in_alt_screen) { if (ar >= 0 && ar < s->total_lines) next_cell = &s->buffer[ar * s->cols + x + 1]; }
                     else next_cell = screen_cell(s, y, x + 1);
@@ -2818,7 +2834,16 @@ static void render_screen(void) {
                 else { out[pos++] = 0xE0 | (wc >> 12); out[pos++] = 0x80 | ((wc >> 6) & 0x3F); out[pos++] = 0x80 | (wc & 0x3F); }
                 if (pos > bs - 256) break;
             }
-            if (rc < g_mux.host_cols) pos += snprintf(out + pos, bs - pos, "\x1b[K");
+            if (show_sb) {
+                pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH", y + 2, g_mux.host_cols);
+                if (y >= sb_top && y < sb_bot)
+                    pos += snprintf(out + pos, bs - pos, "\x1b[48;2;110;118;129m \x1b[0m");
+                else
+                    pos += snprintf(out + pos, bs - pos, "\x1b[48;2;22;27;34m\x1b[38;2;48;54;61m│\x1b[0m");
+                la_attr = 0xFFFF;
+            } else {
+                if (rc < g_mux.host_cols) pos += snprintf(out + pos, bs - pos, "\x1b[K");
+            }
             if (pos > bs - 256) break;
         }
 
@@ -2980,7 +3005,7 @@ static unsigned __stdcall pane_read_thread(void *arg) {
 // mouse wheel). Termux renders it itself - no cmd process involved.
 static const char *const g_help_lines[] = {
     "\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m termux - 帮助",
-    "\x1b[38;2;139;148;158m  版本 v1.1.4 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
+    "\x1b[38;2;139;148;158m  版本 v1.1.6 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
     "",
     "\x1b[38;2;121;192;255;1m  键盘快捷键\x1b[0m",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mc\x1b[0m         新建默认 pane",
@@ -4534,6 +4559,25 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
         p->input_history_pos = 0;
     }
 
+    // v1.1.6: scrollbar mouse click & drag on rightmost column
+    if (s->hist_lines > 0 && !s->in_alt_screen && mx == g_mux.host_cols - 1 && my >= 1) {
+        if (me->dwButtonState & (FROM_LEFT_1ST_BUTTON_PRESSED | FROM_LEFT_2ND_BUTTON_PRESSED | RIGHTMOST_BUTTON_PRESSED)) {
+            int hist = s->hist_lines;
+            int pane_rows = s->rows < g_mux.host_rows ? s->rows : g_mux.host_rows;
+            if (pane_rows > 1) {
+                int click_y = my - 1;
+                if (click_y < 0) click_y = 0;
+                if (click_y >= pane_rows) click_y = pane_rows - 1;
+                int new_vo = hist - (click_y * hist) / (pane_rows - 1);
+                if (new_vo < 0) new_vo = 0;
+                if (new_vo > hist) new_vo = hist;
+                p->scroll_offset = new_vo;
+                g_mux.needs_redraw = 1;
+                return;
+            }
+        }
+    }
+
     if (me->dwEventFlags == MOUSE_WHEELED) {
         int d = (short)HIWORD(me->dwButtonState);
         if (s->mouse_tracking) {
@@ -4733,7 +4777,7 @@ int main(void) {
     load_config();                               // load custom menu items from termux.ini
 
     host_printf("\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[2J\x1b[H");
-    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.1.4\x1b[0m\r\n");
+    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.1.6\x1b[0m\r\n");
     host_printf("  \x1b[33mhost: %dx%d\x1b[0m   (pane screen = host minus 1 tab bar row)\r\n\n", g_mux.host_cols, g_mux.host_rows);
     host_printf("  \x1b[33mCtrl+B\x1b[0m + c/n/p/x/d/0-9   (termux = 帮助)\r\n\n");
     host_printf("  \x1b[33m右键\x1b[0m 标签 = 改颜色、改标题\r\n\n");
