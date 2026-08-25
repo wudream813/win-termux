@@ -229,7 +229,7 @@ typedef struct {
     HPCON hpc;
     HANDLE pipe_in, pipe_out, process, thread, read_thread;
     ScreenBuffer screen;
-    char title[32];
+    char title[64];
     int scroll_offset;
     int color;   // v8.32: tab color index 0=default, 1..8 = palette
     int exited_hold; // 1 = process exited with error, holding screen for user
@@ -287,6 +287,9 @@ static int g_mouse_prev_in_tabbar = 0;
 static int g_pop_anchor_x = -1;
 static WCHAR g_orig_title[256] = {0};
 static char g_current_host_title[128] = {0};
+static int g_hover_preview_pane = -1;
+static DWORD64 g_hover_preview_start = 0;
+static int g_hover_preview_active = 0;
 
 typedef struct {
     char name[32];
@@ -812,21 +815,38 @@ static int get_next_grapheme_wchars(const WCHAR *wbuf, int wlen, int pos) {
 
 static WCHAR g_high_surrogate = 0;
 
-// v8.11: copy up to max-1 bytes of a UTF-8 string without splitting a
-// multi-byte character (so the title never shows a broken glyph).
-static void trunc_utf8(char *dst, const char *src, int max) {
-    int out = 0, i = 0;
-    while (src[i] && out < max - 1) {
-        unsigned char c = (unsigned char)src[i];
-        int adv = 1;
-        if ((c & 0xE0) == 0xC0) adv = 2;
-        else if ((c & 0xF0) == 0xE0) adv = 3;
-        else if ((c & 0xF8) == 0xF0) adv = 4;
-        if (out + adv > max - 1) break;
-        memcpy(dst + out, src + i, adv);
-        out += adv; i += adv;
+// v1.1.5: format tab title - max 15 display columns, if longer truncate to <=12 cols + "..."
+static void format_tab_title(char *dst, int dst_max, const char *src) {
+    if (!src || !*src) {
+        snprintf(dst, dst_max, "cmd");
+        return;
     }
-    dst[out] = 0;
+    int src_len = (int)strlen(src);
+    int total_cols = utf8_cols(src, src_len);
+    if (total_cols <= 15) {
+        snprintf(dst, dst_max, "%s", src);
+        return;
+    }
+
+    // Truncate to at most 12 display columns + "..."
+    int cur_cols = 0;
+    int i = 0;
+    int out_pos = 0;
+    while (i < src_len && out_pos < dst_max - 4) {
+        int adv = 0;
+        unsigned int cp = utf8_decode_cp(src + i, src_len - i, &adv);
+        int w = is_zero_width_cp(cp) ? 0 : (is_wide_cp(cp) ? 2 : 1);
+        if (cur_cols + w > 12) break;
+        for (int k = 0; k < adv && out_pos < dst_max - 4; k++) {
+            dst[out_pos++] = src[i + k];
+        }
+        cur_cols += w;
+        i += adv;
+    }
+    dst[out_pos++] = '.';
+    dst[out_pos++] = '.';
+    dst[out_pos++] = '.';
+    dst[out_pos] = 0;
 }
 
 // ============================================================
@@ -2127,8 +2147,8 @@ static void draw_tab_bar(char *out, int bs, int *posp) {
     // real pane tabs
     for (int i = 0; i < g_mux.pane_count; i++) {
         if (!g_mux.panes[i].active) continue;
-        char nm[20]; trunc_utf8(nm, g_mux.panes[i].title[0] ? g_mux.panes[i].title : "cmd", sizeof(nm));
-        char head[32];
+        char nm[64]; format_tab_title(nm, sizeof(nm), g_mux.panes[i].title[0] ? g_mux.panes[i].title : "cmd");
+        char head[80];
         int hl = snprintf(head, sizeof(head), "[%s", nm);
         int hc = utf8_cols(head, hl);               // columns of "[title"
         int lc = hc + 1;                            // + 1 for the 'x' glyph
@@ -2826,6 +2846,31 @@ static void render_screen(void) {
     // 3. Tab bar at top
     pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[1;1H");
     draw_tab_bar(out, bs, &pos);
+
+    // 3.5 Floating title preview tooltip (hovering over tab for 2 seconds)
+    if (g_hover_preview_pane >= 0 && g_hover_preview_active &&
+        !g_mux.chooser_mode && !g_mux.ctx_mode && !g_mux.rename_mode &&
+        !g_mux.custom_cmd_mode && !g_mux.settings_mode && !g_mux.help_mode) {
+        if (g_hover_preview_pane >= 0 && g_hover_preview_pane < g_mux.pane_count &&
+            g_mux.panes[g_hover_preview_pane].active) {
+            const char *full_title = g_mux.panes[g_hover_preview_pane].title[0] ?
+                                     g_mux.panes[g_hover_preview_pane].title : "cmd";
+            int tab_col = 0;
+            for (int i = 0; i < g_mux.tab_count; i++) {
+                if (g_mux.tab_info[i].pane_idx == g_hover_preview_pane) {
+                    tab_col = g_mux.tab_info[i].start_col;
+                    break;
+                }
+            }
+            int tcols = utf8_cols(full_title, (int)strlen(full_title));
+            int tw = tcols + 14;
+            if (tw > g_mux.host_cols) tw = g_mux.host_cols;
+            int left = tab_col;
+            if (left + tw > g_mux.host_cols) left = g_mux.host_cols - tw;
+            if (left < 0) left = 0;
+            pos += snprintf(out + pos, bs - pos, "\x1b[2;%dH\x1b[48;2;33;38;45m\x1b[38;2;121;192;255;1m [标题预览] \x1b[38;2;255;255;255;1m%s \x1b[0m", left + 1, full_title);
+        }
+    }
 
     // 4. Position and set cursor visibility as the FINAL step (must be after draw_tab_bar)
     if (g_mux.rename_mode) {
@@ -3995,6 +4040,25 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
         int prev_in = g_mouse_prev_in_tabbar;
         g_mouse_x = mx; g_mouse_y = my;
         int now_in = (my == 0);
+
+        // v1.1.5: hover preview tooltip tracking (hovering over a tab for 2s)
+        int hover_pane = -1;
+        if (my == 0) {
+            for (int i = 0; i < g_mux.tab_count; i++) {
+                PaneTabInfo *t = &g_mux.tab_info[i];
+                if (mx >= t->start_col && mx < t->end_col && t->pane_idx >= 0) {
+                    hover_pane = t->pane_idx;
+                    break;
+                }
+            }
+        }
+        if (hover_pane != g_hover_preview_pane) {
+            if (g_hover_preview_active) g_mux.needs_redraw = 1;
+            g_hover_preview_pane = hover_pane;
+            g_hover_preview_start = (hover_pane >= 0) ? GetTickCount64() : 0;
+            g_hover_preview_active = 0;
+        }
+
         // v8.35: redraw on EVERY move while on the tab bar (hover highlight
         // follows the pointer cell-by-cell), plus once when leaving it (so the
         // highlight clears). Moving elsewhere doesn't redraw.
@@ -4584,6 +4648,15 @@ static void handle_input(void) {
     while (g_mux.running) {
         if (WaitForSingleObject(g_mux.hIn, 30) == WAIT_OBJECT_0 && ReadConsoleInputW(g_mux.hIn, rec, 128, &cnt))
             for (DWORD i = 0; i < cnt; i++) { if (rec[i].EventType == KEY_EVENT) handle_key(&rec[i].Event.KeyEvent); else if (rec[i].EventType == MOUSE_EVENT) handle_mouse(&rec[i].Event.MouseEvent); else if (rec[i].EventType == WINDOW_BUFFER_SIZE_EVENT) handle_resize(); }
+
+        // v1.1.5: hover preview 2s timer check
+        if (g_hover_preview_pane >= 0 && !g_hover_preview_active) {
+            if (GetTickCount64() - g_hover_preview_start >= 2000) {
+                g_hover_preview_active = 1;
+                g_mux.needs_redraw = 1;
+            }
+        }
+
         // v7: reap panes whose child processes died, then make sure the active
         // pane is still valid (otherwise switch to the first live one).
         reap_dead_panes();
