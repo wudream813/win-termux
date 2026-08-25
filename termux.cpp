@@ -4597,9 +4597,15 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                             return;
                         } else {
                             // Clicked track: move center of thumb directly to click_y
+                            // Intelligent prediction: when thumb height is even, choose upper center if clicked above, lower center if clicked below
+                            int center_offset = th / 2;
+                            if (th % 2 == 0) {
+                                if (click_y < sb_top) center_offset = (th / 2) - 1;
+                                else center_offset = th / 2;
+                            }
                             g_sb_dragging = 1;
-                            g_sb_grab_offset = th / 2;
-                            int desired_tpos = click_y - th / 2;
+                            g_sb_grab_offset = center_offset;
+                            int desired_tpos = click_y - center_offset;
                             if (desired_tpos < 0) desired_tpos = 0;
                             if (desired_tpos > max_tpos) desired_tpos = max_tpos;
                             int new_vtop = (desired_tpos * hist + max_tpos / 2) / max_tpos;
