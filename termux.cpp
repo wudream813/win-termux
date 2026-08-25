@@ -1744,19 +1744,6 @@ static void screen_process_byte(ScreenBuffer *s, unsigned char c) {
                 }
             } else if (c == 0x7F) {
                 // DEL - ignore
-            } else if (c >= 0x80 && c <= 0x9F) {
-                // C1 controls (8-bit)
-                switch (c) {
-                    case 0x84: screen_newline(s); break; // IND
-                    case 0x85: s->cursor_x = 0; screen_newline(s); break; // NEL
-                    case 0x88: if (s->cursor_x < 512) s->tab_stops[s->cursor_x] = 1; break; // HTS
-                    case 0x8D: if (s->cursor_y <= s->scroll_region_top) screen_scroll_down(s, s->scroll_region_top, s->scroll_region_bottom, 1); else s->cursor_y--; break; // RI
-                    case 0x90: s->state = ST_DCS_ENTRY; s->param_len = 0; s->inter_len = 0; break; // DCS
-                    case 0x98: case 0x9E: case 0x9F: s->state = ST_SOS_STRING; break; // SOS, PM, APC
-                    case 0x9B: s->state = ST_CSI_ENTRY; s->param_len = 0; s->inter_len = 0; break; // CSI
-                    case 0x9D: s->state = ST_OSC_STRING; s->osc_num = -1; s->osc_len = 0; s->osc_sep = 0; break; // OSC
-                    case 0x9C: break; // ST - ignore
-                }
             } else {
                 screen_put_cp(s, (unsigned char)c);
             }
@@ -1849,8 +1836,8 @@ static void screen_process_byte(ScreenBuffer *s, unsigned char c) {
             break;
 
         case ST_OSC_STRING:
-            if (c == 0x07 || c == 0x9C) {
-                // BEL or ST terminates OSC
+            if (c == 0x07) {
+                // BEL terminates OSC
                 execute_osc(s);
                 s->state = ST_NORMAL;
             } else if (c == 0x1B) {
@@ -1886,14 +1873,14 @@ static void screen_process_byte(ScreenBuffer *s, unsigned char c) {
         case ST_DCS_INTER:
         case ST_DCS_PASSTHROUGH:
         case ST_DCS_IGNORE:
-            // Consume everything until ST
-            if (c == 0x9C) s->state = ST_NORMAL;
+            // Consume everything until ST (ESC \) or BEL
+            if (c == 0x07) s->state = ST_NORMAL;
             else if (c == 0x1B) { s->state = ST_ESC; s->param_len = 0; s->inter_len = 0; }
             break;
 
         case ST_SOS_STRING:
-            // Consume everything until ST
-            if (c == 0x9C) s->state = ST_NORMAL;
+            // Consume everything until ST (ESC \) or BEL
+            if (c == 0x07) s->state = ST_NORMAL;
             else if (c == 0x1B) { s->state = ST_ESC; s->param_len = 0; s->inter_len = 0; }
             break;
     }
