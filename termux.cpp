@@ -1,4 +1,4 @@
-// termux.cpp - Windows Terminal Multiplexer v1.2.3
+// termux.cpp - Windows Terminal Multiplexer v1.2.4
 // ---------------------------------------------------------------------------
 // v8.3 changes:
 //  19. ConPTY line-width autodetect: legacy full-screen apps (edit.com...) can
@@ -112,6 +112,10 @@
 
 #ifdef _MSC_VER
 #pragma comment(lib, "user32.lib")
+#endif
+
+#ifndef GIT_COMMIT_HASH
+#define GIT_COMMIT_HASH "269c541"
 #endif
 
 #define MAX_PANES         16
@@ -486,6 +490,7 @@ static void close_pane(int idx);
 static void switch_pane(int idx);
 static int create_pane(void);   // v8.17: used by open_help_pane
 static int create_pane_shell(const WCHAR *shell);   // v8.21
+static int create_about_pane(void);   // v1.2.4: about pane
 static int screen_resize(ScreenBuffer *s, int nc, int nr);   // used by execute_csi (CSI 8t)
 
 static inline unsigned int utf8_decode_cp(const char *s, int max_len, int *adv) {
@@ -2281,9 +2286,11 @@ static void chooser_geom(int host_rows, int host_cols, int *top, int *left, int 
         int nw = utf8_cols(g_chooser_items[i].name, (int)strlen(g_chooser_items[i].name)) + 12;
         if (nw > cw) cw = nw;
     }
+    int about_w = 20;
+    if (about_w > cw) cw = about_w;
     if (cw > host_cols) cw = host_cols;
     if (cw < 26) cw = 26;
-    int ch = g_chooser_item_count + 3;
+    int ch = g_chooser_item_count + 4;   // header + items + about + esc + bottom
 
     if (w) *w = cw;
     if (h) *h = ch;
@@ -2317,15 +2324,22 @@ static void render_chooser(char *out, int bs, int *posp, int host_rows, int host
         pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
     }
 
+    // v1.2.4: About option at the bottom of the list
+    int about_r = top + 1 + g_chooser_item_count;
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;137;87;229;1m[A]\x1b[0m \x1b[38;2;121;192;255m关于 (About)\x1b[0m", about_r, left);
+    int about_used = 1 + 2 + 3 + 1 + 12; // "│" + "  " + "[A]" + " " + "关于 (About)"
+    while (about_used < cw - 1 && pos < bs - 8) { out[pos++] = ' '; about_used++; }
+    pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
+
     // Esc row
-    int esc_r = top + 1 + g_chooser_item_count;
+    int esc_r = top + 2 + g_chooser_item_count;
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;139;148;158mEsc 取消\x1b[0m", esc_r, left);
     int esc_used = 1 + 2 + 8; // "│" (1) + "  " (2) + "Esc 取消" (8)
     while (esc_used < cw - 1 && pos < bs - 8) { out[pos++] = ' '; esc_used++; }
     pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
 
     // Bottom border: └──────┘
-    int bot_r = top + 2 + g_chooser_item_count;
+    int bot_r = top + 3 + g_chooser_item_count;
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m└", bot_r, left);
     int bot_used = 1;
     while (bot_used < cw - 1 && pos < bs - 8) {
@@ -3109,7 +3123,7 @@ static unsigned __stdcall pane_read_thread(void *arg) {
 // mouse wheel). Termux renders it itself - no cmd process involved.
 static const char *const g_help_lines[] = {
     "\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m termux - 帮助",
-    "\x1b[38;2;139;148;158m  版本 v1.2.3 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
+    "\x1b[38;2;139;148;158m  版本 v1.2.4 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
     "",
     "\x1b[38;2;121;192;255;1m  键盘快捷键\x1b[0m",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mc\x1b[0m         新建默认 pane",
@@ -3158,6 +3172,116 @@ static void render_help_content(char *out, int bs, int *posp, int host_rows, int
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[30;43m[%d%%]\x1b[0m", g_mux.total_host_rows, host_cols - 8, pct);   // v8.22: bottom row
     }
     *posp = pos;
+}
+
+// v1.2.4: Query friendly Windows system version
+typedef LSTATUS (APIENTRY *RegOpenKeyExW_fn)(HKEY, LPCWSTR, DWORD, REGSAM, PHKEY);
+typedef LSTATUS (APIENTRY *RegQueryValueExW_fn)(HKEY, LPCWSTR, LPDWORD, LPDWORD, LPBYTE, LPDWORD);
+typedef LSTATUS (APIENTRY *RegCloseKey_fn)(HKEY);
+
+static void get_system_version_string(char *out, int max_len) {
+    out[0] = 0;
+    HMODULE hAdv = LoadLibraryA("advapi32.dll");
+    if (hAdv) {
+        RegOpenKeyExW_fn pOpen = (RegOpenKeyExW_fn)GetProcAddress(hAdv, "RegOpenKeyExW");
+        RegQueryValueExW_fn pQuery = (RegQueryValueExW_fn)GetProcAddress(hAdv, "RegQueryValueExW");
+        RegCloseKey_fn pClose = (RegCloseKey_fn)GetProcAddress(hAdv, "RegCloseKey");
+        if (pOpen && pQuery && pClose) {
+            HKEY hKey;
+            if (pOpen(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+                WCHAR prod_name[128] = {0};
+                WCHAR display_ver[64] = {0};
+                WCHAR current_build[64] = {0};
+                DWORD ubr = 0;
+                DWORD size = sizeof(prod_name);
+                pQuery(hKey, L"ProductName", NULL, NULL, (LPBYTE)prod_name, &size);
+                size = sizeof(display_ver);
+                pQuery(hKey, L"DisplayVersion", NULL, NULL, (LPBYTE)display_ver, &size);
+                if (!display_ver[0]) {
+                    size = sizeof(display_ver);
+                    pQuery(hKey, L"ReleaseId", NULL, NULL, (LPBYTE)display_ver, &size);
+                }
+                size = sizeof(current_build);
+                pQuery(hKey, L"CurrentBuild", NULL, NULL, (LPBYTE)current_build, &size);
+                size = sizeof(ubr);
+                pQuery(hKey, L"UBR", NULL, NULL, (LPBYTE)&ubr, &size);
+                pClose(hKey);
+
+                char u8_prod[128] = {0}, u8_disp[64] = {0}, u8_build[64] = {0};
+                WideCharToMultiByte(CP_UTF8, 0, prod_name, -1, u8_prod, sizeof(u8_prod) - 1, NULL, NULL);
+                WideCharToMultiByte(CP_UTF8, 0, display_ver, -1, u8_disp, sizeof(u8_disp) - 1, NULL, NULL);
+                WideCharToMultiByte(CP_UTF8, 0, current_build, -1, u8_build, sizeof(u8_build) - 1, NULL, NULL);
+
+                if (u8_prod[0] && u8_build[0]) {
+                    if (ubr > 0 && u8_disp[0]) {
+                        snprintf(out, max_len, "%s %s (Build %s.%lu)", u8_prod, u8_disp, u8_build, (unsigned long)ubr);
+                    } else if (u8_disp[0]) {
+                        snprintf(out, max_len, "%s %s (Build %s)", u8_prod, u8_disp, u8_build);
+                    } else if (ubr > 0) {
+                        snprintf(out, max_len, "%s (Build %s.%lu)", u8_prod, u8_build, (unsigned long)ubr);
+                    } else {
+                        snprintf(out, max_len, "%s (Build %s)", u8_prod, u8_build);
+                    }
+                    FreeLibrary(hAdv);
+                    return;
+                }
+            }
+        }
+        FreeLibrary(hAdv);
+    }
+    snprintf(out, max_len, "Windows 10 / Windows 11 (NT 10.0)");
+}
+
+// v1.2.4: create standalone About pane
+static int create_about_pane(void) {
+    int idx = -1;
+    for (int i = 0; i < MAX_PANES; i++) {
+        if (!g_mux.panes[i].active && g_mux.panes[i].read_thread == NULL) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx < 0) return -1;
+
+    Pane *pane = &g_mux.panes[idx];
+    memset(pane, 0, sizeof(*pane));
+    int pane_cols = g_mux.host_cols > 1 ? g_mux.host_cols - 1 : 1;
+    if (!screen_init(&pane->screen, pane_cols, g_mux.host_rows)) return -1;
+    pane->screen.pane_index = idx;
+    pane->active = 1;
+    pane->color = 4; // Purple color for About tab
+    strcpy(pane->title, "关于");
+    strcpy(pane->full_title, "关于 termux (About)");
+
+    if (idx >= g_mux.pane_count) g_mux.pane_count = idx + 1;
+
+    char sys_ver[128] = {0};
+    get_system_version_string(sys_ver, sizeof(sys_ver));
+
+    char about_buf[2048];
+    int len = snprintf(about_buf, sizeof(about_buf),
+        "\x1b[?25l\r\n"
+        "  \x1b[38;2;255;255;255m\x1b[48;2;137;87;229;1m ╔══════════════════════════════════════════════════════════╗ \x1b[0m\r\n"
+        "  \x1b[38;2;255;255;255m\x1b[48;2;137;87;229;1m ║                  termux - 关于 (About)                   ║ \x1b[0m\r\n"
+        "  \x1b[38;2;255;255;255m\x1b[48;2;137;87;229;1m ╚══════════════════════════════════════════════════════════╝ \x1b[0m\r\n\r\n"
+        "  \x1b[38;2;121;192;255;1mWindows 终端复用器 (Terminal Multiplexer)\x1b[0m\r\n"
+        "  \x1b[38;2;139;148;158m基于 Windows ConPTY 的高性能单文件 C 终端复用多标签环境\x1b[0m\r\n\r\n"
+        "  \x1b[38;2;48;54;61m────────────────────────────────────────────────────────────\x1b[0m\r\n"
+        "  \x1b[38;2;210;153;34;1m■ 版本号 (Version)      :\x1b[0m \x1b[38;2;230;237;243;1mv1.2.4\x1b[0m\r\n"
+        "  \x1b[38;2;210;153;34;1m■ 提交 ID (Commit ID)   :\x1b[0m \x1b[38;2;88;166;255;1m%s\x1b[0m\r\n"
+        "  \x1b[38;2;210;153;34;1m■ 作  者 (Author)      :\x1b[0m \x1b[38;2;63;185;80;1mwu_dream813\x1b[0m\r\n"
+        "  \x1b[38;2;210;153;34;1m■ 系统版本 (OS Version) :\x1b[0m \x1b[38;2;230;237;243m%s\x1b[0m\r\n"
+        "  \x1b[38;2;48;54;61m────────────────────────────────────────────────────────────\x1b[0m\r\n\r\n"
+        "  \x1b[38;2;139;148;158m开源项目仓库 : \x1b[38;2;88;166;255;4mhttps://github.com/wudream813/win-termux\x1b[0m\r\n"
+        "  \x1b[38;2;139;148;158m开源许可协议 : \x1b[38;2;230;237;243mMIT License\x1b[0m\r\n\r\n"
+        "  \x1b[38;2;110;118;129m提示: 这是一个独立的关于标签页，可点击右上角 [x] 或按 Ctrl+B x 关闭\x1b[0m\r\n",
+        GIT_COMMIT_HASH, sys_ver);
+
+    EnterCriticalSection(&g_mux.cs);
+    screen_process_output(&pane->screen, about_buf, len);
+    LeaveCriticalSection(&g_mux.cs);
+
+    return idx;
 }
 
 static int create_pane_shell(const WCHAR *shell) {
@@ -3889,10 +4013,17 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
         g_mux.needs_redraw = 1;
         return;
     }
-    // shell chooser - 1..N selects configured item, Esc cancels
+    // shell chooser - 1..N selects configured item, 'A'/'a'/'0' opens About, Esc cancels
     if (g_mux.chooser_mode) {
         if (vk == VK_ESCAPE) {
             g_mux.chooser_mode = 0;
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (uc == 'a' || uc == 'A' || vk == 'A' || uc == '0' || vk == '0' || vk == VK_NUMPAD0) {
+            g_mux.chooser_mode = 0;
+            int ni = create_about_pane();
+            if (ni >= 0) switch_pane(ni);
             g_mux.needs_redraw = 1;
             return;
         }
@@ -4617,7 +4748,7 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                 g_mux.needs_redraw = 1;
                 return;
             }
-            // chooser: 1..N items from termux.ini, click anywhere else cancels
+            // chooser: 1..N items from termux.ini, plus About at bottom, click anywhere else cancels
             int top, left, cw, ch;
             chooser_geom(g_mux.host_rows, g_mux.host_cols, &top, &left, &cw, &ch);
             int r = my + 1, c = mx + 1;   // convert to 1-based (as the renderer)
@@ -4640,6 +4771,14 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                         g_mux.needs_redraw = 1;
                         return;
                     }
+                }
+                // v1.2.4: Click on About row
+                if (r == top + 1 + g_chooser_item_count) {
+                    g_mux.chooser_mode = 0;
+                    int ni = create_about_pane();
+                    if (ni >= 0) switch_pane(ni);
+                    g_mux.needs_redraw = 1;
+                    return;
                 }
             }
             // click anywhere else cancels
@@ -4964,7 +5103,7 @@ int main(void) {
     load_config();                               // load custom menu items from termux.ini
 
     host_printf("\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[2J\x1b[H");
-    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.2.3\x1b[0m\r\n");
+    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.2.4\x1b[0m\r\n");
     host_printf("  \x1b[33mhost: %dx%d\x1b[0m   (pane screen = host minus 1 tab bar row)\r\n\n", g_mux.host_cols, g_mux.host_rows);
     host_printf("  \x1b[33mCtrl+B\x1b[0m + c/n/p/x/d/0-9   (termux = 帮助)\r\n\n");
     host_printf("  \x1b[33m右键\x1b[0m 标签 = 改颜色、改标题\r\n\n");
