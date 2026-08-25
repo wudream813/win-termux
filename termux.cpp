@@ -291,6 +291,8 @@ static char g_current_host_title[128] = {0};
 static int g_hover_preview_pane = -1;
 static DWORD64 g_hover_preview_start = 0;
 static int g_hover_preview_active = 0;
+static int g_sb_dragging = 0;
+static int g_sb_grab_offset = 0;
 
 typedef struct {
     char name[32];
@@ -4559,23 +4561,74 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
         p->input_history_pos = 0;
     }
 
-    // v1.1.6: scrollbar mouse click & drag on rightmost column
-    if (s->hist_lines > 0 && !s->in_alt_screen && mx == g_mux.host_cols - 1 && my >= 1) {
-        if (me->dwButtonState & (FROM_LEFT_1ST_BUTTON_PRESSED | FROM_LEFT_2ND_BUTTON_PRESSED | RIGHTMOST_BUTTON_PRESSED)) {
+    // v1.1.7: scrollbar mouse click & drag on rightmost column
+    if (s->hist_lines > 0 && !s->in_alt_screen) {
+        int has_btn = (me->dwButtonState & (FROM_LEFT_1ST_BUTTON_PRESSED | FROM_LEFT_2ND_BUTTON_PRESSED | RIGHTMOST_BUTTON_PRESSED)) != 0;
+        if (has_btn) {
             int hist = s->hist_lines;
             int pane_rows = s->rows < g_mux.host_rows ? s->rows : g_mux.host_rows;
             if (pane_rows > 1) {
+                int total = hist + pane_rows;
+                int th = (pane_rows * pane_rows) / total;
+                if (th < 1) th = 1;
+                if (th >= pane_rows) th = pane_rows - 1;
+                int max_tpos = pane_rows - th;
+                if (max_tpos <= 0) max_tpos = 1;
+
+                int vtop = hist - p->scroll_offset;
+                int cur_tpos = (vtop * max_tpos) / hist;
+                int sb_top = cur_tpos;
+                int sb_bot = cur_tpos + th;
+
                 int click_y = my - 1;
                 if (click_y < 0) click_y = 0;
                 if (click_y >= pane_rows) click_y = pane_rows - 1;
-                int new_vo = hist - (click_y * hist) / (pane_rows - 1);
-                if (new_vo < 0) new_vo = 0;
-                if (new_vo > hist) new_vo = hist;
-                p->scroll_offset = new_vo;
-                g_mux.needs_redraw = 1;
-                return;
+
+                if (!g_sb_dragging) {
+                    if (mx == g_mux.host_cols - 1 && my >= 1) {
+                        if (click_y >= sb_top && click_y < sb_bot) {
+                            // Hit the thumb: grab at current offset within thumb
+                            g_sb_dragging = 1;
+                            g_sb_grab_offset = click_y - sb_top;
+                            return;
+                        } else {
+                            // Clicked track: move center of thumb to click_y
+                            g_sb_dragging = 1;
+                            g_sb_grab_offset = th / 2;
+                            int desired_tpos = click_y - th / 2;
+                            if (desired_tpos < 0) desired_tpos = 0;
+                            if (desired_tpos > max_tpos) desired_tpos = max_tpos;
+                            int new_vtop = (desired_tpos * hist) / max_tpos;
+                            p->scroll_offset = hist - new_vtop;
+                            if (p->scroll_offset < 0) p->scroll_offset = 0;
+                            if (p->scroll_offset > hist) p->scroll_offset = hist;
+                            g_mux.needs_redraw = 1;
+                            return;
+                        }
+                    }
+                } else {
+                    // Already dragging with mouse held down
+                    int desired_tpos = click_y - g_sb_grab_offset;
+                    if (desired_tpos < 0) desired_tpos = 0;
+                    if (desired_tpos > max_tpos) desired_tpos = max_tpos;
+                    int new_vtop = (desired_tpos * hist) / max_tpos;
+                    int new_vo = hist - new_vtop;
+                    if (new_vo < 0) new_vo = 0;
+                    if (new_vo > hist) new_vo = hist;
+                    if (new_vo != p->scroll_offset) {
+                        p->scroll_offset = new_vo;
+                        g_mux.needs_redraw = 1;
+                    }
+                    return;
+                }
             }
+        } else {
+            g_sb_dragging = 0;
+            g_sb_grab_offset = 0;
         }
+    } else {
+        g_sb_dragging = 0;
+        g_sb_grab_offset = 0;
     }
 
     if (me->dwEventFlags == MOUSE_WHEELED) {
