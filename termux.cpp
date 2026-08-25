@@ -1,4 +1,4 @@
-// termux.cpp - Windows Terminal Multiplexer v1.1.8
+// termux.cpp - Windows Terminal Multiplexer v1.1.9
 // ---------------------------------------------------------------------------
 // v8.3 changes:
 //  19. ConPTY line-width autodetect: legacy full-screen apps (edit.com...) can
@@ -2781,9 +2781,19 @@ static void render_screen(void) {
         }
         int text_rc = (show_sb && rc >= g_mux.host_cols) ? (g_mux.host_cols - 1) : rc;
 
-        int dist = (g_mouse_y >= 1 && g_mouse_x >= 0) ? ((g_mux.host_cols - 1) - g_mouse_x) : 99;
+        int dist = (g_sb_dragging) ? 0 : ((g_mouse_y >= 1 && g_mouse_x >= 0) ? ((g_mux.host_cols - 1) - g_mouse_x) : 99);
         if (dist < 0) dist = 0;
-        int is_hover = (dist == 0 && g_mouse_y >= 1);
+        int is_hover = (dist == 0 && (g_mouse_y >= 1 || g_sb_dragging));
+        int mouse_on_thumb = 0;
+        int mouse_on_track = 0;
+        if (is_hover) {
+            int my_row = g_mouse_y - 1;
+            if (my_row >= sb_top && my_row < sb_bot) {
+                mouse_on_thumb = 1;
+            } else {
+                mouse_on_track = 1;
+            }
+        }
 
         for (int y = 0; y < rr; y++) {
             pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H", y + 2);   // v8.22: tab bar is on row 1
@@ -2844,26 +2854,34 @@ static void render_screen(void) {
             }
             if (show_sb) {
                 pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH", y + 2, g_mux.host_cols);
-                int in_thumb = (y >= sb_top && y < sb_bot);
-                if (in_thumb) {
-                    if (is_hover) {
-                        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;175;185;205m \x1b[0m");
-                    } else if (dist <= 6) {
-                        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;110;118;129m \x1b[0m");
-                    } else if (dist <= 18) {
-                        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;65;72;82m \x1b[0m");
-                    } else {
-                        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;38;44;52m \x1b[0m");
-                    }
+                if (dist > 10) {
+                    pos += snprintf(out + pos, bs - pos, "\x1b[0m ");
                 } else {
-                    if (is_hover) {
-                        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m\x1b[38;2;110;118;129m│\x1b[0m");
-                    } else if (dist <= 6) {
-                        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;22;27;34m\x1b[38;2;48;54;61m│\x1b[0m");
-                    } else if (dist <= 18) {
-                        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;16;20;26m\x1b[38;2;33;38;45m│\x1b[0m");
+                    int in_thumb = (y >= sb_top && y < sb_bot);
+                    if (in_thumb) {
+                        if (mouse_on_thumb) {
+                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;160;170;185m \x1b[0m");
+                        } else if (mouse_on_track) {
+                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;115;125;138m \x1b[0m");
+                        } else if (dist <= 5) {
+                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;95;105;118m \x1b[0m");
+                        } else {
+                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;55;62;72m \x1b[0m");
+                        }
                     } else {
-                        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;13;17;23m \x1b[0m");
+                        if (mouse_on_track) {
+                            if (y == g_mouse_y - 1) {
+                                pos += snprintf(out + pos, bs - pos, "\x1b[48;2;76;91;115m\x1b[38;2;255;255;255;1m│\x1b[0m");
+                            } else {
+                                pos += snprintf(out + pos, bs - pos, "\x1b[48;2;54;67;87m\x1b[38;2;215;228;245m│\x1b[0m");
+                            }
+                        } else if (mouse_on_thumb) {
+                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;36;44;56m\x1b[38;2;122;135;153m│\x1b[0m");
+                        } else if (dist <= 5) {
+                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;26;32;40m\x1b[38;2;70;80;95m│\x1b[0m");
+                        } else {
+                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;18;22;28m\x1b[38;2;42;48;58m│\x1b[0m");
+                        }
                     }
                 }
                 la_attr = 0xFFFF;
@@ -3031,7 +3049,7 @@ static unsigned __stdcall pane_read_thread(void *arg) {
 // mouse wheel). Termux renders it itself - no cmd process involved.
 static const char *const g_help_lines[] = {
     "\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m termux - 帮助",
-    "\x1b[38;2;139;148;158m  版本 v1.1.8 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
+    "\x1b[38;2;139;148;158m  版本 v1.1.9 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
     "",
     "\x1b[38;2;121;192;255;1m  键盘快捷键\x1b[0m",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mc\x1b[0m         新建默认 pane",
@@ -4131,7 +4149,7 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
         // v8.52: while ANY popup is open, redraw on every move too - the color
         // picker's swatches need live hover highlights (previously the picker
         // was never redrawn on mouse move, so hovering did nothing).
-        // v1.1.8: if scrollbar is active in pane and mouse moved in pane area, redraw for dynamic distance-based fading
+        // v1.1.8/v1.1.9: if scrollbar is active in pane and mouse moved in pane area, redraw for dynamic distance-based fading
         int sb_fade_active = 0;
         if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
             Pane *p = &g_mux.panes[g_mux.active_pane];
@@ -4872,7 +4890,7 @@ int main(void) {
     load_config();                               // load custom menu items from termux.ini
 
     host_printf("\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[2J\x1b[H");
-    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.1.8\x1b[0m\r\n");
+    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.1.9\x1b[0m\r\n");
     host_printf("  \x1b[33mhost: %dx%d\x1b[0m   (pane screen = host minus 1 tab bar row)\r\n\n", g_mux.host_cols, g_mux.host_rows);
     host_printf("  \x1b[33mCtrl+B\x1b[0m + c/n/p/x/d/0-9   (termux = 帮助)\r\n\n");
     host_printf("  \x1b[33m右键\x1b[0m 标签 = 改颜色、改标题\r\n\n");
