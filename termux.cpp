@@ -2739,6 +2739,37 @@ static void update_host_title(void) {
     }
 }
 
+typedef struct {
+    int thumb_r, thumb_g, thumb_b;
+    int track_bg_r, track_bg_g, track_bg_b;
+    int track_fg_r, track_fg_g, track_fg_b;
+} ScrollbarGrad;
+
+static const ScrollbarGrad g_sb_grad[11] = {
+    // dist = 0 (base hover when not directly on thumb)
+    { 145, 155, 170,  22, 27, 34,  110, 118, 129 },
+    // dist = 1
+    { 135, 145, 160,  20, 24, 30,   96, 104, 114 },
+    // dist = 2
+    { 120, 130, 144,  18, 22, 27,   84,  91, 100 },
+    // dist = 3
+    { 106, 115, 128,  16, 20, 25,   73,  79,  87 },
+    // dist = 4
+    {  92, 100, 112,  15, 18, 23,   63,  68,  75 },
+    // dist = 5
+    {  78,  86,  96,  14, 17, 21,   53,  58,  64 },
+    // dist = 6
+    {  65,  72,  82,  13, 16, 20,   44,  48,  54 },
+    // dist = 7
+    {  52,  58,  66,  12, 15, 18,   36,  40,  45 },
+    // dist = 8
+    {  40,  45,  52,  11, 14, 17,   28,  31,  36 },
+    // dist = 9
+    {  29,  33,  38,  10, 13, 16,   22,  25,  29 },
+    // dist = 10
+    {  20,  23,  27,   9, 12, 15,   16,  19,  23 }
+};
+
 static void render_screen(void) {
     EnterCriticalSection(&g_mux.cs);
     if (g_mux.host_cols < 1 || g_mux.host_rows < 1 || g_mux.total_host_rows < 1) { LeaveCriticalSection(&g_mux.cs); return; }
@@ -2785,14 +2816,14 @@ static void render_screen(void) {
         if (dist < 0) dist = 0;
         int is_hover = (dist == 0 && (g_mouse_y >= 1 || g_sb_dragging));
         int mouse_on_thumb = 0;
-        int mouse_on_track = 0;
         if (is_hover) {
             int my_row = g_mouse_y - 1;
             if (my_row >= sb_top && my_row < sb_bot) {
                 mouse_on_thumb = 1;
-            } else {
-                mouse_on_track = 1;
             }
+        }
+        if (g_sb_dragging) {
+            mouse_on_thumb = 1;
         }
 
         for (int y = 0; y < rr; y++) {
@@ -2859,27 +2890,16 @@ static void render_screen(void) {
                 } else {
                     int in_thumb = (y >= sb_top && y < sb_bot);
                     if (in_thumb) {
-                        if (mouse_on_track) {
-                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;215;225;242m \x1b[0m");
-                        } else if (mouse_on_thumb) {
-                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;160;172;190m \x1b[0m");
-                        } else if (dist <= 3) {
-                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;120;130;145m \x1b[0m");
-                        } else if (dist <= 7) {
-                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;65;72;82m \x1b[0m");
+                        if (mouse_on_thumb) {
+                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;225;235;250m \x1b[0m");
                         } else {
-                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;32;36;42m \x1b[0m");
+                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;%d;%d;%dm \x1b[0m",
+                                            g_sb_grad[dist].thumb_r, g_sb_grad[dist].thumb_g, g_sb_grad[dist].thumb_b);
                         }
                     } else {
-                        if (dist == 0) {
-                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;22;27;34m\x1b[38;2;110;118;129m│\x1b[0m");
-                        } else if (dist <= 3) {
-                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;18;22;28m\x1b[38;2;75;82;92m│\x1b[0m");
-                        } else if (dist <= 7) {
-                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;14;17;22m\x1b[38;2;48;54;62m│\x1b[0m");
-                        } else {
-                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;10;13;17m\x1b[38;2;30;34;40m│\x1b[0m");
-                        }
+                        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;%d;%d;%dm\x1b[38;2;%d;%d;%dm│\x1b[0m",
+                                        g_sb_grad[dist].track_bg_r, g_sb_grad[dist].track_bg_g, g_sb_grad[dist].track_bg_b,
+                                        g_sb_grad[dist].track_fg_r, g_sb_grad[dist].track_fg_g, g_sb_grad[dist].track_fg_b);
                     }
                 }
                 la_attr = 0xFFFF;
