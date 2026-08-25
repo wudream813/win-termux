@@ -2859,24 +2859,26 @@ static void render_screen(void) {
                 } else {
                     int in_thumb = (y >= sb_top && y < sb_bot);
                     if (in_thumb) {
-                        if (mouse_on_thumb) {
-                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;160;170;185m \x1b[0m");
-                        } else if (mouse_on_track) {
-                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;115;125;138m \x1b[0m");
-                        } else if (dist <= 5) {
-                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;95;105;118m \x1b[0m");
+                        if (mouse_on_track) {
+                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;215;225;242m \x1b[0m");
+                        } else if (mouse_on_thumb) {
+                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;160;172;190m \x1b[0m");
+                        } else if (dist <= 3) {
+                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;120;130;145m \x1b[0m");
+                        } else if (dist <= 7) {
+                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;65;72;82m \x1b[0m");
                         } else {
-                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;55;62;72m \x1b[0m");
+                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;32;36;42m \x1b[0m");
                         }
                     } else {
-                        if (mouse_on_track) {
-                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;54;67;87m\x1b[38;2;230;240;255;1m│\x1b[0m");
-                        } else if (mouse_on_thumb) {
-                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;36;44;56m\x1b[38;2;122;135;153m│\x1b[0m");
-                        } else if (dist <= 5) {
-                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;26;32;40m\x1b[38;2;70;80;95m│\x1b[0m");
+                        if (dist == 0) {
+                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;22;27;34m\x1b[38;2;110;118;129m│\x1b[0m");
+                        } else if (dist <= 3) {
+                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;18;22;28m\x1b[38;2;75;82;92m│\x1b[0m");
+                        } else if (dist <= 7) {
+                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;14;17;22m\x1b[38;2;48;54;62m│\x1b[0m");
                         } else {
-                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;18;22;28m\x1b[38;2;42;48;58m│\x1b[0m");
+                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;10;13;17m\x1b[38;2;30;34;40m│\x1b[0m");
                         }
                     }
                 }
