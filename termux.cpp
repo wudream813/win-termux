@@ -1860,7 +1860,7 @@ static void screen_process_byte(ScreenBuffer *s, unsigned char c) {
                 s->state = ST_ESC;
                 s->param_len = 0;
                 s->inter_len = 0;
-            } else if (c >= 0x20 && c < 0x7F) {
+            } else if (c >= 0x20 && c != 0x7F) {
                 // v8.9: fixed OSC parsing. The ';' separator must be consumed
                 // exactly once (osc_sep); only characters AFTER it are title
                 // text. The old code treated ';' as title text once osc_num
@@ -1876,7 +1876,7 @@ static void screen_process_byte(ScreenBuffer *s, unsigned char c) {
                         s->osc_sep = 1;   // tolerate odd prefixes (e.g. '?')
                     }
                 } else {
-                    if (s->osc_len < 511) s->osc_buf[s->osc_len++] = c;
+                    if (s->osc_len < 511) s->osc_buf[s->osc_len++] = (char)c;
                 }
             }
             break;
@@ -3256,7 +3256,7 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
             !g_mux.chooser_mode && !g_mux.ctx_mode && !g_mux.help_mode) {
             if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
                 Pane *pane = &g_mux.panes[g_mux.active_pane];
-                if (pane->screen.win32_input_mode) {
+                if (pane->screen.win32_input_mode && !(ke->uChar.UnicodeChar >= 0xD800 && ke->uChar.UnicodeChar <= 0xDFFF)) {
                     char seq[64];
                     int sl = snprintf(seq, sizeof(seq), "\x1b[%u;%u;%u;0;%lu;%u_",
                                       (unsigned int)ke->wVirtualKeyCode,
@@ -3886,7 +3886,38 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
     } else if (vk == VK_UP || vk == VK_DOWN || vk == VK_RETURN || vk == VK_ESCAPE) {
         pane->input_history_len = 0;
         pane->input_history_pos = 0;
-    } else if ((uc >= 0x20 || uc == 0x200D || (uc >= 0xFE00 && uc <= 0xFE0F) || (uc >= 0xD800 && uc <= 0xDFFF)) && !is_ctrl && !is_alt) {
+    } else if (uc >= 0xD800 && uc <= 0xDBFF) {
+        g_high_surrogate = uc;
+        if (pane->input_history_len < 255) {
+            if (pane->input_history_pos < pane->input_history_len) {
+                memmove(pane->input_history + pane->input_history_pos + 1,
+                        pane->input_history + pane->input_history_pos,
+                        (pane->input_history_len - pane->input_history_pos) * sizeof(WCHAR));
+            }
+            pane->input_history[pane->input_history_pos++] = uc;
+            pane->input_history_len++;
+        }
+        return;
+    } else if (uc >= 0xDC00 && uc <= 0xDFFF && g_high_surrogate) {
+        if (pane->input_history_len < 255) {
+            if (pane->input_history_pos < pane->input_history_len) {
+                memmove(pane->input_history + pane->input_history_pos + 1,
+                        pane->input_history + pane->input_history_pos,
+                        (pane->input_history_len - pane->input_history_pos) * sizeof(WCHAR));
+            }
+            pane->input_history[pane->input_history_pos++] = uc;
+            pane->input_history_len++;
+        }
+        unsigned int cp = 0x10000 + (((unsigned int)(g_high_surrogate & 0x3FF)) << 10) + (uc & 0x3FF);
+        g_high_surrogate = 0;
+        char u8[8] = {0};
+        u8[0] = (char)(0xF0 | (cp >> 18));
+        u8[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+        u8[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        u8[3] = (char)(0x80 | (cp & 0x3F));
+        write_to_pane(u8, 4);
+        return;
+    } else if ((uc >= 0x20 || uc == 0x200D || (uc >= 0xFE00 && uc <= 0xFE0F)) && !is_ctrl && !is_alt) {
         if (pane->input_history_len < 255) {
             if (pane->input_history_pos < pane->input_history_len) {
                 memmove(pane->input_history + pane->input_history_pos + 1,
