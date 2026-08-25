@@ -2183,7 +2183,7 @@ static void draw_tab_bar(char *out, int bs, int *posp) {
         int phover = (g_mouse_y == 0 &&   // v8.22: tab bar at top
                       g_mouse_x >= col && g_mouse_x < col + 3);
         if (phover)
-            pos += snprintf(out + pos, bs - pos, PLUS_GREEN_BG DARK_FG "[+]");
+            pos += snprintf(out + pos, bs - pos, PLUS_GREEN_BG DARK_FG "[+]\x1b[0m");
         else
             pos += snprintf(out + pos, bs - pos, PLUS_GREEN "[+]");
         col += 3;
@@ -3988,27 +3988,6 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
     // interaction - including ones that don't hit a UI path - is traceable.
     log_mouse_event("ev", me);
 
-    // If out-of-bounds coordinate received from parent (e.g. my < 0):
-    if (my < 0) {
-        if (g_mouse_y >= 0) {
-            g_mouse_x = -1;
-            g_mouse_y = -1;
-            g_mouse_prev_in_tabbar = 0;
-            g_mux.needs_redraw = 1;
-        }
-        if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
-            ScreenBuffer *s = &g_mux.panes[g_mux.active_pane].screen;
-            if (s->mouse_tracking) {
-                int x = mx + 1;
-                char seq[64]; int len = 0;
-                if (s->mouse_sgr) len = snprintf(seq, sizeof(seq), "\x1b[<35;%d;0M", x);
-                else if (x <= 223) { seq[0] = '\x1b'; seq[1] = '['; seq[2] = 'M'; seq[3] = 32 + 35; seq[4] = 32 + x; seq[5] = 32 + 0; len = 6; }
-                if (len > 0) write_to_pane(seq, len);
-            }
-        }
-        return;
-    }
-
     // v8.11/v8.26: track mouse position. Redraw whenever the mouse enters OR
     // leaves the tab bar row, so hover highlights appear when over a button and
     // clear as soon as the pointer moves away (previously they stuck).
@@ -4028,19 +4007,20 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
         g_mouse_prev_in_tabbar = now_in;
 
         // When mouse transitions into outer tab bar (!prev_in && now_in), notify
-        // child pane ONCE with out-of-bounds coordinate (y = 0, i.e. child my = -1)
-        // so nested child termux or app immediately clears its tab hover highlight!
+        // child pane ONCE with bottom row coordinate (y = s->rows) so nested
+        // child termux or app immediately and reliably clears its tab hover highlight!
         if (!prev_in && now_in) {
             if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
                 ScreenBuffer *s = &g_mux.panes[g_mux.active_pane].screen;
                 if (s->mouse_tracking) {
                     int x = mx + 1;
+                    int safe_y = s->rows > 2 ? s->rows : 2;
                     char seq[64]; int len = 0;
                     if (s->mouse_sgr) {
-                        len = snprintf(seq, sizeof(seq), "\x1b[<35;%d;0M", x);
-                    } else if (x <= 223) {
+                        len = snprintf(seq, sizeof(seq), "\x1b[<35;%d;%dM", x, safe_y);
+                    } else if (x <= 223 && safe_y <= 223) {
                         seq[0] = '\x1b'; seq[1] = '['; seq[2] = 'M';
-                        seq[3] = 32 + 35; seq[4] = 32 + x; seq[5] = 32 + 0;
+                        seq[3] = 32 + 35; seq[4] = 32 + x; seq[5] = 32 + safe_y;
                         len = 6;
                     }
                     if (len > 0) write_to_pane(seq, len);
