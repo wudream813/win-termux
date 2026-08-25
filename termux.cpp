@@ -236,6 +236,7 @@ typedef struct {
     DWORD exit_code;
     WCHAR input_history[256];
     int input_history_len;
+    int input_history_pos;
 } Pane;
 
 typedef struct {
@@ -718,36 +719,69 @@ static int wchars_to_utf8(const WCHAR *wbuf, int wlen, char *u8buf, int max_u8) 
     return u8pos;
 }
 
-// Calculate how many WCHARs to delete for the last grapheme in WCHAR buffer
-static int get_last_grapheme_wchars_count(const WCHAR *wbuf, int wlen) {
-    if (wlen <= 0) return 1;
-    char u8[1024];
-    int u8len = wchars_to_utf8(wbuf, wlen, u8, (int)sizeof(u8));
-    int prev_u8 = utf8_prev_grapheme(u8, u8len);
-    int del_u8_bytes = u8len - prev_u8;
-    if (del_u8_bytes <= 0) return 1;
-
-    int matched_wchars = 0;
-    int cur_u8 = 0;
-    for (int i = 0; i < wlen; i++) {
-        int w_start_u8 = cur_u8;
+// Convert WCHAR index in wbuf to UTF-8 byte index
+static int wchar_idx_to_u8_idx(const WCHAR *wbuf, int wlen, int target_widx) {
+    if (target_widx <= 0) return 0;
+    int u8pos = 0;
+    for (int i = 0; i < wlen && i < target_widx; i++) {
         WCHAR uc = wbuf[i];
         if (uc >= 0xD800 && uc <= 0xDBFF && i + 1 < wlen && wbuf[i+1] >= 0xDC00 && wbuf[i+1] <= 0xDFFF) {
-            cur_u8 += 4;
+            u8pos += 4;
             i++;
         } else if (uc < 0x80) {
-            cur_u8 += 1;
+            u8pos += 1;
         } else if (uc < 0x800) {
-            cur_u8 += 2;
+            u8pos += 2;
         } else {
-            cur_u8 += 3;
-        }
-        if (w_start_u8 >= prev_u8) {
-            if (uc >= 0xD800 && uc <= 0xDBFF) matched_wchars += 2;
-            else matched_wchars += 1;
+            u8pos += 3;
         }
     }
-    return matched_wchars > 0 ? matched_wchars : 1;
+    return u8pos;
+}
+
+// Convert UTF-8 byte index in u8buf to WCHAR index in wbuf
+static int u8_idx_to_wchar_idx(const WCHAR *wbuf, int wlen, int target_u8idx) {
+    if (target_u8idx <= 0) return 0;
+    int u8pos = 0;
+    for (int i = 0; i < wlen; i++) {
+        if (u8pos >= target_u8idx) return i;
+        WCHAR uc = wbuf[i];
+        if (uc >= 0xD800 && uc <= 0xDBFF && i + 1 < wlen && wbuf[i+1] >= 0xDC00 && wbuf[i+1] <= 0xDFFF) {
+            u8pos += 4;
+            i++;
+        } else if (uc < 0x80) {
+            u8pos += 1;
+        } else if (uc < 0x800) {
+            u8pos += 2;
+        } else {
+            u8pos += 3;
+        }
+    }
+    return wlen;
+}
+
+// Get count of WCHARs in the grapheme before pos
+static int get_prev_grapheme_wchars(const WCHAR *wbuf, int wlen, int pos) {
+    if (pos <= 0) return 1;
+    char u8[1024];
+    wchars_to_utf8(wbuf, wlen, u8, (int)sizeof(u8));
+    int cur_u8 = wchar_idx_to_u8_idx(wbuf, wlen, pos);
+    int prev_u8 = utf8_prev_grapheme(u8, cur_u8);
+    int prev_widx = u8_idx_to_wchar_idx(wbuf, wlen, prev_u8);
+    int diff = pos - prev_widx;
+    return diff > 0 ? diff : 1;
+}
+
+// Get count of WCHARs in the grapheme after pos
+static int get_next_grapheme_wchars(const WCHAR *wbuf, int wlen, int pos) {
+    if (pos >= wlen) return 1;
+    char u8[1024];
+    int u8len = wchars_to_utf8(wbuf, wlen, u8, (int)sizeof(u8));
+    int cur_u8 = wchar_idx_to_u8_idx(wbuf, wlen, pos);
+    int next_u8 = utf8_next_grapheme(u8, u8len, cur_u8);
+    int next_widx = u8_idx_to_wchar_idx(wbuf, wlen, next_u8);
+    int diff = next_widx - pos;
+    return diff > 0 ? diff : 1;
 }
 
 static WCHAR g_high_surrogate = 0;
@@ -3675,10 +3709,20 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
     ScreenBuffer *scr = &pane->screen;
 
     if (vk == VK_BACK) {
-        int del_wchars = get_last_grapheme_wchars_count(pane->input_history, pane->input_history_len);
+        int del_wchars = get_prev_grapheme_wchars(pane->input_history, pane->input_history_len, pane->input_history_pos);
         if (del_wchars < 1) del_wchars = 1;
-        pane->input_history_len -= del_wchars;
-        if (pane->input_history_len < 0) pane->input_history_len = 0;
+        if (pane->input_history_pos >= del_wchars) {
+            if (pane->input_history_pos < pane->input_history_len) {
+                memmove(pane->input_history + pane->input_history_pos - del_wchars,
+                        pane->input_history + pane->input_history_pos,
+                        (pane->input_history_len - pane->input_history_pos) * sizeof(WCHAR));
+            }
+            pane->input_history_len -= del_wchars;
+            pane->input_history_pos -= del_wchars;
+        } else {
+            pane->input_history_len = 0;
+            pane->input_history_pos = 0;
+        }
 
         if (scr->win32_input_mode) {
             for (int b = 0; b < del_wchars; b++) {
@@ -3698,11 +3742,103 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
         }
     }
 
-    if (vk == VK_LEFT || vk == VK_RIGHT || vk == VK_HOME || vk == VK_END ||
-        vk == VK_UP || vk == VK_DOWN || vk == VK_RETURN || vk == VK_ESCAPE) {
+    if (vk == VK_DELETE) {
+        int del_wchars = get_next_grapheme_wchars(pane->input_history, pane->input_history_len, pane->input_history_pos);
+        if (del_wchars < 1) del_wchars = 1;
+        if (pane->input_history_pos + del_wchars <= pane->input_history_len) {
+            if (pane->input_history_pos + del_wchars < pane->input_history_len) {
+                memmove(pane->input_history + pane->input_history_pos,
+                        pane->input_history + pane->input_history_pos + del_wchars,
+                        (pane->input_history_len - pane->input_history_pos - del_wchars) * sizeof(WCHAR));
+            }
+            pane->input_history_len -= del_wchars;
+        } else {
+            pane->input_history_len = 0;
+        }
+
+        if (scr->win32_input_mode) {
+            for (int b = 0; b < del_wchars; b++) {
+                char seq_d[64], seq_u[64];
+                int sld = snprintf(seq_d, sizeof(seq_d), "\x1b[46;83;0;1;%lu;1_", (unsigned long)ke->dwControlKeyState);
+                write_to_pane(seq_d, sld);
+                int slu = snprintf(seq_u, sizeof(seq_u), "\x1b[46;83;0;0;%lu;1_", (unsigned long)ke->dwControlKeyState);
+                write_to_pane(seq_u, slu);
+            }
+            return;
+        } else {
+            for (int b = 0; b < del_wchars; b++) {
+                const char *s = "\x1b[3~";
+                write_to_pane(s, (int)strlen(s));
+            }
+            return;
+        }
+    }
+
+    if (vk == VK_LEFT) {
+        int steps = get_prev_grapheme_wchars(pane->input_history, pane->input_history_len, pane->input_history_pos);
+        if (steps < 1) steps = 1;
+        pane->input_history_pos -= steps;
+        if (pane->input_history_pos < 0) pane->input_history_pos = 0;
+
+        if (scr->win32_input_mode) {
+            for (int b = 0; b < steps; b++) {
+                char seq_d[64], seq_u[64];
+                int sld = snprintf(seq_d, sizeof(seq_d), "\x1b[37;75;0;1;%lu;1_", (unsigned long)ke->dwControlKeyState);
+                write_to_pane(seq_d, sld);
+                int slu = snprintf(seq_u, sizeof(seq_u), "\x1b[37;75;0;0;%lu;1_", (unsigned long)ke->dwControlKeyState);
+                write_to_pane(seq_u, slu);
+            }
+            return;
+        } else {
+            for (int b = 0; b < steps; b++) {
+                const char *s = scr->app_cursor_keys ? "\x1bOD" : "\x1b[D";
+                write_to_pane(s, (int)strlen(s));
+            }
+            return;
+        }
+    }
+
+    if (vk == VK_RIGHT) {
+        int steps = get_next_grapheme_wchars(pane->input_history, pane->input_history_len, pane->input_history_pos);
+        if (steps < 1) steps = 1;
+        pane->input_history_pos += steps;
+        if (pane->input_history_pos > pane->input_history_len) pane->input_history_pos = pane->input_history_len;
+
+        if (scr->win32_input_mode) {
+            for (int b = 0; b < steps; b++) {
+                char seq_d[64], seq_u[64];
+                int sld = snprintf(seq_d, sizeof(seq_d), "\x1b[39;77;0;1;%lu;1_", (unsigned long)ke->dwControlKeyState);
+                write_to_pane(seq_d, sld);
+                int slu = snprintf(seq_u, sizeof(seq_u), "\x1b[39;77;0;0;%lu;1_", (unsigned long)ke->dwControlKeyState);
+                write_to_pane(seq_u, slu);
+            }
+            return;
+        } else {
+            for (int b = 0; b < steps; b++) {
+                const char *s = scr->app_cursor_keys ? "\x1bOC" : "\x1b[C";
+                write_to_pane(s, (int)strlen(s));
+            }
+            return;
+        }
+    }
+
+    if (vk == VK_HOME) {
+        pane->input_history_pos = 0;
+    } else if (vk == VK_END) {
+        pane->input_history_pos = pane->input_history_len;
+    } else if (vk == VK_UP || vk == VK_DOWN || vk == VK_RETURN || vk == VK_ESCAPE) {
         pane->input_history_len = 0;
+        pane->input_history_pos = 0;
     } else if ((uc >= 0x20 || uc == 0x200D || (uc >= 0xFE00 && uc <= 0xFE0F) || (uc >= 0xD800 && uc <= 0xDFFF)) && !is_ctrl && !is_alt) {
-        if (pane->input_history_len < 255) pane->input_history[pane->input_history_len++] = uc;
+        if (pane->input_history_len < 255) {
+            if (pane->input_history_pos < pane->input_history_len) {
+                memmove(pane->input_history + pane->input_history_pos + 1,
+                        pane->input_history + pane->input_history_pos,
+                        (pane->input_history_len - pane->input_history_pos) * sizeof(WCHAR));
+            }
+            pane->input_history[pane->input_history_pos++] = uc;
+            pane->input_history_len++;
+        }
     }
 
     if (scr->win32_input_mode) {
@@ -4240,6 +4376,7 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
     ScreenBuffer *s = &p->screen;
     if (me->dwButtonState & (FROM_LEFT_1ST_BUTTON_PRESSED | FROM_LEFT_2ND_BUTTON_PRESSED | RIGHTMOST_BUTTON_PRESSED)) {
         p->input_history_len = 0;
+        p->input_history_pos = 0;
     }
 
     if (me->dwEventFlags == MOUSE_WHEELED) {
