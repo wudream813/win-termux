@@ -1,4 +1,4 @@
-// termux.cpp - Windows Terminal Multiplexer v1.1.2
+// termux.cpp - Windows Terminal Multiplexer v1.1.3
 // ---------------------------------------------------------------------------
 // v8.3 changes:
 //  19. ConPTY line-width autodetect: legacy full-screen apps (edit.com...) can
@@ -2237,7 +2237,7 @@ static void render_chooser(char *out, int bs, int *posp, int host_rows, int host
     int pos = *posp;
 
     // Header: ┌─ 新建 pane ──────┐
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m┌─ 新建 pane ", top, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m┌─ 新建 pane ", top, left);
     int used = 2 + 11; // "┌─" (2) + " 新建 pane " (11)
     while (used < cw - 1 && pos < bs - 8) {
         out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
@@ -2248,7 +2248,7 @@ static void render_chooser(char *out, int bs, int *posp, int host_rows, int host
     // Items
     for (int i = 0; i < g_chooser_item_count; i++) {
         int r = top + 1 + i;
-        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m[%d]\x1b[0m \x1b[38;2;230;237;243m%s\x1b[0m",
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m[%d]\x1b[0m \x1b[38;2;230;237;243m%s\x1b[0m",
                         r, left, i + 1, g_chooser_items[i].name);
         int item_used = 1 + 2 + 3 + 1 + utf8_cols(g_chooser_items[i].name, (int)strlen(g_chooser_items[i].name));
         while (item_used < cw - 1 && pos < bs - 8) { out[pos++] = ' '; item_used++; }
@@ -2257,14 +2257,14 @@ static void render_chooser(char *out, int bs, int *posp, int host_rows, int host
 
     // Esc row
     int esc_r = top + 1 + g_chooser_item_count;
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;139;148;158mEsc 取消\x1b[0m", esc_r, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;139;148;158mEsc 取消\x1b[0m", esc_r, left);
     int esc_used = 1 + 2 + 8; // "│" (1) + "  " (2) + "Esc 取消" (8)
     while (esc_used < cw - 1 && pos < bs - 8) { out[pos++] = ' '; esc_used++; }
     pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
 
     // Bottom border: └──────┘
     int bot_r = top + 2 + g_chooser_item_count;
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m└", bot_r, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m└", bot_r, left);
     int bot_used = 1;
     while (bot_used < cw - 1 && pos < bs - 8) {
         out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
@@ -2285,13 +2285,13 @@ static void render_custom_cmd_box(char *out, int bs, int *posp, int host_rows, i
     int left = ax;
     if (left + CMD_BOX_W > host_cols) left = ax - CMD_BOX_W;
     if (left < 0) left = 0;
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m┌─ 自定义命令行 ─────────────────────┐\x1b[0m", top, left);
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m \x1b[38;2;230;237;243m%s\x1b[0m", top + 1, left, g_mux.custom_cmd_buf);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m┌─ 自定义命令行 ─────────────────────┐\x1b[0m", top, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m \x1b[38;2;230;237;243m%s\x1b[0m", top + 1, left, g_mux.custom_cmd_buf);
     int used = 2 + utf8_cols(g_mux.custom_cmd_buf, (int)strlen(g_mux.custom_cmd_buf));
     while (used < CMD_BOX_W - 1 && pos < bs - 8) { out[pos++] = ' '; used++; }
     pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m└────────────────────────────────────┘\x1b[0m", top + 2, left);
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[30;43m[Enter=启动 Esc=取消]\x1b[0m", top + 3, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m└────────────────────────────────────┘\x1b[0m", top + 2, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[30;43m[Enter=启动 Esc=取消]\x1b[0m", top + 3, left);
     *posp = pos;
 }
 // v8.46: rename box - a bordered dialog where the new title is typed.
@@ -2305,17 +2305,17 @@ static void render_rename_box(char *out, int bs, int *posp, int host_rows, int h
     int left = ax;
     if (left + RENAME_W > host_cols) left = ax - RENAME_W;
     if (left < 0) left = 0;
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m┌─ 新标题 ───────────────────┐\x1b[0m", top, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m┌─ 新标题 ───────────────────┐\x1b[0m", top, left);
     // input row: │  + typed text + padding + │
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m \x1b[38;2;230;237;243m%s\x1b[0m", top + 1, left, g_mux.rename_buf);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m \x1b[38;2;230;237;243m%s\x1b[0m", top + 1, left, g_mux.rename_buf);
     // v8.50: pad by DISPLAY columns (utf8_cols), not bytes - CJK chars are 2
     // cols but 3 bytes; using strlen made the right border drift left by 1 per
     // CJK char.
     int used = 2 + utf8_cols(g_mux.rename_buf, (int)strlen(g_mux.rename_buf));
     while (used < RENAME_W - 1 && pos < bs - 8) { out[pos++] = ' '; used++; }
     pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m└────────────────────────────┘\x1b[0m", top + 2, left);
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[30;43m[Enter=确认 Esc=取消]\x1b[0m", top + 3, left);   // v8.47: clear line
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m└────────────────────────────┘\x1b[0m", top + 2, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[30;43m[Enter=确认 Esc=取消]\x1b[0m", top + 3, left);
     *posp = pos;
 }
 
@@ -2332,10 +2332,10 @@ static void render_ctx_menu(char *out, int bs, int *posp, int host_rows, int hos
     if (left + CTX_W > host_cols) left = ax - CTX_W;
     if (left < 0) left = 0;
     // v8.40: every row is exactly CTX_W (24) columns
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m┌─ 标签菜单 ───────────┐\x1b[0m", top, left);
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m[1]\x1b[0m \x1b[38;2;230;237;243m改颜色\x1b[0m          \x1b[48;2;33;38;45m│\x1b[0m", top + 1, left);
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m[2]\x1b[0m \x1b[38;2;230;237;243m改标题\x1b[0m          \x1b[48;2;33;38;45m│\x1b[0m", top + 2, left);
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m└──────────────────────┘\x1b[0m", top + 3, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m┌─ 标签菜单 ───────────┐\x1b[0m", top, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m[1]\x1b[0m \x1b[38;2;230;237;243m改颜色\x1b[0m          \x1b[48;2;33;38;45m│\x1b[0m", top + 1, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m[2]\x1b[0m \x1b[38;2;230;237;243m改标题\x1b[0m          \x1b[48;2;33;38;45m│\x1b[0m", top + 2, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m└──────────────────────┘\x1b[0m", top + 3, left);
     *posp = pos;
 }
 // v8.52: ctx_geom removed - the mouse handler computes top/left inline to
@@ -2353,7 +2353,7 @@ static void render_color_picker(char *out, int bs, int *posp, int host_rows, int
     if (left + CP_W > host_cols) left = ax - CP_W;
     if (left < 0) left = 0;
     // v8.40: exact 30-col rows
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m┌─ 选择颜色 ─────────────────┐\x1b[0m", top, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m┌─ 选择颜色 ─────────────────┐\x1b[0m", top, left);
     // v8.50: swatches with hover highlight (bright bg + white text on hover,
     // dim bg + gray text otherwise). Each swatch = "  " block + digit + space.
     static const int cpsw[8][3] = {
@@ -2366,7 +2366,7 @@ static void render_color_picker(char *out, int bs, int *posp, int host_rows, int
     };
     for (int row = 0; row < 2; row++) {
         int y = top + 1 + row;
-        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m ", y, left);
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m ", y, left);
         int x = left + 2;   // 1-based col of current swatch start
         for (int k = 0; k < 4; k++) {
             int ci = row * 4 + k;
@@ -2384,7 +2384,7 @@ static void render_color_picker(char *out, int bs, int *posp, int host_rows, int
         while (x < left + CP_W - 1 && pos < bs - 8) { out[pos++] = ' '; x++; }
         pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
     }
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m└────────────────────────────┘\x1b[0m", top + 3, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m└────────────────────────────┘\x1b[0m", top + 3, left);
     *posp = pos;
 }
 
@@ -2410,7 +2410,7 @@ static void render_settings_main(char *out, int bs, int *posp, int host_rows, in
     int pos = *posp;
 
     // Header: ┌─ * termux 设置 ────────────────────────────┐
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[38;2;255;255;255m\x1b[48;2;137;87;229m┌─ * termux 设置 ", top, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[38;2;255;255;255m\x1b[48;2;137;87;229m┌─ * termux 设置 ", top, left);
     int cols = utf8_cols("┌─ * termux 设置 ", (int)strlen("┌─ * termux 设置 "));
     while (cols < sw - 1 && pos < bs - 8) {
         out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
@@ -2420,19 +2420,19 @@ static void render_settings_main(char *out, int bs, int *posp, int host_rows, in
 
     // Subheader: │  【新建菜单项配置】 (Ctrl+↑/↓选 / ↑/↓排 / Enter改 / Ctrl+D删)    │
     int r1 = top + 1;
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;121;192;255;1m【新建菜单项配置】\x1b[0m \x1b[38;2;139;148;158m(Ctrl+↑/↓选 / ↑/↓排 / Enter改 / Ctrl+D删)\x1b[0m", r1, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;121;192;255;1m【新建菜单项配置】\x1b[0m \x1b[38;2;139;148;158m(Ctrl+↑/↓选 / ↑/↓排 / Enter改 / Ctrl+D删)\x1b[0m", r1, left);
     cols = 1 + 2 + utf8_cols("【新建菜单项配置】 (Ctrl+↑/↓选 / ↑/↓排 / Enter改 / Ctrl+D删)", (int)strlen("【新建菜单项配置】 (Ctrl+↑/↓选 / ↑/↓排 / Enter改 / Ctrl+D删)"));
     pad_to_right_border(out, bs, &pos, &cols, sw);
 
     // Column headers: │   #   显示名称       启动命令行                 操作           │
     int r2 = top + 2;
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m   \x1b[38;2;210;153;34m#\x1b[0m   \x1b[38;2;230;237;243m显示名称       启动命令行                 操作\x1b[0m", r2, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m   \x1b[38;2;210;153;34m#\x1b[0m   \x1b[38;2;230;237;243m显示名称       启动命令行                 操作\x1b[0m", r2, left);
     cols = 1 + 3 + 1 + 3 + utf8_cols("显示名称       启动命令行                 操作", (int)strlen("显示名称       启动命令行                 操作"));
     pad_to_right_border(out, bs, &pos, &cols, sw);
 
     // Divider: │  ────────────────────────────────────────────────────────────  │
     int r3 = top + 3;
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  ", r3, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  ", r3, left);
     cols = 1 + 2;
     while (cols < sw - 3 && pos < bs - 8) {
         out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
@@ -2451,7 +2451,7 @@ static void render_settings_main(char *out, int bs, int *posp, int host_rows, in
         int h_del = (row_hover && g_mouse_x >= left + 57 && g_mouse_x <= left + 60);
 
         const char *bg = is_sel ? "\x1b[48;2;45;55;72m" : "";
-        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m%s  \x1b[38;2;210;153;34m[%d]\x1b[0m%s \x1b[38;2;230;237;243;1m",
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m%s  \x1b[38;2;210;153;34m[%d]\x1b[0m%s \x1b[38;2;230;237;243;1m",
                         r, left, bg, i + 1, bg);
         cols = 1 + 2 + 4;
         append_padded_utf8(out, bs, &pos, &cols, g_chooser_items[i].name, 14);
@@ -2497,7 +2497,7 @@ static void render_settings_main(char *out, int bs, int *posp, int host_rows, in
     int h_add = (g_mouse_y == btn_r - 1 && g_mouse_x >= left + 2 && g_mouse_x <= left + 19);
     int h_pre = (g_mouse_y == btn_r - 1 && g_mouse_x >= left + 22 && g_mouse_x <= left + 41);
 
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  ", btn_r, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  ", btn_r, left);
     cols = 1 + 2;
     if (h_add)
         pos += snprintf(out + pos, bs - pos, "\x1b[48;2;45;135;255m\x1b[38;2;255;255;255;1m [+] 添加新条目 \x1b[0m  ");
@@ -2515,7 +2515,7 @@ static void render_settings_main(char *out, int bs, int *posp, int host_rows, in
 
     // Divider 2
     int d2_r = top + 5 + g_chooser_item_count;
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  ", d2_r, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  ", d2_r, left);
     cols = 1 + 2;
     while (cols < sw - 3 && pos < bs - 8) {
         out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
@@ -2528,7 +2528,7 @@ static void render_settings_main(char *out, int bs, int *posp, int host_rows, in
     int h_save = (g_mouse_y == f_r - 1 && g_mouse_x >= left + 2 && g_mouse_x <= left + 20);
     int h_esc = (g_mouse_y == f_r - 1 && g_mouse_x >= left + 31 && g_mouse_x <= left + 48);
 
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  ", f_r, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  ", f_r, left);
     cols = 1 + 2;
     if (h_save)
         pos += snprintf(out + pos, bs - pos, "\x1b[48;2;63;185;80m\x1b[38;2;255;255;255;1m [Ctrl+S] 保存配置 \x1b[0m          ");
@@ -2546,7 +2546,7 @@ static void render_settings_main(char *out, int bs, int *posp, int host_rows, in
 
     // Bottom border: └────────────────────────────────────────────────────────┘
     int b_r = top + 7 + g_chooser_item_count;
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m└", b_r, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m└", b_r, left);
     cols = 1;
     while (cols < sw - 1 && pos < bs - 8) {
         out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
@@ -2569,7 +2569,7 @@ static void render_settings_edit_dialog(char *out, int bs, int *posp, int host_r
     int pos = *posp;
 
     const char *title = (g_mux.settings_edit_idx >= 0) ? "┌─ [*] 编辑菜单项 " : "┌─ [*] 添加新菜单项 ";
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m%s", top, left, title);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m%s", top, left, title);
     int cols = utf8_cols(title, (int)strlen(title));
     while (cols < ew - 1 && pos < bs - 8) {
         out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
@@ -2580,7 +2580,7 @@ static void render_settings_edit_dialog(char *out, int bs, int *posp, int host_r
     // Field 0: 名称
     int f0_sel = (g_mux.settings_edit_field == 0);
     const char *f0_bg = f0_sel ? "\x1b[48;2;50;60;80m" : "\x1b[48;2;22;27;34m";
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m名称: \x1b[0m%s\x1b[38;2;230;237;243;1m ", top + 1, left, f0_bg);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m名称: \x1b[0m%s\x1b[38;2;230;237;243;1m ", top + 1, left, f0_bg);
     cols = 1 + 2 + 6 + 1;
     append_padded_utf8(out, bs, &pos, &cols, g_mux.settings_edit_name, 36);
     pos += snprintf(out + pos, bs - pos, " \x1b[0m");
@@ -2590,7 +2590,7 @@ static void render_settings_edit_dialog(char *out, int bs, int *posp, int host_r
     // Field 1: 命令
     int f1_sel = (g_mux.settings_edit_field == 1);
     const char *f1_bg = f1_sel ? "\x1b[48;2;50;60;80m" : "\x1b[48;2;22;27;34m";
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m命令: \x1b[0m%s\x1b[38;2;230;237;243m ", top + 2, left, f1_bg);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m命令: \x1b[0m%s\x1b[38;2;230;237;243m ", top + 2, left, f1_bg);
     cols = 1 + 2 + 6 + 1;
     append_padded_utf8(out, bs, &pos, &cols, g_mux.settings_edit_cmd, 36);
     pos += snprintf(out + pos, bs - pos, " \x1b[0m");
@@ -2598,14 +2598,14 @@ static void render_settings_edit_dialog(char *out, int bs, int *posp, int host_r
     pad_to_right_border(out, bs, &pos, &cols, ew);
 
     // Tips: [Tab] 切换输入行
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;139;148;158m[Tab] 切换输入项  (:custom 为自定义命令行)\x1b[0m", top + 3, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;139;148;158m[Tab] 切换输入项  (:custom 为自定义命令行)\x1b[0m", top + 3, left);
     cols = 1 + 2 + utf8_cols("[Tab] 切换输入项  (:custom 为自定义命令行)", (int)strlen("[Tab] 切换输入项  (:custom 为自定义命令行)"));
     pad_to_right_border(out, bs, &pos, &cols, ew);
 
     // Action buttons: [Enter] 确定  [Esc] 取消
     int h_ok = (g_mouse_y == top + 3 && g_mouse_x >= left + 2 && g_mouse_x <= left + 19);
     int h_esc = (g_mouse_y == top + 3 && g_mouse_x >= left + 30 && g_mouse_x <= left + 41);
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  ", top + 4, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  ", top + 4, left);
     cols = 1 + 2;
     if (h_ok)
         pos += snprintf(out + pos, bs - pos, "\x1b[48;2;63;185;80m\x1b[38;2;255;255;255;1m [Enter] 确认保存 \x1b[0m          ");
@@ -2622,7 +2622,7 @@ static void render_settings_edit_dialog(char *out, int bs, int *posp, int host_r
     pad_to_right_border(out, bs, &pos, &cols, ew);
 
     // Bottom border
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m└", top + 5, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m└", top + 5, left);
     cols = 1;
     while (cols < ew - 1 && pos < bs - 8) {
         out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
@@ -2643,7 +2643,7 @@ static void render_settings_presets(char *out, int bs, int *posp, int host_rows,
     if (left < 0) left = 0;
     int pos = *posp;
 
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[38;2;255;255;255m\x1b[48;2;31;136;61m┌─ 常用命令行预设 (按数字添加) ", top, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[38;2;255;255;255m\x1b[48;2;31;136;61m┌─ 常用命令行预设 (按数字添加) ", top, left);
     int cols = utf8_cols("┌─ 常用命令行预设 (按数字添加) ", (int)strlen("┌─ 常用命令行预设 (按数字添加) "));
     while (cols < pw - 1 && pos < bs - 8) {
         out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
@@ -2655,7 +2655,7 @@ static void render_settings_presets(char *out, int bs, int *posp, int host_rows,
         int r = top + 1 + i;
         int row_hover = (g_mouse_y == r - 1);
         const char *bg = row_hover ? "\x1b[48;2;45;55;72m" : "";
-        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m%s  \x1b[38;2;210;153;34m[%d]\x1b[0m%s \x1b[38;2;230;237;243;1m",
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m%s  \x1b[38;2;210;153;34m[%d]\x1b[0m%s \x1b[38;2;230;237;243;1m",
                         r, left, bg, i + 1, bg);
         cols = 1 + 2 + 4;
         append_padded_utf8(out, bs, &pos, &cols, g_presets[i].name, 12);
@@ -2668,7 +2668,7 @@ static void render_settings_presets(char *out, int bs, int *posp, int host_rows,
 
     int esc_r = top + 1 + g_preset_count;
     int h_esc = (g_mouse_y == esc_r - 1 && g_mouse_x >= left + 2 && g_mouse_x <= left + 13);
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m│\x1b[0m  ", esc_r, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  ", esc_r, left);
     cols = 1 + 2;
     if (h_esc)
         pos += snprintf(out + pos, bs - pos, "\x1b[48;2;217;119;54m\x1b[38;2;255;255;255;1m [Esc] 取消 \x1b[0m");
@@ -2678,7 +2678,7 @@ static void render_settings_presets(char *out, int bs, int *posp, int host_rows,
     pad_to_right_border(out, bs, &pos, &cols, pw);
 
     int bot_r = top + 2 + g_preset_count;
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[K\x1b[48;2;33;38;45m└", bot_r, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m└", bot_r, left);
     cols = 1;
     while (cols < pw - 1 && pos < bs - 8) {
         out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
@@ -2926,7 +2926,7 @@ static unsigned __stdcall pane_read_thread(void *arg) {
 // mouse wheel). Termux renders it itself - no cmd process involved.
 static const char *const g_help_lines[] = {
     "\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m termux - 帮助",
-    "\x1b[38;2;139;148;158m  版本 v1.1.2 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
+    "\x1b[38;2;139;148;158m  版本 v1.1.3 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
     "",
     "\x1b[38;2;121;192;255;1m  键盘快捷键\x1b[0m",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mc\x1b[0m         新建默认 pane",
@@ -4644,7 +4644,7 @@ int main(void) {
     load_config();                               // load custom menu items from termux.ini
 
     host_printf("\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[2J\x1b[H");
-    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.1.2\x1b[0m\r\n");
+    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.1.3\x1b[0m\r\n");
     host_printf("  \x1b[33mhost: %dx%d\x1b[0m   (pane screen = host minus 1 tab bar row)\r\n\n", g_mux.host_cols, g_mux.host_rows);
     host_printf("  \x1b[33mCtrl+B\x1b[0m + c/n/p/x/d/0-9   (termux = 帮助)\r\n\n");
     host_printf("  \x1b[33m右键\x1b[0m 标签 = 改颜色、改标题\r\n\n");
