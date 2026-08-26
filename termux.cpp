@@ -279,7 +279,6 @@ typedef struct {
     UINT orig_cp, orig_input_cp;
     PaneTabInfo tab_info[MAX_PANES + 3];
     int tab_count;
-    int is_nested;   // v1.2.9: 1 if running inside another win-termux instance
 } Multiplexer;
 
 static Multiplexer g_mux;
@@ -3124,7 +3123,7 @@ static void render_screen(void) {
         if (pane->scroll_offset > s->hist_lines) pane->scroll_offset = s->hist_lines;
         if (pane->scroll_offset < 0) pane->scroll_offset = 0;
         int vo = pane->scroll_offset, rr = s->rows < g_mux.host_rows ? s->rows : g_mux.host_rows, rc = s->cols < g_mux.host_cols ? s->cols : g_mux.host_cols;
-        int show_sb = (!g_mux.is_nested && !s->in_alt_screen && g_mux.host_cols >= 10);
+        int show_sb = (!s->in_alt_screen && g_mux.host_cols >= 10);
         int sb_top = 0, sb_bot = 0;
         if (show_sb) {
             int hist = s->hist_lines;
@@ -3554,7 +3553,7 @@ static int create_about_pane(void) {
 
     Pane *pane = &g_mux.panes[idx];
     memset(pane, 0, sizeof(*pane));
-    int pane_cols = g_mux.is_nested ? g_mux.host_cols : (g_mux.host_cols > 1 ? g_mux.host_cols - 1 : 1);
+    int pane_cols = g_mux.host_cols > 1 ? g_mux.host_cols - 1 : 1;
     if (!screen_init(&pane->screen, pane_cols, g_mux.host_rows)) return -1;
     pane->screen.pane_index = idx;
     pane->active = 1;
@@ -3602,7 +3601,7 @@ static int create_pane_shell(const WCHAR *shell) {
     if (idx < 0) return -1;
 
     Pane *pane = &g_mux.panes[idx]; memset(pane, 0, sizeof(*pane));
-    int pane_cols = g_mux.is_nested ? g_mux.host_cols : (g_mux.host_cols > 1 ? g_mux.host_cols - 1 : 1);
+    int pane_cols = g_mux.host_cols > 1 ? g_mux.host_cols - 1 : 1;
     if (!screen_init(&pane->screen, pane_cols, g_mux.host_rows)) return -1;
     pane->screen.pane_index = idx;   // v7: needed for OSC title routing
 
@@ -4734,9 +4733,9 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
         // v8.52: while ANY popup is open, redraw on every move too - the color
         // picker's swatches need live hover highlights (previously the picker
         // was never redrawn on mouse move, so hovering did nothing).
-        // v1.1.8/v1.1.9/v1.2.7/v1.2.9: if scrollbar is active in pane and mouse moved in pane area, redraw for dynamic distance-based fading
+        // v1.1.8/v1.1.9/v1.2.7: if scrollbar is active in pane and mouse moved in pane area, redraw for dynamic distance-based fading
         int sb_fade_active = 0;
-        if (!popup_open && !g_mux.is_nested && g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
+        if (!popup_open && g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
             Pane *p = &g_mux.panes[g_mux.active_pane];
             if (!p->screen.in_alt_screen && (my >= 1 || prev_in == 0)) {
                 sb_fade_active = 1;
@@ -5202,8 +5201,8 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
         p->input_history_pos = 0;
     }
 
-    // v1.1.7/v1.2.9: scrollbar mouse click & drag on rightmost column (only when not nested)
-    if (!g_mux.is_nested && s->hist_lines > 0 && !s->in_alt_screen) {
+    // v1.1.7: scrollbar mouse click & drag on rightmost column
+    if (s->hist_lines > 0 && !s->in_alt_screen) {
         int has_btn = (me->dwButtonState & (FROM_LEFT_1ST_BUTTON_PRESSED | FROM_LEFT_2ND_BUTTON_PRESSED | RIGHTMOST_BUTTON_PRESSED)) != 0;
         if (has_btn) {
             int hist = s->hist_lines;
@@ -5387,7 +5386,7 @@ static void handle_resize(void) {
     int nr = nt - 1;
     if (nc == g_mux.host_cols && nt == g_mux.total_host_rows) return;
     g_mux.host_cols = nc; g_mux.total_host_rows = nt; g_mux.host_rows = nr;
-    int pane_cols = g_mux.is_nested ? nc : (nc > 1 ? nc - 1 : 1);
+    int pane_cols = nc > 1 ? nc - 1 : 1;
     for (int i = 0; i < g_mux.pane_count; i++) if (g_mux.panes[i].active) {
         EnterCriticalSection(&g_mux.cs);
         screen_resize(&g_mux.panes[i].screen, pane_cols, nr);
@@ -5483,8 +5482,6 @@ static BOOL WINAPI ctrl_handler(DWORD type) {
 // ============================================================
 int main(void) {
     memset(&g_mux, 0, sizeof(g_mux)); InitializeCriticalSection(&g_mux.cs);
-    g_mux.is_nested = (GetEnvironmentVariableW(L"WIN_TERMUX", NULL, 0) > 0);
-    SetEnvironmentVariableW(L"WIN_TERMUX", L"1");
 
     g_mux.hOut = GetStdHandle(STD_OUTPUT_HANDLE); g_mux.hIn = GetStdHandle(STD_INPUT_HANDLE);
     if (g_mux.hOut == INVALID_HANDLE_VALUE || g_mux.hIn == INVALID_HANDLE_VALUE ||
@@ -5537,9 +5534,6 @@ int main(void) {
     handle_input();
     for (int i = 0; i < g_mux.pane_count; i++) close_pane(i);   // v7: close ALL panes (live or dead)
 cleanup:
-    if (!g_mux.is_nested) {
-        SetEnvironmentVariableW(L"WIN_TERMUX", NULL);
-    }
     host_printf("\x1b[?1003l\x1b[?1006l\x1b[?1049l\x1b[0m");
     if (g_orig_title[0]) {
         SetConsoleTitleW(g_orig_title);

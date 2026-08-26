@@ -10,8 +10,9 @@ Tests:
    - Settings cmd: <= 15 cols -> no preview; > 15 cols -> preview active.
 2. ANSI SGR style isolation on scrollbars, percentage indicator, and line clears.
    - Thumb, track, percent badge, and clear-line sequences reset attributes with \x1b[0; / \x1b[0m.
-3. Nested termux instance detection and scrollbar suppression.
-   - WIN_TERMUX env detection, show_sb=0 when nested, pane_cols=host_cols when nested.
+3. Dual scrollbars support without WIN_TERMUX env pollution.
+   - Natural host_cols - 1 sizing per pane, show_sb active on all levels, no WIN_TERMUX.
+4. Version number consistency across codebase.
 """
 
 import sys
@@ -44,12 +45,12 @@ def test_source_code_checks():
     assert "\\x1b[0m\\x1b[K" in src, "Missing SGR reset before \\x1b[K line clear"
     print("  [OK] 滚动条滑块、轨道、进度百分比标签及行清除均包含完整属性重置 (\\x1b[0; / \\x1b[0m)")
 
-    print("\n=== 3) 验证嵌套 Termux 检测与滚动条防污染 (Nested Termux detection & shielding) ===")
-    assert "g_mux.is_nested = (GetEnvironmentVariableW(L\"WIN_TERMUX\", NULL, 0) > 0);" in src, "Missing WIN_TERMUX env check"
-    assert "SetEnvironmentVariableW(L\"WIN_TERMUX\", L\"1\");" in src, "Missing WIN_TERMUX env export"
-    assert "int show_sb = (!g_mux.is_nested && !s->in_alt_screen && g_mux.host_cols >= 10);" in src, "Missing is_nested guard on show_sb"
-    assert "int pane_cols = g_mux.is_nested ? g_mux.host_cols : (g_mux.host_cols > 1 ? g_mux.host_cols - 1 : 1);" in src, "Missing is_nested pane_cols sizing in create_pane"
-    print("  [OK] 嵌套 termux 自动检测 WIN_TERMUX 环境变量并抑制子层滚动条，彻底根除双滚动条与颜色污染")
+    print("\n=== 3) 验证双滚动条支持与无环境变量污染 (Dual scrollbar clean isolation) ===")
+    assert "WIN_TERMUX" not in src, "WIN_TERMUX should not be present in code"
+    assert "is_nested" not in src, "is_nested should not be present in code"
+    assert "int show_sb = (!s->in_alt_screen && g_mux.host_cols >= 10);" in src, "Standard show_sb rule"
+    assert "int pane_cols = g_mux.host_cols > 1 ? g_mux.host_cols - 1 : 1;" in src, "Standard pane_cols sizing"
+    print("  [OK] 双滚动条自然并存，无 WIN_TERMUX 环境变量入侵，ANSI 颜色完全隔离")
 
     print("\n=== 4) 验证版本号一致性 (Version consistency v1.2.9) ===")
     assert "// termux.cpp - Windows Terminal Multiplexer v1.2.9" in src, "Header version not v1.2.9"
