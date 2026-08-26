@@ -2839,8 +2839,9 @@ static void render_settings_presets(char *out, int bs, int *posp, int host_rows,
     presets_geom(host_rows, host_cols, &top, &left, &pw, &ph, &mnw, &mcw);
     int pos = *posp;
 
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[38;2;255;255;255m\x1b[48;2;31;136;61;1m┌─ 常用命令行预设 (按数字/回车选择) ", top, left);
-    int cols = utf8_cols("┌─ 常用命令行预设 (按数字/回车选择) ", (int)strlen("┌─ 常用命令行预设 (按数字/回车选择) "));
+    const char *hdr_text = "┌─ 常用命令行预设 (按数字/回车选择) ";
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[38;2;255;255;255m\x1b[48;2;31;136;61;1m%s", top, left, hdr_text);
+    int cols = utf8_cols(hdr_text, (int)strlen(hdr_text));
     while (cols < pw - 1 && pos < bs - 8) {
         out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
         cols++;
@@ -2851,26 +2852,26 @@ static void render_settings_presets(char *out, int bs, int *posp, int host_rows,
         int r = top + 1 + i;
         int row_hover = (g_mouse_y == r - 1 && g_mouse_x >= left && g_mouse_x < left + pw);
         int is_sel = (i == g_preset_sel);
-        const char *bg = (row_hover || is_sel) ? "\x1b[48;2;45;55;72m" : "";
+        const char *bg = (row_hover || is_sel) ? "\x1b[48;2;45;55;72m" : "\x1b[48;2;22;27;34m";
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m%s  \x1b[38;2;210;153;34m[%d]\x1b[0m%s \x1b[38;2;230;237;243;1m",
                         r, left, bg, i + 1, bg);
         cols = 1 + 2 + 4;
         append_padded_utf8(out, bs, &pos, &cols, g_presets[i].name, mnw);
-        pos += snprintf(out + pos, bs - pos, "\x1b[0m%s \x1b[38;2;139;148;158m", bg);
+        pos += snprintf(out + pos, bs - pos, "%s \x1b[38;2;139;148;158m", bg);
         cols += 1;
         append_padded_utf8(out, bs, &pos, &cols, g_presets[i].cmd, mcw);
-        pos += snprintf(out + pos, bs - pos, "\x1b[0m");
+        pos += snprintf(out + pos, bs - pos, "%s", bg);
         pad_to_right_border(out, bs, &pos, &cols, pw);
     }
 
     int esc_r = top + 1 + g_preset_count;
     int h_esc = (g_mouse_y == esc_r - 1 && g_mouse_x >= left + 2 && g_mouse_x <= left + 14);
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  ", esc_r, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m\x1b[48;2;22;27;34m  ", esc_r, left);
     cols = 1 + 2;
     if (h_esc)
-        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;217;119;54m\x1b[38;2;255;255;255;1m [Esc] 取消 \x1b[0m");
+        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;217;119;54m\x1b[38;2;255;255;255;1m [Esc] 取消 \x1b[0m\x1b[48;2;22;27;34m");
     else
-        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m\x1b[38;2;139;148;158m [Esc] 取消 \x1b[0m");
+        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m\x1b[38;2;139;148;158m [Esc] 取消 \x1b[0m\x1b[48;2;22;27;34m");
     cols += 12;
     pad_to_right_border(out, bs, &pos, &cols, pw);
 
@@ -4661,7 +4662,16 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
         return;
     }
 
-    if (g_mux.prefix_mode) { handle_prefix(vk, ctrl, uc); return; }
+    if (g_mux.prefix_mode) {
+        if (vk == VK_SHIFT || vk == 0x10 || vk == 0xA0 || vk == 0xA1 ||
+            vk == VK_CONTROL || vk == 0x11 || vk == 0xA2 || vk == 0xA3 ||
+            vk == VK_MENU || vk == 0x12 || vk == 0xA4 || vk == 0xA5 ||
+            vk == VK_CAPITAL || vk == VK_NUMLOCK || vk == VK_SCROLL) {
+            return;
+        }
+        handle_prefix(vk, ctrl, uc);
+        return;
+    }
     if ((uc == 0x02) || (vk == 'B' && is_ctrl && !is_alt && !is_shift)) { g_mux.prefix_mode = 1; return; }
 
     // Settings panel active
