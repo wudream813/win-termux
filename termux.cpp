@@ -1,4 +1,4 @@
-// termux.cpp - Windows Terminal Multiplexer v1.4.0
+// termux.cpp - Windows Terminal Multiplexer v1.4.2
 // ---------------------------------------------------------------------------
 // v8.3 changes:
 //  19. ConPTY line-width autodetect: legacy full-screen apps (edit.com...) can
@@ -238,6 +238,7 @@ typedef struct {
     int scroll_offset;
     int color;   // v8.32: tab color index 0=default, 1..8 = palette
     int is_settings; // v1.4.0: 1 if this pane is the standalone Settings panel
+    int is_about;    // v1.4.1: 1 if this pane is the standalone About panel
     int exited_hold; // 1 = process exited with error, holding screen for user
     DWORD exit_code;
     WCHAR input_history[256];
@@ -2064,14 +2065,16 @@ static void execute_osc(ScreenBuffer *s) {
     if ((s->osc_num == 0 || s->osc_num == 1 || s->osc_num == 2) && s->osc_len > 0) {
         int idx = s->pane_index;
         if (idx >= 0 && idx < g_mux.pane_count && g_mux.panes[idx].active) {
-            char raw[256];
-            int rlen = s->osc_len < 255 ? s->osc_len : 255;
-            memcpy(raw, s->osc_buf, rlen);
-            raw[rlen] = 0;
-            while (rlen > 0 && ((unsigned char)raw[rlen - 1] <= ' ' || raw[rlen - 1] == 0x07)) raw[--rlen] = 0;
-            snprintf(g_mux.panes[idx].full_title, sizeof(g_mux.panes[idx].full_title), "%s", raw);
+            if (!g_mux.panes[idx].is_about && !g_mux.panes[idx].is_settings) {
+                char raw[256];
+                int rlen = s->osc_len < 255 ? s->osc_len : 255;
+                memcpy(raw, s->osc_buf, rlen);
+                raw[rlen] = 0;
+                while (rlen > 0 && ((unsigned char)raw[rlen - 1] <= ' ' || raw[rlen - 1] == 0x07)) raw[--rlen] = 0;
+                snprintf(g_mux.panes[idx].full_title, sizeof(g_mux.panes[idx].full_title), "%s", raw);
 
-            sanitize_title(s->osc_buf, s->osc_len, g_mux.panes[idx].title, sizeof(g_mux.panes[idx].title));
+                sanitize_title(s->osc_buf, s->osc_len, g_mux.panes[idx].title, sizeof(g_mux.panes[idx].title));
+            }
         }
     }
     // All other OSC sequences are silently ignored
@@ -2594,9 +2597,9 @@ static void draw_tab_bar(char *out, int bs, int *posp) {
         g_mux.tab_info[g_mux.tab_count].pane_idx = -3;
         int shover = (!popup_open && g_mouse_y == 0 && g_mouse_x >= col && g_mouse_x < col + 3);
         if (shover)
-            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;137;87;229m\x1b[38;2;255;255;255;1m[*]\x1b[0m");
+            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;121;192;255m\x1b[38;2;13;17;23;1m[*]\x1b[0m");
         else
-            pos += snprintf(out + pos, bs - pos, TAB_IN_BG "\x1b[38;2;139;148;158m[*]\x1b[0m");
+            pos += snprintf(out + pos, bs - pos, TAB_IN_BG "\x1b[38;2;121;192;255m[*]\x1b[0m");
         col += 3;
         g_mux.tab_count++;
     }
@@ -2833,7 +2836,7 @@ static void render_settings_presets(char *out, int bs, int *posp, int host_rows,
     presets_geom(host_rows, host_cols, &top, &left, &pw, &ph, &mnw, &mcw);
     int pos = *posp;
 
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[38;2;255;255;255m\x1b[48;2;31;136;61m┌─ 常用命令行预设 (按数字添加) ", top, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[38;2;13;17;23m\x1b[48;2;121;192;255;1m┌─ 常用命令行预设 (按数字添加) ", top, left);
     int cols = utf8_cols("┌─ 常用命令行预设 (按数字添加) ", (int)strlen("┌─ 常用命令行预设 (按数字添加) "));
     while (cols < pw - 1 && pos < bs - 8) {
         out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
@@ -2843,7 +2846,7 @@ static void render_settings_presets(char *out, int bs, int *posp, int host_rows,
 
     for (int i = 0; i < g_preset_count; i++) {
         int r = top + 1 + i;
-        int row_hover = (g_mouse_y == r - 1);
+        int row_hover = (g_mouse_y == r - 1 && g_mouse_x >= left && g_mouse_x < left + pw);
         const char *bg = row_hover ? "\x1b[48;2;45;55;72m" : "";
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m%s  \x1b[38;2;210;153;34m[%d]\x1b[0m%s \x1b[38;2;230;237;243;1m",
                         r, left, bg, i + 1, bg);
@@ -2857,7 +2860,7 @@ static void render_settings_presets(char *out, int bs, int *posp, int host_rows,
     }
 
     int esc_r = top + 1 + g_preset_count;
-    int h_esc = (g_mouse_y == esc_r - 1 && g_mouse_x >= left + 2 && g_mouse_x <= left + 13);
+    int h_esc = (g_mouse_y == esc_r - 1 && g_mouse_x >= left + 2 && g_mouse_x <= left + 14);
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  ", esc_r, left);
     cols = 1 + 2;
     if (h_esc)
@@ -2893,8 +2896,8 @@ static void render_settings_panel(char *out, int bs, int *posp, int host_rows, i
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[0m\x1b[K", r);
     }
 
-    // Header Title at row 2
-    pos += snprintf(out + pos, bs - pos, "\x1b[2;1H\x1b[48;2;137;87;229m\x1b[38;2;255;255;255;1m  ⚙️  termux - 设置面板 (Settings Panel)");
+    // Header Title at row 2 (Light Blue theme v1.4.1)
+    pos += snprintf(out + pos, bs - pos, "\x1b[2;1H\x1b[48;2;121;192;255m\x1b[38;2;13;17;23;1m  ⚙️  termux - 设置面板 (Settings Panel)");
     int hdr_used = utf8_cols("  ⚙️  termux - 设置面板 (Settings Panel)", (int)strlen("  ⚙️  termux - 设置面板 (Settings Panel)"));
     while (hdr_used < host_cols && pos < bs - 8) { out[pos++] = ' '; hdr_used++; }
     pos += snprintf(out + pos, bs - pos, "\x1b[0m");
@@ -2911,9 +2914,11 @@ static void render_settings_panel(char *out, int bs, int *posp, int host_rows, i
     pos += snprintf(out + pos, bs - pos, "\x1b[4;1H\x1b[38;2;48;54;61m─────────────────────\x1b[0m");
 
     // Row 5: 启动 (Startup)
+    int is_sel0 = (g_settings_nav == 0);
     int h_start = (g_mouse_y == 4 && g_mouse_x >= 0 && g_mouse_x < sb_w);
-    const char *start_style = (g_settings_nav == 0) ? "\x1b[48;2;45;55;72m\x1b[38;2;255;255;255;1m" : (h_start ? "\x1b[48;2;33;38;45m\x1b[38;2;230;237;243;1m" : "\x1b[38;2;230;237;243m");
-    pos += snprintf(out + pos, bs - pos, "\x1b[5;1H%s  %s 启动 (Startup)  \x1b[0m", start_style, (g_settings_nav == 0 ? "▶" : " "));
+    const char *start_style = is_sel0 ? (h_start ? "\x1b[48;2;48;75;110m\x1b[38;2;255;255;255;1m" : "\x1b[48;2;38;60;88m\x1b[38;2;121;192;255;1m")
+                                      : (h_start ? "\x1b[48;2;33;38;45m\x1b[38;2;255;255;255;1m" : "\x1b[38;2;230;237;243m");
+    pos += snprintf(out + pos, bs - pos, "\x1b[5;1H%s  %s 启动 (Startup)  \x1b[0m", start_style, (is_sel0 ? "▶" : " "));
 
     // Row 6: Separator ---
     pos += snprintf(out + pos, bs - pos, "\x1b[6;1H\x1b[38;2;48;54;61m┈┈ 菜单项配置 ┈┈┈┈┈┈─\x1b[0m");
@@ -2921,33 +2926,34 @@ static void render_settings_panel(char *out, int bs, int *posp, int host_rows, i
     // Rows 7 .. 7 + g_chooser_item_count - 1: Menu Items
     for (int i = 0; i < g_chooser_item_count; i++) {
         int r = 7 + i;
-        if (r > host_rows - 2) break;
+        if (r > host_rows - 3) break;
         int is_sel = (g_settings_nav == i + 1);
         int h_item = (g_mouse_y == r - 1 && g_mouse_x >= 0 && g_mouse_x < sb_w);
-        const char *item_style = is_sel ? "\x1b[48;2;45;55;72m\x1b[38;2;255;255;255;1m" : (h_item ? "\x1b[48;2;33;38;45m\x1b[38;2;230;237;243;1m" : "\x1b[38;2;230;237;243m");
+        const char *item_style = is_sel ? (h_item ? "\x1b[48;2;48;75;110m\x1b[38;2;255;255;255;1m" : "\x1b[48;2;38;60;88m\x1b[38;2;121;192;255;1m")
+                                        : (h_item ? "\x1b[48;2;33;38;45m\x1b[38;2;255;255;255;1m" : "\x1b[38;2;230;237;243m");
         char dname[32] = {0};
         format_name_display(dname, sizeof(dname), g_chooser_items[i].name);
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H%s  %s [%d] %-10s\x1b[0m", r, item_style, is_sel ? "▶" : " ", i + 1, dname);
     }
 
-    // Row 7 + g_chooser_item_count: [+] 添加条目
+    // Row 7 + g_chooser_item_count: [+] 添加新条目
     int add_r = 7 + g_chooser_item_count;
     if (add_r <= host_rows - 2) {
         int h_add = (g_mouse_y == add_r - 1 && g_mouse_x >= 0 && g_mouse_x < sb_w);
-        pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H%s  [+] 添加新条目    \x1b[0m", add_r, h_add ? "\x1b[48;2;31;111;235m\x1b[38;2;255;255;255;1m" : "\x1b[38;2;63;185;80;1m");
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H%s  [+] 添加新条目    \x1b[0m", add_r, h_add ? "\x1b[48;2;63;185;80m\x1b[38;2;13;17;23;1m" : "\x1b[38;2;63;185;80;1m");
     }
 
-    // Row 8 + g_chooser_item_count: [P] 快速预设
+    // Row 8 + g_chooser_item_count: [P] 快速预设库
     int pre_r = 8 + g_chooser_item_count;
     if (pre_r <= host_rows - 2) {
         int h_pre = (g_mouse_y == pre_r - 1 && g_mouse_x >= 0 && g_mouse_x < sb_w);
-        pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H%s  [P] 快速预设库    \x1b[0m", pre_r, h_pre ? "\x1b[48;2;45;165;85m\x1b[38;2;255;255;255;1m" : "\x1b[38;2;31;136;61;1m");
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H%s  [P] 快速预设库    \x1b[0m", pre_r, h_pre ? "\x1b[48;2;121;192;255m\x1b[38;2;13;17;23;1m" : "\x1b[38;2;121;192;255;1m");
     }
 
     // Bottom of sidebar: [Ctrl+S] 保存配置
     int save_r = host_rows;
     int h_save_btn = (g_mouse_y == save_r - 1 && g_mouse_x >= 0 && g_mouse_x < sb_w);
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H%s [Ctrl+S] 保存配置  \x1b[0m", save_r, h_save_btn ? "\x1b[48;2;63;185;80m\x1b[38;2;255;255;255;1m" : "\x1b[48;2;33;38;45m\x1b[38;2;63;185;80;1m");
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H%s [Ctrl+S] 保存配置  \x1b[0m", save_r, h_save_btn ? "\x1b[48;2;63;185;80m\x1b[38;2;13;17;23;1m" : "\x1b[48;2;33;38;45m\x1b[38;2;63;185;80;1m");
 
 
     // --- Right Main Area Content ---
@@ -2957,19 +2963,21 @@ static void render_settings_panel(char *out, int bs, int *posp, int host_rows, i
 
     if (g_settings_nav == 0) {
         // === 启动 (Startup) View ===
-        pos += snprintf(out + pos, bs - pos, "\x1b[3;%dH\x1b[38;2;210;153;34;1m■ 默认启动项设置 (Default Startup Item)\x1b[0m", main_left);
+        pos += snprintf(out + pos, bs - pos, "\x1b[3;%dH\x1b[38;2;121;192;255;1m■ 默认启动项设置 (Default Startup Item)\x1b[0m", main_left);
         pos += snprintf(out + pos, bs - pos, "\x1b[4;%dH\x1b[38;2;139;148;158m选择每次打开 termux 窗口时默认显示的界面：\x1b[0m", main_left);
 
         int opt0_hover = (g_mouse_y == 4 && g_mouse_x >= main_left && g_mouse_x < main_left + 24);
         int opt1_hover = (g_mouse_y == 4 && g_mouse_x >= main_left + 26 && g_mouse_x < main_left + 48);
 
-        const char *opt0_style = (g_default_startup == 0) ? "\x1b[48;2;31;111;235m\x1b[38;2;255;255;255;1m" : (opt0_hover ? "\x1b[48;2;45;55;72m\x1b[38;2;255;255;255;1m" : "\x1b[48;2;33;38;45m\x1b[38;2;230;237;243m");
-        const char *opt1_style = (g_default_startup == 1) ? "\x1b[48;2;31;111;235m\x1b[38;2;255;255;255;1m" : (opt1_hover ? "\x1b[48;2;45;55;72m\x1b[38;2;255;255;255;1m" : "\x1b[48;2;33;38;45m\x1b[38;2;230;237;243m");
+        const char *opt0_style = (g_default_startup == 0) ? (opt0_hover ? "\x1b[48;2;140;205;255m\x1b[38;2;13;17;23;1m" : "\x1b[48;2;121;192;255m\x1b[38;2;13;17;23;1m")
+                                                          : (opt0_hover ? "\x1b[48;2;45;55;72m\x1b[38;2;255;255;255;1m" : "\x1b[48;2;33;38;45m\x1b[38;2;230;237;243m");
+        const char *opt1_style = (g_default_startup == 1) ? (opt1_hover ? "\x1b[48;2;140;205;255m\x1b[38;2;13;17;23;1m" : "\x1b[48;2;121;192;255m\x1b[38;2;13;17;23;1m")
+                                                          : (opt1_hover ? "\x1b[48;2;45;55;72m\x1b[38;2;255;255;255;1m" : "\x1b[48;2;33;38;45m\x1b[38;2;230;237;243m");
 
         pos += snprintf(out + pos, bs - pos, "\x1b[5;%dH%s [●] 默认终端 (Terminal) \x1b[0m   %s [○] 内置帮助 (Help) \x1b[0m",
                         main_left, opt0_style, opt1_style);
 
-        pos += snprintf(out + pos, bs - pos, "\x1b[7;%dH\x1b[38;2;210;153;34;1m■ [+] 新建菜单项顺序与管理 ([+] Menu Order)\x1b[0m", main_left);
+        pos += snprintf(out + pos, bs - pos, "\x1b[7;%dH\x1b[38;2;121;192;255;1m■ [+] 新建菜单项顺序与管理 ([+] Menu Order)\x1b[0m", main_left);
         pos += snprintf(out + pos, bs - pos, "\x1b[8;%dH\x1b[38;2;139;148;158m点击 [↑][↓] 调整快捷键 1-9 的顺序，点击 [改] 编辑，点击 [删] 移除：\x1b[0m", main_left);
 
         pos += snprintf(out + pos, bs - pos, "\x1b[9;%dH\x1b[38;2;121;192;255;1m  序号  显示名称        启动命令行                       操作\x1b[0m", main_left);
@@ -2977,7 +2985,7 @@ static void render_settings_panel(char *out, int bs, int *posp, int host_rows, i
         for (int i = 0; i < g_chooser_item_count; i++) {
             int r = 10 + i;
             if (r > host_rows - 2) break;
-            int row_hover = (g_mouse_y == r - 1);
+            int row_hover = (g_mouse_y == r - 1 && g_mouse_x >= main_left && g_mouse_x < host_cols);
             int h_up = (row_hover && g_mouse_x >= main_left + 52 && g_mouse_x <= main_left + 54);
             int h_dn = (row_hover && g_mouse_x >= main_left + 55 && g_mouse_x <= main_left + 57);
             int h_ed = (row_hover && g_mouse_x >= main_left + 58 && g_mouse_x <= main_left + 61);
@@ -2986,12 +2994,14 @@ static void render_settings_panel(char *out, int bs, int *posp, int host_rows, i
             char dname[32] = {0}; format_name_display(dname, sizeof(dname), g_chooser_items[i].name);
             char dcmd[64] = {0}; format_cmd_display(dcmd, sizeof(dcmd), g_chooser_items[i].cmd);
 
-            pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH  \x1b[38;2;210;153;34m[%d]\x1b[0m  \x1b[38;2;230;237;243;1m%-12s\x1b[0m  \x1b[38;2;139;148;158m%-30s\x1b[0m",
-                            r, main_left, i + 1, dname, dcmd);
+            const char *row_bg = (row_hover && !h_up && !h_dn && !h_ed && !h_del) ? "\x1b[48;2;27;33;44m" : "";
 
-            pos += snprintf(out + pos, bs - pos, "  %s[↑]\x1b[0m", h_up ? "\x1b[48;2;63;185;80m\x1b[38;2;255;255;255;1m" : "\x1b[38;2;63;185;80m");
-            pos += snprintf(out + pos, bs - pos, "%s[↓]\x1b[0m", h_dn ? "\x1b[48;2;217;119;54m\x1b[38;2;255;255;255;1m" : "\x1b[38;2;217;119;54m");
-            pos += snprintf(out + pos, bs - pos, "%s[改]\x1b[0m", h_ed ? "\x1b[48;2;31;111;235m\x1b[38;2;255;255;255;1m" : "\x1b[38;2;121;192;255m");
+            pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s  \x1b[38;2;210;153;34m[%d]\x1b[0m%s  \x1b[38;2;230;237;243;1m%-12s\x1b[0m%s  \x1b[38;2;139;148;158m%-30s\x1b[0m%s",
+                            r, main_left, row_bg, i + 1, row_bg, dname, row_bg, dcmd, row_bg);
+
+            pos += snprintf(out + pos, bs - pos, "  %s[↑]\x1b[0m", h_up ? "\x1b[48;2;63;185;80m\x1b[38;2;13;17;23;1m" : "\x1b[38;2;63;185;80m");
+            pos += snprintf(out + pos, bs - pos, "%s[↓]\x1b[0m", h_dn ? "\x1b[48;2;217;119;54m\x1b[38;2;13;17;23;1m" : "\x1b[38;2;217;119;54m");
+            pos += snprintf(out + pos, bs - pos, "%s[改]\x1b[0m", h_ed ? "\x1b[48;2;121;192;255m\x1b[38;2;13;17;23;1m" : "\x1b[38;2;121;192;255m");
             pos += snprintf(out + pos, bs - pos, "%s[删]\x1b[0m", h_del ? "\x1b[48;2;248;81;73m\x1b[38;2;255;255;255;1m" : "\x1b[38;2;248;81;73m");
         }
 
@@ -2999,17 +3009,15 @@ static void render_settings_panel(char *out, int bs, int *posp, int host_rows, i
         if (btn_r <= host_rows) {
             int h_add = (g_mouse_y == btn_r - 1 && g_mouse_x >= main_left && g_mouse_x <= main_left + 16);
             int h_pre = (g_mouse_y == btn_r - 1 && g_mouse_x >= main_left + 18 && g_mouse_x <= main_left + 34);
-            int h_save = (g_mouse_y == btn_r - 1 && g_mouse_x >= main_left + 36 && g_mouse_x <= main_left + 54);
 
             pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH", btn_r, main_left);
-            pos += snprintf(out + pos, bs - pos, "%s [+] 添加条目 \x1b[0m  ", h_add ? "\x1b[48;2;45;135;255m\x1b[38;2;255;255;255;1m" : "\x1b[48;2;31;111;235m\x1b[38;2;255;255;255;1m");
-            pos += snprintf(out + pos, bs - pos, "%s [P] 快速预设 \x1b[0m  ", h_pre ? "\x1b[48;2;45;165;85m\x1b[38;2;255;255;255;1m" : "\x1b[48;2;31;136;61m\x1b[38;2;255;255;255;1m");
-            pos += snprintf(out + pos, bs - pos, "%s [Ctrl+S] 保存配置 \x1b[0m", h_save ? "\x1b[48;2;63;185;80m\x1b[38;2;255;255;255;1m" : "\x1b[48;2;33;38;45m\x1b[38;2;63;185;80;1m");
+            pos += snprintf(out + pos, bs - pos, "%s [+] 添加条目 \x1b[0m  ", h_add ? "\x1b[48;2;63;185;80m\x1b[38;2;13;17;23;1m" : "\x1b[48;2;33;38;45m\x1b[38;2;63;185;80;1m");
+            pos += snprintf(out + pos, bs - pos, "%s [P] 快速预设 \x1b[0m", h_pre ? "\x1b[48;2;121;192;255m\x1b[38;2;13;17;23;1m" : "\x1b[48;2;33;38;45m\x1b[38;2;121;192;255;1m");
         }
     } else {
         // === 菜单项单独配置 (Item Detail) View ===
         int item_idx = g_settings_nav - 1;
-        pos += snprintf(out + pos, bs - pos, "\x1b[3;%dH\x1b[38;2;210;153;34;1m■ 菜单项详细配置: [%d] %s\x1b[0m",
+        pos += snprintf(out + pos, bs - pos, "\x1b[3;%dH\x1b[38;2;121;192;255;1m■ 菜单项详细配置: [%d] %s\x1b[0m",
                         main_left, item_idx + 1, g_chooser_items[item_idx].name);
 
         int input_w = right_max_w - 4;
@@ -3018,7 +3026,8 @@ static void render_settings_panel(char *out, int bs, int *posp, int host_rows, i
 
         // Field 0: 显示名称
         int f0_sel = (g_settings_field == 0);
-        const char *f0_bg = f0_sel ? "\x1b[48;2;50;60;80m" : "\x1b[48;2;22;27;34m";
+        int f0_hover = (g_mouse_y == 5 && g_mouse_x >= main_left && g_mouse_x <= main_left + input_w + 3);
+        const char *f0_bg = f0_sel ? "\x1b[48;2;38;60;88m" : (f0_hover ? "\x1b[48;2;33;38;45m" : "\x1b[48;2;22;27;34m");
         pos += snprintf(out + pos, bs - pos, "\x1b[5;%dH\x1b[38;2;230;237;243;1m1. 显示名称 (Display Name):\x1b[0m", main_left);
         pos += snprintf(out + pos, bs - pos, "\x1b[6;%dH\x1b[48;2;33;38;45m│\x1b[0m%s ", main_left, f0_bg);
         render_scrollable_input(out, bs, &pos, g_edit_name, g_edit_name_len, g_edit_name_pos, input_w, f0_bg, NULL);
@@ -3026,7 +3035,8 @@ static void render_settings_panel(char *out, int bs, int *posp, int host_rows, i
 
         // Field 1: 启动命令行
         int f1_sel = (g_settings_field == 1);
-        const char *f1_bg = f1_sel ? "\x1b[48;2;50;60;80m" : "\x1b[48;2;22;27;34m";
+        int f1_hover = (g_mouse_y == 8 && g_mouse_x >= main_left && g_mouse_x <= main_left + input_w + 3);
+        const char *f1_bg = f1_sel ? "\x1b[48;2;38;60;88m" : (f1_hover ? "\x1b[48;2;33;38;45m" : "\x1b[48;2;22;27;34m");
         pos += snprintf(out + pos, bs - pos, "\x1b[8;%dH\x1b[38;2;230;237;243;1m2. 启动命令行 (Command Line):\x1b[0m", main_left);
         pos += snprintf(out + pos, bs - pos, "\x1b[9;%dH\x1b[48;2;33;38;45m│\x1b[0m%s ", main_left, f1_bg);
         render_scrollable_input(out, bs, &pos, g_edit_cmd, g_edit_cmd_len, g_edit_cmd_pos, input_w, f1_bg, NULL);
@@ -3034,7 +3044,8 @@ static void render_settings_panel(char *out, int bs, int *posp, int host_rows, i
 
         // Field 2: 启动目录
         int f2_sel = (g_settings_field == 2);
-        const char *f2_bg = f2_sel ? "\x1b[48;2;50;60;80m" : "\x1b[48;2;22;27;34m";
+        int f2_hover = (g_mouse_y == 11 && g_mouse_x >= main_left && g_mouse_x <= main_left + input_w + 3);
+        const char *f2_bg = f2_sel ? "\x1b[48;2;38;60;88m" : (f2_hover ? "\x1b[48;2;33;38;45m" : "\x1b[48;2;22;27;34m");
         pos += snprintf(out + pos, bs - pos, "\x1b[11;%dH\x1b[38;2;230;237;243;1m3. 启动目录 (Working Directory) \x1b[38;2;139;148;158m[留空为当前目录，支持 %%USERPROFILE%%]:\x1b[0m", main_left);
         pos += snprintf(out + pos, bs - pos, "\x1b[12;%dH\x1b[48;2;33;38;45m│\x1b[0m%s ", main_left, f2_bg);
         render_scrollable_input(out, bs, &pos, g_edit_dir, g_edit_dir_len, g_edit_dir_pos, input_w, f2_bg, NULL);
@@ -3047,11 +3058,11 @@ static void render_settings_panel(char *out, int bs, int *posp, int host_rows, i
         int h_del = (g_mouse_y == act_r - 1 && g_mouse_x >= main_left + 38 && g_mouse_x <= main_left + 50);
 
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH", act_r, main_left);
-        pos += snprintf(out + pos, bs - pos, "%s [保存并应用此项] \x1b[0m  ", h_apply ? "\x1b[48;2;45;135;255m\x1b[38;2;255;255;255;1m" : "\x1b[48;2;31;111;235m\x1b[38;2;255;255;255;1m");
-        pos += snprintf(out + pos, bs - pos, "%s [从预设库导入] \x1b[0m  ", h_imp ? "\x1b[48;2;45;165;85m\x1b[38;2;255;255;255;1m" : "\x1b[48;2;31;136;61m\x1b[38;2;255;255;255;1m");
-        pos += snprintf(out + pos, bs - pos, "%s [删除此项] \x1b[0m", h_del ? "\x1b[48;2;255;60;60m\x1b[38;2;255;255;255;1m" : "\x1b[48;2;248;81;73m\x1b[38;2;255;255;255;1m");
+        pos += snprintf(out + pos, bs - pos, "%s [保存并应用此项] \x1b[0m  ", h_apply ? "\x1b[48;2;121;192;255m\x1b[38;2;13;17;23;1m" : "\x1b[48;2;33;38;45m\x1b[38;2;121;192;255;1m");
+        pos += snprintf(out + pos, bs - pos, "%s [从预设库导入] \x1b[0m  ", h_imp ? "\x1b[48;2;63;185;80m\x1b[38;2;13;17;23;1m" : "\x1b[48;2;33;38;45m\x1b[38;2;63;185;80;1m");
+        pos += snprintf(out + pos, bs - pos, "%s [删除此项] \x1b[0m", h_del ? "\x1b[48;2;248;81;73m\x1b[38;2;255;255;255;1m" : "\x1b[48;2;33;38;45m\x1b[38;2;248;81;73;1m");
 
-        pos += snprintf(out + pos, bs - pos, "\x1b[16;%dH\x1b[38;2;139;148;158m提示: 点击输入框或按 Tab 切换，输入后按 Enter 保存，Ctrl+S 保存所有配置\x1b[0m", main_left);
+        pos += snprintf(out + pos, bs - pos, "\x1b[16;%dH\x1b[38;2;139;148;158m提示: 点击输入框或按 Tab 切换，输入后按 Enter 保存，左下角 [Ctrl+S] 保存所有配置\x1b[0m", main_left);
     }
 
     if (g_settings_show_presets) {
@@ -3446,7 +3457,7 @@ static unsigned __stdcall pane_read_thread(void *arg) {
 // mouse wheel). Termux renders it itself - no cmd process involved.
 static const char *const g_help_lines[] = {
     "\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m termux - 帮助",
-    "\x1b[38;2;139;148;158m  版本 v1.4.0 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
+    "\x1b[38;2;139;148;158m  版本 v1.4.2 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
     "",
     "\x1b[38;2;121;192;255;1m  键盘快捷键\x1b[0m",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mc\x1b[0m         新建默认 pane",
@@ -3573,6 +3584,7 @@ static int create_about_pane(void) {
     pane->screen.pane_index = idx;
     pane->screen.in_alt_screen = 1;
     pane->active = 1;
+    pane->is_about = 1;
     pane->color = 7; // Orange color for About tab
     strcpy(pane->title, "关于");
     strcpy(pane->full_title, "关于 termux (About)");
@@ -3591,7 +3603,7 @@ static int create_about_pane(void) {
         "  \x1b[38;2;217;119;54;1mWindows 终端复用器 (Terminal Multiplexer)\x1b[0m\r\n"
         "  \x1b[38;2;139;148;158m基于 Windows ConPTY 的高性能单文件 C 终端复用多标签环境\x1b[0m\r\n\r\n"
         "  \x1b[38;2;48;54;61m────────────────────────────────────────────────────────────\x1b[0m\r\n"
-        "  \x1b[38;2;217;119;54;1m■ 版本号 (Version)      :\x1b[0m \x1b[38;2;230;237;243;1mv1.4.0\x1b[0m\r\n"
+        "  \x1b[38;2;217;119;54;1m■ 版本号 (Version)      :\x1b[0m \x1b[38;2;230;237;243;1mv1.4.2\x1b[0m\r\n"
         "  \x1b[38;2;217;119;54;1m■ 作  者 (Author)       :\x1b[0m \x1b[38;2;63;185;80;1mwu_dream813\x1b[0m\r\n"
         "  \x1b[38;2;217;119;54;1m■ 系统版本 (OS Version) :\x1b[0m \x1b[38;2;230;237;243m%s\x1b[0m\r\n"
         "  \x1b[38;2;48;54;61m────────────────────────────────────────────────────────────\x1b[0m\r\n\r\n"
@@ -3796,7 +3808,7 @@ static int open_settings_pane(void) {
     pane->screen.in_alt_screen = 1;
     pane->active = 1;
     pane->is_settings = 1;
-    pane->color = 4; // Purple color for Settings tab
+    pane->color = 6; // Light blue color for Settings tab (v1.4.1)
     strcpy(pane->title, "设置");
     strcpy(pane->full_title, "termux - 设置 (Settings)");
 
@@ -4267,11 +4279,6 @@ static void handle_settings_mouse(MOUSE_EVENT_RECORD *me) {
                     g_mux.needs_redraw = 1;
                     return;
                 }
-                if (c >= main_left + 36 && c <= main_left + 54) {
-                    save_config();
-                    g_mux.needs_redraw = 1;
-                    return;
-                }
             }
         } else {
             // --- 菜单项详细配置 (Item Detail) View ---
@@ -4328,13 +4335,16 @@ static void handle_prefix(WORD vk, DWORD ctrl) {
         case 'X': case 'x': { int c = g_mux.active_pane, n = find_next_active_pane(c); close_pane(c); if (n >= 0 && g_mux.panes[n].active) switch_pane(n); else { int f = 0; for (int i = 0; i < g_mux.pane_count; i++) if (g_mux.panes[i].active) { switch_pane(i); f = 1; break; } if (!f) g_mux.running = 0; } break; }
         case 'D': case 'd': g_mux.running = 0; break;
         case 'T': case 't': {
-            if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count) {
-                int c = g_mux.panes[g_mux.active_pane].color;
-                c += (vk == 'T') ? -1 : 1;
-                if (c > 8) c = 1;
-                if (c < 1) c = 8;
-                g_mux.panes[g_mux.active_pane].color = c;
-                g_mux.needs_redraw = 1;
+            if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
+                // v1.4.1: About and Settings tabs cannot cycle color
+                if (!g_mux.panes[g_mux.active_pane].is_about && !g_mux.panes[g_mux.active_pane].is_settings) {
+                    int c = g_mux.panes[g_mux.active_pane].color;
+                    c += (vk == 'T') ? -1 : 1;
+                    if (c > 8) c = 1;
+                    if (c < 1) c = 8;
+                    g_mux.panes[g_mux.active_pane].color = c;
+                    g_mux.needs_redraw = 1;
+                }
             }
             break;
         }
@@ -4420,13 +4430,15 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
         }
         if (vk == VK_RETURN) {
             if (g_mux.ctx_pane >= 0 && g_mux.ctx_pane < g_mux.pane_count && g_mux.rename_len > 0) {
-                g_mux.rename_buf[g_mux.rename_len] = 0;
-                if (g_mux.rename_len > 63) g_mux.rename_len = 63;
-                memcpy(g_mux.panes[g_mux.ctx_pane].title, g_mux.rename_buf, g_mux.rename_len);
-                g_mux.panes[g_mux.ctx_pane].title[g_mux.rename_len] = 0;
-                strncpy(g_mux.panes[g_mux.ctx_pane].full_title, g_mux.rename_buf, sizeof(g_mux.panes[g_mux.ctx_pane].full_title) - 1);
-                g_mux.panes[g_mux.ctx_pane].full_title[sizeof(g_mux.panes[g_mux.ctx_pane].full_title) - 1] = 0;
-                if (g_mux.ctx_pane == g_mux.active_pane) update_host_title();
+                if (!g_mux.panes[g_mux.ctx_pane].is_about && !g_mux.panes[g_mux.ctx_pane].is_settings) {
+                    g_mux.rename_buf[g_mux.rename_len] = 0;
+                    if (g_mux.rename_len > 63) g_mux.rename_len = 63;
+                    memcpy(g_mux.panes[g_mux.ctx_pane].title, g_mux.rename_buf, g_mux.rename_len);
+                    g_mux.panes[g_mux.ctx_pane].title[g_mux.rename_len] = 0;
+                    strncpy(g_mux.panes[g_mux.ctx_pane].full_title, g_mux.rename_buf, sizeof(g_mux.panes[g_mux.ctx_pane].full_title) - 1);
+                    g_mux.panes[g_mux.ctx_pane].full_title[sizeof(g_mux.panes[g_mux.ctx_pane].full_title) - 1] = 0;
+                    if (g_mux.ctx_pane == g_mux.active_pane) update_host_title();
+                }
             }
             g_mux.rename_mode = 0;
             g_mux.needs_redraw = 1;
@@ -4611,8 +4623,10 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
         // empty/0 even for plain digit keys, making keyboard selection dead.
         if ((uc >= '1' && uc <= '8') || (vk >= '1' && vk <= '8')) {
             int ci = (uc >= '1' && uc <= '8') ? (uc - '0') : (vk - '0');
-            if (g_mux.ctx_pane >= 0 && g_mux.ctx_pane < g_mux.pane_count)
-                g_mux.panes[g_mux.ctx_pane].color = ci;
+            if (g_mux.ctx_pane >= 0 && g_mux.ctx_pane < g_mux.pane_count) {
+                if (!g_mux.panes[g_mux.ctx_pane].is_about && !g_mux.panes[g_mux.ctx_pane].is_settings)
+                    g_mux.panes[g_mux.ctx_pane].color = ci;
+            }
             g_mux.ctx_mode = 0;
             g_mux.needs_redraw = 1;
             return;
@@ -4964,7 +4978,13 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                 sb_fade_active = 1;
             }
         }
+        int in_settings_pane = 0;
+        if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count &&
+            g_mux.panes[g_mux.active_pane].active && g_mux.panes[g_mux.active_pane].is_settings) {
+            in_settings_pane = 1;
+        }
         if (now_in || (prev_in && !now_in) || sb_fade_active || g_sb_dragging ||
+            in_settings_pane ||
             g_mux.chooser_mode || g_mux.ctx_mode || g_mux.rename_mode || g_mux.custom_cmd_mode)
             g_mux.needs_redraw = 1;
         g_mouse_prev_in_tabbar = now_in;
@@ -5076,14 +5096,17 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                 // v8.33: right click on a real tab opens the context menu
                 if (mbtn == 2) {
                     if (t->pane_idx >= 0 && t->pane_idx < g_mux.pane_count && g_mux.panes[t->pane_idx].active) {
-                        // v8.46: close any other popup first (mutual exclusion)
-                        g_mux.chooser_mode = 0;
-                        g_mux.rename_mode = 0;
-                        g_mux.custom_cmd_mode = 0;
-                        g_mux.ctx_mode = 1;
-                        g_mux.ctx_pane = t->pane_idx;
-                        g_pop_anchor_x = mx;   // v8.45: lock position
-                        g_mux.needs_redraw = 1;
+                        // v1.4.1: About and Settings tabs cannot be renamed or color changed
+                        if (!g_mux.panes[t->pane_idx].is_about && !g_mux.panes[t->pane_idx].is_settings) {
+                            // v8.46: close any other popup first (mutual exclusion)
+                            g_mux.chooser_mode = 0;
+                            g_mux.rename_mode = 0;
+                            g_mux.custom_cmd_mode = 0;
+                            g_mux.ctx_mode = 1;
+                            g_mux.ctx_pane = t->pane_idx;
+                            g_pop_anchor_x = mx;   // v8.45: lock position
+                            g_mux.needs_redraw = 1;
+                        }
                     }
                     return;
                 }
@@ -5173,7 +5196,8 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                     }
                     if (swatch >= 1 && swatch <= 8) {
                         if (g_mux.ctx_pane >= 0 && g_mux.ctx_pane < g_mux.pane_count) {
-                            g_mux.panes[g_mux.ctx_pane].color = swatch;
+                            if (!g_mux.panes[g_mux.ctx_pane].is_about && !g_mux.panes[g_mux.ctx_pane].is_settings)
+                                g_mux.panes[g_mux.ctx_pane].color = swatch;
                         }
                         g_mux.ctx_mode = 0;
                         g_mux.needs_redraw = 1;

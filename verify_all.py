@@ -13,6 +13,7 @@ CHECKS = (
     "verify_color8.py",
     "verify_emoji.py",
     "verify_v140.py",
+    "verify_v142.py",
 )
 
 
