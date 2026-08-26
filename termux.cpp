@@ -1,4 +1,4 @@
-// termux.cpp - Windows Terminal Multiplexer v1.3.2
+// termux.cpp - Windows Terminal Multiplexer v1.3.3
 // ---------------------------------------------------------------------------
 // v8.3 changes:
 //  19. ConPTY line-width autodetect: legacy full-screen apps (edit.com...) can
@@ -3191,7 +3191,7 @@ static void render_screen(void) {
         int text_rc = rc;
 
         int popup_open = (g_mux.settings_mode || g_mux.chooser_mode || g_mux.ctx_mode || g_mux.rename_mode || g_mux.custom_cmd_mode);
-        int dist = (popup_open) ? 99 : ((g_sb_dragging) ? 0 : ((g_mouse_y >= 1 && g_mouse_x >= 0) ? ((g_mux.host_cols - 1) - g_mouse_x) : 99));
+        int dist = (popup_open) ? 99 : ((g_mouse_y >= 1 && g_mouse_x >= 0) ? ((g_mux.host_cols - 1) - g_mouse_x) : 99);
         if (dist < 0) dist = 0;
         int is_hover = (!popup_open && dist == 0 && (g_mouse_y >= 1 || g_sb_dragging));
         int mouse_on_thumb = 0;
@@ -3200,9 +3200,9 @@ static void render_screen(void) {
             if (my_row >= sb_top && my_row < sb_bot) {
                 mouse_on_thumb = 1;
             }
-        }
-        if (g_sb_dragging) {
-            mouse_on_thumb = 1;
+            if (g_sb_dragging) {
+                mouse_on_thumb = 1;
+            }
         }
 
         for (int y = 0; y < rr; y++) {
@@ -3468,7 +3468,7 @@ static unsigned __stdcall pane_read_thread(void *arg) {
 // mouse wheel). Termux renders it itself - no cmd process involved.
 static const char *const g_help_lines[] = {
     "\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m termux - 帮助",
-    "\x1b[38;2;139;148;158m  版本 v1.3.2 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
+    "\x1b[38;2;139;148;158m  版本 v1.3.3 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
     "",
     "\x1b[38;2;121;192;255;1m  键盘快捷键\x1b[0m",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mc\x1b[0m         新建默认 pane",
@@ -3613,7 +3613,7 @@ static int create_about_pane(void) {
         "  \x1b[38;2;217;119;54;1mWindows 终端复用器 (Terminal Multiplexer)\x1b[0m\r\n"
         "  \x1b[38;2;139;148;158m基于 Windows ConPTY 的高性能单文件 C 终端复用多标签环境\x1b[0m\r\n\r\n"
         "  \x1b[38;2;48;54;61m────────────────────────────────────────────────────────────\x1b[0m\r\n"
-        "  \x1b[38;2;217;119;54;1m■ 版本号 (Version)      :\x1b[0m \x1b[38;2;230;237;243;1mv1.3.2\x1b[0m\r\n"
+        "  \x1b[38;2;217;119;54;1m■ 版本号 (Version)      :\x1b[0m \x1b[38;2;230;237;243;1mv1.3.3\x1b[0m\r\n"
         "  \x1b[38;2;217;119;54;1m■ 作  者 (Author)       :\x1b[0m \x1b[38;2;63;185;80;1mwu_dream813\x1b[0m\r\n"
         "  \x1b[38;2;217;119;54;1m■ 系统版本 (OS Version) :\x1b[0m \x1b[38;2;230;237;243m%s\x1b[0m\r\n"
         "  \x1b[38;2;48;54;61m────────────────────────────────────────────────────────────\x1b[0m\r\n\r\n"
@@ -4775,11 +4775,11 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
         int sb_fade_active = 0;
         if (!popup_open && g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
             Pane *p = &g_mux.panes[g_mux.active_pane];
-            if (!p->screen.in_alt_screen && (my >= 1 || prev_in == 0)) {
+            if (!p->screen.in_alt_screen && (my >= 1 || prev_in == 0 || g_sb_dragging)) {
                 sb_fade_active = 1;
             }
         }
-        if (now_in || (prev_in && !now_in) || sb_fade_active ||
+        if (now_in || (prev_in && !now_in) || sb_fade_active || g_sb_dragging ||
             g_mux.chooser_mode || g_mux.ctx_mode || g_mux.rename_mode || g_mux.custom_cmd_mode || g_mux.settings_mode)
             g_mux.needs_redraw = 1;
         g_mouse_prev_in_tabbar = now_in;
