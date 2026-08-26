@@ -7,10 +7,11 @@
 ## 版本更新记录
 
 ### v1.3.1
-- **修复 Alt-Screen 运行程序（nano / vim / less）渲染滚动条 Bug**：
+- **精准隔离 Alt-Screen 运行程序（nano / vim / less）的滚动条展示**：
+  - 明确滚动条渲染边界：普通命令行会话（cmd / PowerShell / bash）中滚动条始终正常渲染且常驻可见；仅当子程序处于 Alt-Screen 全屏模式（nano / vim / less）时，当前 Pane 自动隐藏滚动条。
   - 完善 Alt-Screen 状态机的全套进入与退出控制指令捕获（`DECSET/DECRST 1049/1047/47` 及无前缀 `h/l` 兜底兼容）。
-  - 进入 Alt-Screen 时强制清零历史滚动偏移量（`scroll_offset = 0`），全面屏蔽 Alt-Screen 模式下的滚动条渲染、百分比进度徽标渲染以及鼠标滚轮滚动冲突。
-  - 独立关于标签页（About Panel）同步以 Alt-Screen 规范模式运行，彻底消除全屏应用与静态独立面板上的多余滚动条。
+  - 进入 Alt-Screen 时强制清零历史滚动偏移量（`scroll_offset = 0`），退出 Alt-Screen 时即刻恢复主屏滚动条与视口。
+  - 独立关于标签页（About Panel）同步以 Alt-Screen 规范模式运行，不展示多余滚动条。
 
 ### v1.3.0
 - **直接在 Alt-Screen 渲染与零闪烁启动**：
