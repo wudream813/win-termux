@@ -1,4 +1,4 @@
-// termux.cpp - Windows Terminal Multiplexer v1.3.0
+// termux.cpp - Windows Terminal Multiplexer v1.3.1
 // ---------------------------------------------------------------------------
 // v8.3 changes:
 //  19. ConPTY line-width autodetect: legacy full-screen apps (edit.com...) can
@@ -1689,18 +1689,20 @@ static void execute_csi(ScreenBuffer *s, char final, char prefix, const char *pa
                                 if (s->alt_fg_rgb) { s->alt_fg_rgb[j] = RGB565_WHITE; s->alt_bg_rgb[j] = RGB565_BLACK; s->alt_rgb_valid[j] = 0; }
                             }
                         }
+                        { int pi = s->pane_index; if (pi >= 0 && pi < MAX_PANES) g_mux.panes[pi].scroll_offset = 0; }
                         break;
                     case 1049:
+                        s->saved_cx = s->cursor_x; s->saved_cy = s->cursor_y;
                         if (!s->in_alt_screen) {
-                            s->saved_cx = s->cursor_x; s->saved_cy = s->cursor_y;
                             s->in_alt_screen = 1; s->alt_scroll_top = s->scroll_top;
                             s->alt_hist_lines = s->hist_lines;   // v8.16: preserve scrollback
-                            for (int j = 0; j < s->rows * s->cols; j++) {
-                                s->alt_buffer[j].Char.UnicodeChar = L' '; s->alt_buffer[j].Attributes = s->current_attr;
-                                if (s->alt_fg_rgb) { s->alt_fg_rgb[j] = RGB565_WHITE; s->alt_bg_rgb[j] = RGB565_BLACK; s->alt_rgb_valid[j] = 0; }
-                            }
-                            s->cursor_x = s->cursor_y = 0;
                         }
+                        for (int j = 0; j < s->rows * s->cols; j++) {
+                            s->alt_buffer[j].Char.UnicodeChar = L' '; s->alt_buffer[j].Attributes = s->current_attr;
+                            if (s->alt_fg_rgb) { s->alt_fg_rgb[j] = RGB565_WHITE; s->alt_bg_rgb[j] = RGB565_BLACK; s->alt_rgb_valid[j] = 0; }
+                        }
+                        s->cursor_x = s->cursor_y = 0;
+                        { int pi = s->pane_index; if (pi >= 0 && pi < MAX_PANES) g_mux.panes[pi].scroll_offset = 0; }
                         break;
                     case 1048: s->saved_cx = s->cursor_x; s->saved_cy = s->cursor_y; break;   // v8: save cursor
                     case 1000: case 1002: case 1003: s->mouse_tracking = params[i]; break;
@@ -1859,6 +1861,35 @@ static void execute_csi(ScreenBuffer *s, char final, char prefix, const char *pa
             }
             break;
         case 'g': if (p1 == 0 && s->cursor_x < 512) s->tab_stops[s->cursor_x] = 0; else if (p1 == 3) memset(s->tab_stops, 0, sizeof(s->tab_stops)); break;
+        case 'h':
+            for (int i = 0; i < pc; i++) {
+                if (params[i] == 47 || params[i] == 1047 || params[i] == 1049) {
+                    if (!s->in_alt_screen) {
+                        s->saved_cx = s->cursor_x; s->saved_cy = s->cursor_y;
+                        s->in_alt_screen = 1; s->alt_scroll_top = s->scroll_top;
+                        s->alt_hist_lines = s->hist_lines;
+                    }
+                    for (int j = 0; j < s->rows * s->cols; j++) {
+                        s->alt_buffer[j].Char.UnicodeChar = L' '; s->alt_buffer[j].Attributes = s->current_attr;
+                        if (s->alt_fg_rgb) { s->alt_fg_rgb[j] = RGB565_WHITE; s->alt_bg_rgb[j] = RGB565_BLACK; s->alt_rgb_valid[j] = 0; }
+                    }
+                    if (params[i] == 1049) s->cursor_x = s->cursor_y = 0;
+                    { int pi = s->pane_index; if (pi >= 0 && pi < MAX_PANES) g_mux.panes[pi].scroll_offset = 0; }
+                }
+            }
+            break;
+        case 'l':
+            for (int i = 0; i < pc; i++) {
+                if (params[i] == 47 || params[i] == 1047 || params[i] == 1049) {
+                    if (s->in_alt_screen) {
+                        s->in_alt_screen = 0; s->scroll_top = s->alt_scroll_top;
+                        s->hist_lines = s->alt_hist_lines;
+                        if (params[i] == 1049) { s->cursor_x = s->saved_cx; s->cursor_y = s->saved_cy; }
+                        { int pi2 = s->pane_index; if (pi2 >= 0 && pi2 < MAX_PANES && g_mux.panes[pi2].scroll_offset > s->hist_lines) g_mux.panes[pi2].scroll_offset = s->hist_lines; }
+                    }
+                }
+            }
+            break;
     }
 }
 
@@ -3247,7 +3278,7 @@ static void render_screen(void) {
         for (int y = rr; y < g_mux.host_rows && pos < bs - 64; y++)
             pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[0m\x1b[K", y + 2);
 
-        if (vo > 0) { int pct = s->hist_lines > 0 ? (vo * 100 / s->hist_lines) : 0; pos += snprintf(out + pos, bs - pos, "\x1b[2;%dH\x1b[0;30;43m[%d%%]\x1b[0m", g_mux.host_cols - 10, pct); }
+        if (vo > 0 && !s->in_alt_screen) { int pct = s->hist_lines > 0 ? (vo * 100 / s->hist_lines) : 0; pos += snprintf(out + pos, bs - pos, "\x1b[2;%dH\x1b[0;30;43m[%d%%]\x1b[0m", g_mux.host_cols - 10, pct); }
     } else {
         for (int y = 0; y < g_mux.host_rows && pos < bs - 64; y++)
             pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[0m\x1b[K", y + 2);
@@ -3431,7 +3462,7 @@ static unsigned __stdcall pane_read_thread(void *arg) {
 // mouse wheel). Termux renders it itself - no cmd process involved.
 static const char *const g_help_lines[] = {
     "\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m termux - 帮助",
-    "\x1b[38;2;139;148;158m  版本 v1.3.0 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
+    "\x1b[38;2;139;148;158m  版本 v1.3.1 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
     "",
     "\x1b[38;2;121;192;255;1m  键盘快捷键\x1b[0m",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mc\x1b[0m         新建默认 pane",
@@ -3556,6 +3587,7 @@ static int create_about_pane(void) {
     int pane_cols = g_mux.host_cols > 1 ? g_mux.host_cols - 1 : 1;
     if (!screen_init(&pane->screen, pane_cols, g_mux.host_rows)) return -1;
     pane->screen.pane_index = idx;
+    pane->screen.in_alt_screen = 1;
     pane->active = 1;
     pane->color = 7; // Orange color for About tab
     strcpy(pane->title, "关于");
@@ -3568,14 +3600,14 @@ static int create_about_pane(void) {
 
     char about_buf[2048];
     int len = snprintf(about_buf, sizeof(about_buf),
-        "\x1b[?25l\r\n"
+        "\x1b[?1049h\x1b[?25l\r\n"
         "  \x1b[38;2;255;255;255m\x1b[48;2;217;119;54;1m ╔══════════════════════════════════════════════════════════╗ \x1b[0m\r\n"
         "  \x1b[38;2;255;255;255m\x1b[48;2;217;119;54;1m ║                  termux - 关于 (About)                   ║ \x1b[0m\r\n"
         "  \x1b[38;2;255;255;255m\x1b[48;2;217;119;54;1m ╚══════════════════════════════════════════════════════════╝ \x1b[0m\r\n\r\n"
         "  \x1b[38;2;217;119;54;1mWindows 终端复用器 (Terminal Multiplexer)\x1b[0m\r\n"
         "  \x1b[38;2;139;148;158m基于 Windows ConPTY 的高性能单文件 C 终端复用多标签环境\x1b[0m\r\n\r\n"
         "  \x1b[38;2;48;54;61m────────────────────────────────────────────────────────────\x1b[0m\r\n"
-        "  \x1b[38;2;217;119;54;1m■ 版本号 (Version)      :\x1b[0m \x1b[38;2;230;237;243;1mv1.3.0\x1b[0m\r\n"
+        "  \x1b[38;2;217;119;54;1m■ 版本号 (Version)      :\x1b[0m \x1b[38;2;230;237;243;1mv1.3.1\x1b[0m\r\n"
         "  \x1b[38;2;217;119;54;1m■ 作  者 (Author)       :\x1b[0m \x1b[38;2;63;185;80;1mwu_dream813\x1b[0m\r\n"
         "  \x1b[38;2;217;119;54;1m■ 系统版本 (OS Version) :\x1b[0m \x1b[38;2;230;237;243m%s\x1b[0m\r\n"
         "  \x1b[38;2;48;54;61m────────────────────────────────────────────────────────────\x1b[0m\r\n\r\n"

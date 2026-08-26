@@ -6,6 +6,12 @@
 
 ## 版本更新记录
 
+### v1.3.1
+- **修复 Alt-Screen 运行程序（nano / vim / less）渲染滚动条 Bug**：
+  - 完善 Alt-Screen 状态机的全套进入与退出控制指令捕获（`DECSET/DECRST 1049/1047/47` 及无前缀 `h/l` 兜底兼容）。
+  - 进入 Alt-Screen 时强制清零历史滚动偏移量（`scroll_offset = 0`），全面屏蔽 Alt-Screen 模式下的滚动条渲染、百分比进度徽标渲染以及鼠标滚轮滚动冲突。
+  - 独立关于标签页（About Panel）同步以 Alt-Screen 规范模式运行，彻底消除全屏应用与静态独立面板上的多余滚动条。
+
 ### v1.3.0
 - **直接在 Alt-Screen 渲染与零闪烁启动**：
   - 启动阶段完全移除旧版控制台启动文字与 Splash 文本输出，程序直接切换进入 Alt-Screen（`\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[2J\x1b[H\x1b[?25l`）并即刻执行全量 TUI 界面首次渲染。
