@@ -295,6 +295,9 @@ static char g_current_host_title[128] = {0};
 static int g_hover_preview_pane = -1;
 static DWORD64 g_hover_preview_start = 0;
 static int g_hover_preview_active = 0;
+static int g_hover_chooser_idx = -1;
+static DWORD64 g_hover_chooser_start = 0;
+static int g_hover_chooser_active = 0;
 static int g_hover_settings_name_idx = -1;
 static DWORD64 g_hover_settings_name_start = 0;
 static int g_hover_settings_name_active = 0;
@@ -930,18 +933,54 @@ static void format_name_display(char *dst, int dst_max, const char *src) {
     dst[out_pos] = 0;
 }
 
-// v1.2.7: nano-style horizontal scrolling input field with < and > overflow indicators
+// v1.2.8: format chooser display name - max 15 display columns, if longer truncate to <=12 cols + "..."
+static void format_name15_display(char *dst, int dst_max, const char *src) {
+    if (!src || !*src) {
+        dst[0] = 0;
+        return;
+    }
+    int src_len = (int)strlen(src);
+    int total_cols = utf8_cols(src, src_len);
+    if (total_cols <= 15) {
+        snprintf(dst, dst_max, "%s", src);
+        return;
+    }
+
+    int cur_cols = 0;
+    int i = 0;
+    int out_pos = 0;
+    while (i < src_len && out_pos < dst_max - 4) {
+        int adv = 0;
+        unsigned int cp = utf8_decode_cp(src + i, src_len - i, &adv);
+        int w = is_zero_width_cp(cp) ? 0 : (is_wide_cp(cp) ? 2 : 1);
+        if (cur_cols + w > 12) break;
+        for (int k = 0; k < adv && out_pos < dst_max - 4; k++) {
+            dst[out_pos++] = src[i + k];
+        }
+        cur_cols += w;
+        i += adv;
+    }
+    dst[out_pos++] = '.';
+    dst[out_pos++] = '.';
+    dst[out_pos++] = '.';
+    dst[out_pos] = 0;
+}
+
+// v1.2.7/v1.2.8: nano-style horizontal scrolling input field with < and > overflow indicators
 static void render_scrollable_input(char *out, int bs, int *posp,
                                    const char *buf, int len, int cursor_byte_pos,
-                                   int vis_width, int *cursor_screen_offset) {
+                                   int vis_width, const char *bg_sgr, int *cursor_screen_offset) {
     int pos = *posp;
     int cursor_col = utf8_cols(buf, cursor_byte_pos);
     int total_cols = utf8_cols(buf, len);
+    const char *bg = (bg_sgr && bg_sgr[0]) ? bg_sgr : "";
 
     if (total_cols <= vis_width) {
-        pos += snprintf(out + pos, bs - pos, "\x1b[38;2;230;237;243m%s\x1b[0m", buf);
+        pos += snprintf(out + pos, bs - pos, "%s\x1b[38;2;230;237;243m", bg);
+        for (int p = 0; p < len && pos < bs - 8; p++) out[pos++] = buf[p];
         int used = total_cols;
         while (used < vis_width && pos < bs - 8) { out[pos++] = ' '; used++; }
+        pos += snprintf(out + pos, bs - pos, "\x1b[0m");
         if (cursor_screen_offset) *cursor_screen_offset = cursor_col;
         *posp = pos;
         return;
@@ -961,7 +1000,7 @@ static void render_scrollable_input(char *out, int bs, int *posp,
 
     int text_slots = vis_width;
     if (has_left) {
-        pos += snprintf(out + pos, bs - pos, "\x1b[38;2;210;153;34;1m<\x1b[0m");
+        pos += snprintf(out + pos, bs - pos, "%s\x1b[38;2;210;153;34;1m<\x1b[22m", bg);
         text_slots--;
     }
     if (has_right) {
@@ -992,7 +1031,7 @@ static void render_scrollable_input(char *out, int bs, int *posp,
 
     int rendered_cols = 0;
     p = start_byte;
-    pos += snprintf(out + pos, bs - pos, "\x1b[38;2;230;237;243m");
+    pos += snprintf(out + pos, bs - pos, "%s\x1b[38;2;230;237;243m", bg);
     while (p < end_byte && pos < bs - 16) {
         int adv = 0;
         unsigned int cp = utf8_decode_cp(buf + p, end_byte - p, &adv);
@@ -1001,7 +1040,6 @@ static void render_scrollable_input(char *out, int bs, int *posp,
         rendered_cols += w;
         p += adv;
     }
-    pos += snprintf(out + pos, bs - pos, "\x1b[0m");
 
     while (rendered_cols < text_slots && pos < bs - 8) {
         out[pos++] = ' ';
@@ -1009,8 +1047,9 @@ static void render_scrollable_input(char *out, int bs, int *posp,
     }
 
     if (has_right) {
-        pos += snprintf(out + pos, bs - pos, "\x1b[38;2;210;153;34;1m>\x1b[0m");
+        pos += snprintf(out + pos, bs - pos, "%s\x1b[38;2;210;153;34;1m>\x1b[22m", bg);
     }
+    pos += snprintf(out + pos, bs - pos, "\x1b[0m");
 
     int cx_offset = cursor_col - scroll_col + (has_left ? 1 : 0);
     if (cx_offset < (has_left ? 1 : 0)) cx_offset = (has_left ? 1 : 0);
@@ -2462,15 +2501,15 @@ static void draw_tab_bar(char *out, int bs, int *posp) {
 
 static void chooser_geom(int host_rows, int host_cols, int *top, int *left, int *w, int *h) {
     (void)host_rows;
-    int cw = 26;
+    int max_nw = 0;
     for (int i = 0; i < g_chooser_item_count; i++) {
-        int nw = utf8_cols(g_chooser_items[i].name, (int)strlen(g_chooser_items[i].name)) + 12;
-        if (nw > cw) cw = nw;
+        int nw = utf8_cols(g_chooser_items[i].name, (int)strlen(g_chooser_items[i].name));
+        if (nw > 15) nw = 15;
+        if (nw > max_nw) max_nw = nw;
     }
-    int about_w = 20;
-    if (about_w > cw) cw = about_w;
+    int cw = max_nw + 10;
+    if (cw < 22) cw = 22;   // ensure About line fits cleanly
     if (cw > host_cols) cw = host_cols;
-    if (cw < 26) cw = 26;
     int ch = g_chooser_item_count + 4;   // header + items + about + esc + bottom
 
     if (w) *w = cw;
@@ -2498,9 +2537,11 @@ static void render_chooser(char *out, int bs, int *posp, int host_rows, int host
     // Items
     for (int i = 0; i < g_chooser_item_count; i++) {
         int r = top + 1 + i;
+        char disp_name[64] = {0};
+        format_name15_display(disp_name, sizeof(disp_name), g_chooser_items[i].name);
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m[%d]\x1b[0m \x1b[38;2;230;237;243m%s\x1b[0m",
-                        r, left, i + 1, g_chooser_items[i].name);
-        int item_used = 1 + 2 + 3 + 1 + utf8_cols(g_chooser_items[i].name, (int)strlen(g_chooser_items[i].name));
+                        r, left, i + 1, disp_name);
+        int item_used = 1 + 2 + 3 + 1 + utf8_cols(disp_name, (int)strlen(disp_name));
         while (item_used < cw - 1 && pos < bs - 8) { out[pos++] = ' '; item_used++; }
         pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
     }
@@ -2529,6 +2570,20 @@ static void render_chooser(char *out, int bs, int *posp, int host_rows, int host
     }
     pos += snprintf(out + pos, bs - pos, "┘\x1b[0m");
 
+    // v1.2.8: Floating tooltip preview for long chooser item names (hovering for 1.0s)
+    if (g_hover_chooser_active && g_hover_chooser_idx >= 0 && g_hover_chooser_idx < g_chooser_item_count) {
+        const char *full_name = g_chooser_items[g_hover_chooser_idx].name;
+        int tcols = utf8_cols(full_name, (int)strlen(full_name));
+        int tw = tcols + 14;
+        if (tw > host_cols) tw = host_cols;
+        int tleft = left + 6;
+        if (tleft + tw > host_cols) tleft = host_cols - tw;
+        if (tleft < 0) tleft = 0;
+        int tooltip_r = top + 1 + g_hover_chooser_idx + 1;
+        if (tooltip_r > host_rows) tooltip_r = top + 1 + g_hover_chooser_idx - 1;
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m\x1b[38;2;121;192;255;1m [完整名称] \x1b[38;2;255;255;255;1m%s \x1b[0m", tooltip_r, tleft + 1, full_name);
+    }
+
     *posp = pos;
 }
 
@@ -2544,7 +2599,7 @@ static void render_custom_cmd_box(char *out, int bs, int *posp, int host_rows, i
     if (left < 0) left = 0;
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m┌─ 自定义命令行 ─────────────────────┐\x1b[0m", top, left);
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m ", top + 1, left);
-    render_scrollable_input(out, bs, &pos, g_mux.custom_cmd_buf, g_mux.custom_cmd_len, g_mux.custom_cmd_pos, CMD_BOX_W - 3, NULL);
+    render_scrollable_input(out, bs, &pos, g_mux.custom_cmd_buf, g_mux.custom_cmd_len, g_mux.custom_cmd_pos, CMD_BOX_W - 3, "", NULL);
     pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m└────────────────────────────────────┘\x1b[0m", top + 2, left);
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[30;43m[Enter=启动 Esc=取消]\x1b[0m", top + 3, left);
@@ -2563,7 +2618,7 @@ static void render_rename_box(char *out, int bs, int *posp, int host_rows, int h
     if (left < 0) left = 0;
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m┌─ 新标题 ───────────────────┐\x1b[0m", top, left);
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m ", top + 1, left);
-    render_scrollable_input(out, bs, &pos, g_mux.rename_buf, g_mux.rename_len, g_mux.rename_pos, RENAME_W - 3, NULL);
+    render_scrollable_input(out, bs, &pos, g_mux.rename_buf, g_mux.rename_len, g_mux.rename_pos, RENAME_W - 3, "", NULL);
     pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m└────────────────────────────┘\x1b[0m", top + 2, left);
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[30;43m[Enter=确认 Esc=取消]\x1b[0m", top + 3, left);
@@ -2866,14 +2921,14 @@ static void render_settings_edit_dialog(char *out, int bs, int *posp, int host_r
     int f0_sel = (g_mux.settings_edit_field == 0);
     const char *f0_bg = f0_sel ? "\x1b[48;2;50;60;80m" : "\x1b[48;2;22;27;34m";
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m名称: \x1b[0m%s ", top + 1, left, f0_bg);
-    render_scrollable_input(out, bs, &pos, g_mux.settings_edit_name, g_mux.settings_edit_name_len, g_mux.settings_edit_name_pos, ew - 12, NULL);
+    render_scrollable_input(out, bs, &pos, g_mux.settings_edit_name, g_mux.settings_edit_name_len, g_mux.settings_edit_name_pos, ew - 12, f0_bg, NULL);
     pos += snprintf(out + pos, bs - pos, " \x1b[0m\x1b[48;2;33;38;45m│\x1b[0m");
 
     // Field 1: 命令
     int f1_sel = (g_mux.settings_edit_field == 1);
     const char *f1_bg = f1_sel ? "\x1b[48;2;50;60;80m" : "\x1b[48;2;22;27;34m";
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m命令: \x1b[0m%s ", top + 2, left, f1_bg);
-    render_scrollable_input(out, bs, &pos, g_mux.settings_edit_cmd, g_mux.settings_edit_cmd_len, g_mux.settings_edit_cmd_pos, ew - 12, NULL);
+    render_scrollable_input(out, bs, &pos, g_mux.settings_edit_cmd, g_mux.settings_edit_cmd_len, g_mux.settings_edit_cmd_pos, ew - 12, f1_bg, NULL);
     pos += snprintf(out + pos, bs - pos, " \x1b[0m\x1b[48;2;33;38;45m│\x1b[0m");
 
     // Tips: [Tab] 切换输入行
@@ -3792,10 +3847,12 @@ static void handle_prefix(WORD vk, DWORD ctrl) {
 }
 
 static void handle_key(KEY_EVENT_RECORD *ke) {
-    // v1.2.7: Any key event immediately dismisses active hover tooltips
-    if (g_hover_preview_active || g_hover_settings_name_active || g_hover_settings_cmd_active) {
+    // v1.2.7/v1.2.8: Any key event immediately dismisses active hover tooltips
+    if (g_hover_preview_active || g_hover_chooser_active || g_hover_settings_name_active || g_hover_settings_cmd_active) {
         g_hover_preview_active = 0;
         g_hover_preview_pane = -1;
+        g_hover_chooser_active = 0;
+        g_hover_chooser_idx = -1;
         g_hover_settings_name_active = 0;
         g_hover_settings_name_idx = -1;
         g_hover_settings_cmd_active = 0;
@@ -4616,6 +4673,26 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
             g_hover_settings_cmd_active = 0;
         }
 
+        // v1.2.8: chooser item hover preview tracking (hovering for 1s)
+        int hover_chooser_idx = -1;
+        if (g_mux.chooser_mode == 1) {
+            int top, left, cw, ch;
+            chooser_geom(g_mux.host_rows, g_mux.host_cols, &top, &left, &cw, &ch);
+            int r = my + 1, c = mx + 1;
+            for (int i = 0; i < g_chooser_item_count; i++) {
+                if (r == top + 1 + i && c >= left && c < left + cw) {
+                    hover_chooser_idx = i;
+                    break;
+                }
+            }
+        }
+        if (hover_chooser_idx != g_hover_chooser_idx) {
+            if (g_hover_chooser_active) g_mux.needs_redraw = 1;
+            g_hover_chooser_idx = hover_chooser_idx;
+            g_hover_chooser_start = (hover_chooser_idx >= 0) ? GetTickCount64() : 0;
+            g_hover_chooser_active = 0;
+        }
+
         // v8.35: redraw on EVERY move while on the tab bar (hover highlight
         // follows the pointer cell-by-cell), plus once when leaving it (so the
         // highlight clears). Moving elsewhere doesn't redraw.
@@ -5310,6 +5387,22 @@ static void handle_input(void) {
         if (g_hover_preview_pane >= 0 && !g_hover_preview_active) {
             if (GetTickCount64() - g_hover_preview_start >= 1500) {
                 g_hover_preview_active = 1;
+                g_mux.needs_redraw = 1;
+            }
+        }
+
+        // v1.2.8: chooser item hover preview 1.0s timer check
+        if (g_hover_chooser_idx >= 0 && !g_hover_chooser_active) {
+            if (GetTickCount64() - g_hover_chooser_start >= 1000) {
+                g_hover_chooser_active = 1;
+                g_mux.needs_redraw = 1;
+            }
+        }
+
+        // v1.2.7: settings name hover preview 1.0s timer check
+        if (g_hover_settings_name_idx >= 0 && !g_hover_settings_name_active) {
+            if (GetTickCount64() - g_hover_settings_name_start >= 1000) {
+                g_hover_settings_name_active = 1;
                 g_mux.needs_redraw = 1;
             }
         }
