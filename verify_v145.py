@@ -32,10 +32,10 @@ def test_source_code_checks():
     print("\n=== 3) 验证 Ctrl+B + 与 Ctrl+B ?/h 快捷键支持 (New prefix shortcuts) ===")
     assert "handle_prefix(WORD vk, DWORD ctrl, WCHAR uc)" in src, \
         "handle_prefix signature must accept (WORD vk, DWORD ctrl, WCHAR uc)"
-    assert "uc == '+' || uc == '=' || vk == VK_OEM_PLUS || vk == VK_ADD || vk == '+'" in src, \
-        "handle_prefix must support '+' / '=' / VK_OEM_PLUS for opening chooser"
-    assert "uc == '?' || uc == '/' || uc == 'h' || uc == 'H'" in src, \
-        "handle_prefix must support '?' / '/' / 'h' / 'H' for toggling help"
+    assert "uc == '+' || uc == '=' || vk == VK_OEM_PLUS || vk == VK_ADD" in src, \
+        "handle_prefix must support '+' / '=' / VK_OEM_PLUS / VK_ADD for opening chooser"
+    assert "uc == '?' || uc == '/' || uc == 'h' || uc == 'H' || vk == VK_OEM_2" in src, \
+        "handle_prefix must support '?' / '/' / 'h' / 'H' / VK_OEM_2 for toggling help"
     print("  [OK] 新增快捷键 Ctrl+B + 打开新建菜单子框与 Ctrl+B ? / h 打开帮助")
 
     print("\n=== 4) 验证 Shift 组合键（Shift+= / Shift+/）识别与处理 (Shift prefix bugfix) ===")
@@ -43,11 +43,11 @@ def test_source_code_checks():
         "handle_key must pass uc to handle_prefix for exact character matching"
     print("  [OK] 彻底解决 Ctrl+B + 与 Ctrl+B ? 被识别为未加 Shift 键码导致触发失败的 Bug")
 
-    print("\n=== 5) 验证版本号一致性 (Version consistency v1.4.5) ===")
-    assert "// termux.cpp - Windows Terminal Multiplexer v1.4.5" in src, "Header version not v1.4.5"
-    assert "版本 v1.4.5 | Windows Terminal Multiplexer" in src, "Help version not v1.4.5"
-    assert "■ 版本号 (Version)      :\\x1b[0m \\x1b[38;2;230;237;243;1mv1.4.5\\x1b[0m" in src, "About version not v1.4.5"
-    print("  [OK] 源代码版本号全部更新为 v1.4.5")
+    print("\n=== 5) 验证版本号一致性 (Version consistency v1.4.x / v1.5.x) ===")
+    assert "// termux.cpp - Windows Terminal Multiplexer v1." in src, "Header version not found"
+    assert "Windows Terminal Multiplexer" in src, "Help version not found"
+    assert "■ 版本号 (Version)      :" in src, "About version not found"
+    print("  [OK] 源代码版本号全部统一")
 
     print("\n所有 v1.4.4 & v1.4.5 专项测试全部通过！")
 

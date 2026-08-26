@@ -1,0 +1,17 @@
+name: build
+on: [push, pull_request]
+jobs:
+  mingw:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+      - run: x86_64-w64-mingw32-gcc -O2 -Wall -x c -o termux.exe termux.cpp -luser32
+      - run: x86_64-w64-mingw32-g++ -O2 -Wall -o termux_cpp.exe termux.cpp -luser32
+      - run: python3 verify_all.py
+  msvc:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - run: cl /O2 termux.cpp /link user32.lib

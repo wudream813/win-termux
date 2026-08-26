@@ -47,11 +47,11 @@ def test_source_code_checks():
     assert "cur_dir" in src, "CreateProcessW must pass cur_dir"
     print("  [OK] 支持单独配置显示名称、启动命令及工作目录并在创建进程时生效")
 
-    print("\n=== 5) 验证版本号一致性 (Version consistency v1.4.x) ===")
-    assert "// termux.cpp - Windows Terminal Multiplexer v1.4" in src, "Header version not v1.4"
+    print("\n=== 5) 验证版本号一致性 (Version consistency) ===")
+    assert "// termux.cpp - Windows Terminal Multiplexer v1." in src, "Header version not found"
     assert "Windows Terminal Multiplexer" in src, "Help version not found"
     assert "■ 版本号 (Version)      :" in src, "About version not found"
-    print("  [OK] 源代码版本号全部更新为 v1.4.x")
+    print("  [OK] 源代码版本号全部统一")
 
     print("\n所有 v1.4.0 专项测试全部通过！")
 

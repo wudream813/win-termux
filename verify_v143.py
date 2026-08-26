@@ -49,11 +49,11 @@ def test_source_code_checks():
     assert "VK_ESCAPE" in src, "Escape must be handled for returning/exiting"
     print("  [OK] 设置面板全面支持 100% 全键盘无障碍操作（单选切换、表格选择、快捷调序、编辑详情、新建、预设选择、字段切换、配置保存与退出）")
 
-    print("\n=== 5) 验证版本号一致性 (Version consistency v1.4.x) ===")
-    assert "// termux.cpp - Windows Terminal Multiplexer v1.4" in src, "Header version not v1.4"
+    print("\n=== 5) 验证版本号一致性 (Version consistency) ===")
+    assert "// termux.cpp - Windows Terminal Multiplexer v1." in src, "Header version not found"
     assert "Windows Terminal Multiplexer" in src, "Help version not found"
     assert "■ 版本号 (Version)      :" in src, "About version not found"
-    print("  [OK] 源代码版本号全部更新为 v1.4.x")
+    print("  [OK] 源代码版本号全部统一")
 
     print("\n所有 v1.4.3 专项测试全部通过！")
 

@@ -60,11 +60,11 @@ def test_source_code_checks():
         f"Expected exactly 1 button in sidebar bottom (1 code + 1 comment), found {len(btn_matches)}"
     print("  [OK] 启动视图右侧主区域底部的重复 [Ctrl+S] 保存配置按钮已成功移除，保留左侧底栏唯一全局保存")
 
-    print("\n=== 5) 验证版本号一致性 (Version consistency v1.4.x) ===")
-    assert "// termux.cpp - Windows Terminal Multiplexer v1.4" in src, "Header version not v1.4"
+    print("\n=== 5) 验证版本号一致性 (Version consistency) ===")
+    assert "// termux.cpp - Windows Terminal Multiplexer v1." in src, "Header version not found"
     assert "Windows Terminal Multiplexer" in src, "Help version not found"
     assert "■ 版本号 (Version)      :" in src, "About version not found"
-    print("  [OK] 源代码版本号全部更新为 v1.4.x")
+    print("  [OK] 源代码版本号全部统一")
 
     print("\n所有 v1.4.1 & v1.4.2 专项测试全部通过！")
 

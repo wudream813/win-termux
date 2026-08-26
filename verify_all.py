@@ -16,6 +16,7 @@ CHECKS = (
     "verify_v142.py",
     "verify_v143.py",
     "verify_v145.py",
+    "verify_v150.py",
 )
 
 

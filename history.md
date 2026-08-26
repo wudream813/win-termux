@@ -6,6 +6,21 @@
 
 ## 版本更新记录
 
+### v1.5.0
+- **修复 MSVC / C++ 模式下编译失败 Bug（P0）**：
+  - 修复了 `create_pane_shell_with_dir()` 中 `goto` 跳转跨越带初始化的变量声明（`exp_dir`、`cur_dir`）导致 MSVC `cl` 及 C++ 编译器报错的缺陷。
+  - 将变量声明前置至首个跳转前，实现 MinGW GCC（C 模式）、G++ 及 MSVC 100% 双模式零警告零错误构建。
+- **根除前缀键与小键盘/功能键冲突 Bug（P1）**：
+  - 移除了 `handle_prefix` 中无效且与小键盘冲突的 lowercase 分支（如 `case 'd'` 误触小键盘 4 直接退出、`case 'p'` 误触 F1 切换 pane 等）。
+  - 新增对小键盘数字键（`VK_NUMPAD0` ~ `VK_NUMPAD9`）切换 Pane 的原生支持。
+  - 清理 `handle_prefix` 中的死代码（`vk == '+'`、`vk == '?'` 等非有效虚拟键码）。
+- **版本号收敛至单一宏定义（P2）**：
+  - 新增 `#define TERMUX_VERSION "1.5.0"` 单一数据源，关于视图、帮助视图及标头版本号统一宏引用，消除跨文件硬编码与自锁风险。
+- **全面引入 GitHub Actions 自动化 CI 构建（P2）**：
+  - 新增 `.github/workflows/build.yml` 工作流，覆盖 Ubuntu MinGW（C / C++ 双编译 + `verify_all.py`）与 Windows MSVC 自动化构建验证。
+- **字符串与内存安全加固（P3）**：
+  - 将配置初始化、标题设定等路径中的 `strcpy` 全量替换为带边界截断保护的 `snprintf`。
+
 ### v1.4.5
 - **修复前缀快捷键 Shift 组合键（`Ctrl+B +` 与 `Ctrl+B ?`）识别失效 Bug**：
   - 将 `handle_prefix` 升级为支持 `(WORD vk, DWORD ctrl, WCHAR uc)` 全量字符识别。

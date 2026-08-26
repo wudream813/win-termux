@@ -1,4 +1,4 @@
-// termux.cpp - Windows Terminal Multiplexer v1.4.5
+// termux.cpp - Windows Terminal Multiplexer v1.5.0
 // ---------------------------------------------------------------------------
 // v8.3 changes:
 //  19. ConPTY line-width autodetect: legacy full-screen apps (edit.com...) can
@@ -114,8 +114,8 @@
 #pragma comment(lib, "user32.lib")
 #endif
 
-#ifndef GIT_COMMIT_HASH
-#define GIT_COMMIT_HASH "5455b97"
+#ifndef TERMUX_VERSION
+#define TERMUX_VERSION "1.5.0"
 #endif
 
 #define MAX_PANES         16
@@ -347,16 +347,16 @@ static const int g_preset_count = (int)(sizeof(g_presets) / sizeof(g_presets[0])
 static void init_default_config(void) {
     g_default_startup = 0;
     g_chooser_item_count = 3;
-    strcpy(g_chooser_items[0].name, "cmd");
-    strcpy(g_chooser_items[0].cmd, "cmd.exe");
+    snprintf(g_chooser_items[0].name, sizeof(g_chooser_items[0].name), "cmd");
+    snprintf(g_chooser_items[0].cmd, sizeof(g_chooser_items[0].cmd), "cmd.exe");
     g_chooser_items[0].workdir[0] = 0;
 
-    strcpy(g_chooser_items[1].name, "PowerShell");
-    strcpy(g_chooser_items[1].cmd, "powershell.exe");
+    snprintf(g_chooser_items[1].name, sizeof(g_chooser_items[1].name), "PowerShell");
+    snprintf(g_chooser_items[1].cmd, sizeof(g_chooser_items[1].cmd), "powershell.exe");
     g_chooser_items[1].workdir[0] = 0;
 
-    strcpy(g_chooser_items[2].name, "自定义命令行");
-    strcpy(g_chooser_items[2].cmd, ":custom");
+    snprintf(g_chooser_items[2].name, sizeof(g_chooser_items[2].name), "自定义命令行");
+    snprintf(g_chooser_items[2].cmd, sizeof(g_chooser_items[2].cmd), ":custom");
     g_chooser_items[2].workdir[0] = 0;
 }
 
@@ -420,7 +420,8 @@ static void load_config(void) {
         char *name = val;
         char *cmd = comma1 + 1;
         while (*cmd == ' ' || *cmd == '\t') cmd++;
-        char *workdir = "";
+        char default_workdir[1] = {0};
+        char *workdir = default_workdir;
         char *comma2 = strchr(cmd, ',');
         if (comma2) {
             *comma2 = 0;
@@ -3467,7 +3468,7 @@ static unsigned __stdcall pane_read_thread(void *arg) {
 // mouse wheel). Termux renders it itself - no cmd process involved.
 static const char *const g_help_lines[] = {
     "\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m termux - 帮助",
-    "\x1b[38;2;139;148;158m  版本 v1.4.5 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
+    "\x1b[38;2;139;148;158m  版本 v" TERMUX_VERSION " | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
     "",
     "\x1b[38;2;121;192;255;1m  键盘快捷键\x1b[0m",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mc\x1b[0m         新建默认 pane",
@@ -3598,8 +3599,8 @@ static int create_about_pane(void) {
     pane->active = 1;
     pane->is_about = 1;
     pane->color = 7; // Orange color for About tab
-    strcpy(pane->title, "关于");
-    strcpy(pane->full_title, "关于 termux (About)");
+    snprintf(pane->title, sizeof(pane->title), "关于");
+    snprintf(pane->full_title, sizeof(pane->full_title), "关于 termux (About)");
 
     if (idx >= g_mux.pane_count) g_mux.pane_count = idx + 1;
 
@@ -3615,7 +3616,7 @@ static int create_about_pane(void) {
         "  \x1b[38;2;217;119;54;1mWindows 终端复用器 (Terminal Multiplexer)\x1b[0m\r\n"
         "  \x1b[38;2;139;148;158m基于 Windows ConPTY 的高性能单文件 C 终端复用多标签环境\x1b[0m\r\n\r\n"
         "  \x1b[38;2;48;54;61m────────────────────────────────────────────────────────────\x1b[0m\r\n"
-        "  \x1b[38;2;217;119;54;1m■ 版本号 (Version)      :\x1b[0m \x1b[38;2;230;237;243;1mv1.4.5\x1b[0m\r\n"
+        "  \x1b[38;2;217;119;54;1m■ 版本号 (Version)      :\x1b[0m \x1b[38;2;230;237;243;1mv" TERMUX_VERSION "\x1b[0m\r\n"
         "  \x1b[38;2;217;119;54;1m■ 作  者 (Author)       :\x1b[0m \x1b[38;2;63;185;80;1mwu_dream813\x1b[0m\r\n"
         "  \x1b[38;2;217;119;54;1m■ 系统版本 (OS Version) :\x1b[0m \x1b[38;2;230;237;243m%s\x1b[0m\r\n"
         "  \x1b[38;2;48;54;61m────────────────────────────────────────────────────────────\x1b[0m\r\n\r\n"
@@ -3651,6 +3652,8 @@ static int create_pane_shell_with_dir(const WCHAR *shell, const WCHAR *workdir) 
     SIZE_T as = 0;
     PROCESS_INFORMATION pi = {0};
     WCHAR cmdline[256] = {0};
+    WCHAR exp_dir[MAX_PATH] = {0};
+    LPCWSTR cur_dir = NULL;
     BOOL created = FALSE;
     si.StartupInfo.cb = sizeof(si);
 
@@ -3670,11 +3673,10 @@ static int create_pane_shell_with_dir(const WCHAR *shell, const WCHAR *workdir) 
     }
 
     wcsncpy(cmdline, shell, 255); cmdline[255] = 0;
-    WCHAR exp_dir[MAX_PATH] = {0};
     if (workdir && *workdir) {
         ExpandEnvironmentStringsW(workdir, exp_dir, MAX_PATH - 1);
     }
-    LPCWSTR cur_dir = exp_dir[0] ? exp_dir : NULL;
+    cur_dir = exp_dir[0] ? exp_dir : NULL;
 
     created = CreateProcessW(NULL, cmdline, NULL, NULL, FALSE,
                              EXTENDED_STARTUPINFO_PRESENT, NULL, cur_dir,
@@ -3720,11 +3722,11 @@ static int create_pane_shell_with_dir(const WCHAR *shell, const WCHAR *workdir) 
     CloseHandle(po_w); po_w = NULL;
     pane->pipe_in = pi_w; pane->pipe_out = po_r; pane->process = pi.hProcess; pane->thread = pi.hThread; pane->active = 1;
     if (_wcsicmp(shell, L"powershell.exe") == 0 || _wcsicmp(shell, L"powershell") == 0) {
-        strcpy(pane->title, "PowerShell");
-        strcpy(pane->full_title, "powershell.exe");
+        snprintf(pane->title, sizeof(pane->title), "PowerShell");
+        snprintf(pane->full_title, sizeof(pane->full_title), "powershell.exe");
     } else if (_wcsicmp(shell, L"cmd.exe") == 0 || _wcsicmp(shell, L"cmd") == 0) {
-        strcpy(pane->title, "cmd");
-        strcpy(pane->full_title, "cmd.exe");
+        snprintf(pane->title, sizeof(pane->title), "cmd");
+        snprintf(pane->full_title, sizeof(pane->full_title), "cmd.exe");
     } else {
         char u8cmd[256] = {0};
         WideCharToMultiByte(CP_UTF8, 0, shell, -1, u8cmd, 255, NULL, NULL);
@@ -3821,8 +3823,8 @@ static int open_settings_pane(void) {
     pane->active = 1;
     pane->is_settings = 1;
     pane->color = 6; // Light blue color for Settings tab (v1.4.1)
-    strcpy(pane->title, "设置");
-    strcpy(pane->full_title, "termux - 设置 (Settings)");
+    snprintf(pane->title, sizeof(pane->title), "设置");
+    snprintf(pane->full_title, sizeof(pane->full_title), "termux - 设置 (Settings)");
 
     if (idx >= g_mux.pane_count) g_mux.pane_count = idx + 1;
 
@@ -4142,8 +4144,8 @@ static void handle_settings_key(KEY_EVENT_RECORD *ke) {
         if (uc == '+' || uc == '=' || uc == 'a' || uc == 'A' || uc == 'n' || uc == 'N') {
             if (g_chooser_item_count < MAX_CHOOSER_ITEMS) {
                 int idx = g_chooser_item_count++;
-                strcpy(g_chooser_items[idx].name, "新终端");
-                strcpy(g_chooser_items[idx].cmd, "cmd.exe");
+                snprintf(g_chooser_items[idx].name, sizeof(g_chooser_items[0].name), "新终端");
+                snprintf(g_chooser_items[idx].cmd, sizeof(g_chooser_items[0].cmd), "cmd.exe");
                 g_chooser_items[idx].workdir[0] = 0;
                 save_config();
                 g_settings_table_sel = idx;
@@ -4373,8 +4375,8 @@ static void handle_settings_mouse(MOUSE_EVENT_RECORD *me) {
         if (r == 7 + g_chooser_item_count) {
             if (g_chooser_item_count < MAX_CHOOSER_ITEMS) {
                 int idx = g_chooser_item_count++;
-                strcpy(g_chooser_items[idx].name, "新终端");
-                strcpy(g_chooser_items[idx].cmd, "cmd.exe");
+                snprintf(g_chooser_items[idx].name, sizeof(g_chooser_items[0].name), "新终端");
+                snprintf(g_chooser_items[idx].cmd, sizeof(g_chooser_items[0].cmd), "cmd.exe");
                 g_chooser_items[idx].workdir[0] = 0;
                 save_config();
                 g_settings_nav = idx + 1;
@@ -4481,8 +4483,8 @@ static void handle_settings_mouse(MOUSE_EVENT_RECORD *me) {
                 if (c >= main_left && c <= main_left + 16) {
                     if (g_chooser_item_count < MAX_CHOOSER_ITEMS) {
                         int idx = g_chooser_item_count++;
-                        strcpy(g_chooser_items[idx].name, "新终端");
-                        strcpy(g_chooser_items[idx].cmd, "cmd.exe");
+                        snprintf(g_chooser_items[idx].name, sizeof(g_chooser_items[0].name), "新终端");
+                        snprintf(g_chooser_items[idx].cmd, sizeof(g_chooser_items[0].cmd), "cmd.exe");
                         g_chooser_items[idx].workdir[0] = 0;
                         save_config();
                         g_settings_nav = idx + 1;
@@ -4548,7 +4550,7 @@ static void handle_prefix(WORD vk, DWORD ctrl, WCHAR uc) {
 
     // v1.4.4 / v1.4.5: Ctrl+B + (open [+] chooser submenu)
     // Matches uc == '+' or '=' (with or without Shift) or VK_OEM_PLUS or VK_ADD
-    if (uc == '+' || uc == '=' || vk == VK_OEM_PLUS || vk == VK_ADD || vk == '+') {
+    if (uc == '+' || uc == '=' || vk == VK_OEM_PLUS || vk == VK_ADD) {
         g_mux.ctx_mode = 0;
         g_mux.rename_mode = 0;
         g_mux.custom_cmd_mode = 0;
@@ -4566,8 +4568,8 @@ static void handle_prefix(WORD vk, DWORD ctrl, WCHAR uc) {
     }
 
     // v1.4.4 / v1.4.5: Ctrl+B ? or Ctrl+B h (open/close help view)
-    // Matches uc == '?' or '/' (with or without Shift) or 'h' / 'H' or VK_OEM_2 or VK_DIVIDE
-    if (uc == '?' || uc == '/' || uc == 'h' || uc == 'H' || vk == 'H' || vk == 'h' || vk == VK_OEM_2 || vk == VK_DIVIDE || vk == '?') {
+    // Matches uc == '?' or '/' or 'h' or 'H' or VK_OEM_2
+    if (uc == '?' || uc == '/' || uc == 'h' || uc == 'H' || vk == VK_OEM_2) {
         g_mux.help_mode = !g_mux.help_mode;
         if (!g_mux.help_mode) g_mux.help_scroll = 0;
         g_mux.chooser_mode = 0;
@@ -4579,12 +4581,12 @@ static void handle_prefix(WORD vk, DWORD ctrl, WCHAR uc) {
     }
 
     switch (vk) {
-        case 'C': case 'c': { int i = create_pane(); if (i >= 0) switch_pane(i); break; }
-        case 'N': case 'n': { int n = find_next_active_pane(g_mux.active_pane); if (n >= 0) switch_pane(n); break; }
-        case 'P': case 'p': { for (int i = 1; i <= g_mux.pane_count; i++) { int n = (g_mux.active_pane - i + g_mux.pane_count) % g_mux.pane_count; if (g_mux.panes[n].active) { switch_pane(n); break; } } break; }
-        case 'X': case 'x': { int c = g_mux.active_pane, n = find_next_active_pane(c); close_pane(c); if (n >= 0 && g_mux.panes[n].active) switch_pane(n); else { int f = 0; for (int i = 0; i < g_mux.pane_count; i++) if (g_mux.panes[i].active) { switch_pane(i); f = 1; break; } if (!f) g_mux.running = 0; } break; }
-        case 'D': case 'd': g_mux.running = 0; break;
-        case 'T': case 't': {
+        case 'C': { int i = create_pane(); if (i >= 0) switch_pane(i); break; }
+        case 'N': { int n = find_next_active_pane(g_mux.active_pane); if (n >= 0) switch_pane(n); break; }
+        case 'P': { for (int i = 1; i <= g_mux.pane_count; i++) { int n = (g_mux.active_pane - i + g_mux.pane_count) % g_mux.pane_count; if (g_mux.panes[n].active) { switch_pane(n); break; } } break; }
+        case 'X': { int c = g_mux.active_pane, n = find_next_active_pane(c); close_pane(c); if (n >= 0 && g_mux.panes[n].active) switch_pane(n); else { int f = 0; for (int i = 0; i < g_mux.pane_count; i++) if (g_mux.panes[i].active) { switch_pane(i); f = 1; break; } if (!f) g_mux.running = 0; } break; }
+        case 'D': g_mux.running = 0; break;
+        case 'T': {
             if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
                 // v1.4.1: About and Settings tabs cannot cycle color
                 if (!g_mux.panes[g_mux.active_pane].is_about && !g_mux.panes[g_mux.active_pane].is_settings) {
@@ -4598,7 +4600,7 @@ static void handle_prefix(WORD vk, DWORD ctrl, WCHAR uc) {
             }
             break;
         }
-        case 'S': case 's': {
+        case 'S': {
             g_mux.chooser_mode = 0;
             g_mux.ctx_mode = 0;
             g_mux.rename_mode = 0;
@@ -4608,7 +4610,10 @@ static void handle_prefix(WORD vk, DWORD ctrl, WCHAR uc) {
             g_mux.needs_redraw = 1;
             break;
         }
-        default: if (vk >= '0' && vk <= '9') { int i = vk - '0'; if (i < g_mux.pane_count && g_mux.panes[i].active) switch_pane(i); } break;
+        default:
+            if (vk >= '0' && vk <= '9') { int i = vk - '0'; if (i < g_mux.pane_count && g_mux.panes[i].active) switch_pane(i); }
+            else if (vk >= VK_NUMPAD0 && vk <= VK_NUMPAD9) { int i = vk - VK_NUMPAD0; if (i < g_mux.pane_count && g_mux.panes[i].active) switch_pane(i); }
+            break;
     }
 }
 
