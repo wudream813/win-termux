@@ -3259,27 +3259,23 @@ static void render_screen(void) {
                 else { out[pos++] = 0xE0 | (wc >> 12); out[pos++] = 0x80 | ((wc >> 6) & 0x3F); out[pos++] = 0x80 | (wc & 0x3F); }
                 if (pos > bs - 256) break;
             }
-            if (show_sb) {
+            if (show_sb && dist <= 10) {
                 pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH", y + 2, g_mux.host_cols);
-                if (dist > 10) {
-                    pos += snprintf(out + pos, bs - pos, "\x1b[0m ");
-                } else {
-                    int in_thumb = (y >= sb_top && y < sb_bot);
-                    if (in_thumb) {
-                        if (mouse_on_thumb) {
-                            pos += snprintf(out + pos, bs - pos, "\x1b[0;48;2;225;235;250m \x1b[0m");
-                        } else {
-                            pos += snprintf(out + pos, bs - pos, "\x1b[0;48;2;%d;%d;%dm \x1b[0m",
-                                            g_sb_grad[dist].thumb_r, g_sb_grad[dist].thumb_g, g_sb_grad[dist].thumb_b);
-                        }
+                int in_thumb = (y >= sb_top && y < sb_bot);
+                if (in_thumb) {
+                    if (mouse_on_thumb) {
+                        pos += snprintf(out + pos, bs - pos, "\x1b[0;48;2;225;235;250m \x1b[0m");
                     } else {
-                        pos += snprintf(out + pos, bs - pos, "\x1b[0;48;2;%d;%d;%dm\x1b[38;2;%d;%d;%dm│\x1b[0m",
-                                        g_sb_grad[dist].track_bg_r, g_sb_grad[dist].track_bg_g, g_sb_grad[dist].track_bg_b,
-                                        g_sb_grad[dist].track_fg_r, g_sb_grad[dist].track_fg_g, g_sb_grad[dist].track_fg_b);
+                        pos += snprintf(out + pos, bs - pos, "\x1b[0;48;2;%d;%d;%dm \x1b[0m",
+                                        g_sb_grad[dist].thumb_r, g_sb_grad[dist].thumb_g, g_sb_grad[dist].thumb_b);
                     }
+                } else {
+                    pos += snprintf(out + pos, bs - pos, "\x1b[0;48;2;%d;%d;%dm\x1b[38;2;%d;%d;%dm│\x1b[0m",
+                                    g_sb_grad[dist].track_bg_r, g_sb_grad[dist].track_bg_g, g_sb_grad[dist].track_bg_b,
+                                    g_sb_grad[dist].track_fg_r, g_sb_grad[dist].track_fg_g, g_sb_grad[dist].track_fg_b);
                 }
                 la_attr = 0xFFFF;
-            } else {
+            } else if (!show_sb) {
                 if (text_rc < g_mux.host_cols) pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[K");
             }
             if (pos > bs - 256) break;

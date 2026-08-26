@@ -7,11 +7,11 @@
 ## 版本更新记录
 
 ### v1.3.1
-- **Alt-Screen 全屏程序（nano / vim / less）直接扩展全宽并删除滚动条**：
-  - 明确并重构滚动条架构：Alt-Screen 模式直接比普通会话宽 1 格（`cols = host_cols`），彻底删除滚动条列（全宽铺满）而非留白隐藏。
-  - 在进入 Alt-Screen（`DECSET 1049/1047/47` 及无前缀 `h/l`）时动态扩容终端至 `host_cols`，并在退出 Alt-Screen（`DECRST`）时平滑恢复为 `host_cols - 1` + 滚动条。
-  - 进入 Alt-Screen 时强制清零历史滚动偏移量（`scroll_offset = 0`），全面屏蔽 Alt-Screen 模式下的滚动条渲染、百分比进度徽标以及鼠标滚轮滚动冲突。
-  - 独立关于标签页（About Panel）同步以规范的 Alt-Screen 全宽模式运行。
+- **原生全宽与无重排悬浮滚动条架构（彻底解决输入遮挡与空行冲突）**：
+  - **原生全宽分配**：ConPTY 与虚拟屏幕默认分配完整终端宽度（`cols = host_cols`），普通模式与 Alt-Screen 模式均享受完整的全宽列排版，彻底避免因列宽收缩导致的行尾输入与输出字符被截断或遮挡。
+  - **无重排悬浮滚动条（Overlay Scrollbar）**：普通模式下当鼠标远离滚动条（`dist > 10`）时，滚动条 100% 透明，最右侧第 `host_cols` 列的原生字符直接穿透无损渲染，用户输入文字与终端内容 100% 清晰可见；仅当鼠标靠近右侧（`dist <= 10`）时，滚动条以平滑 RGB 渐变悬浮覆盖。
+  - **零重排进出 Alt-Screen**：Alt-Screen 切换仅在虚拟屏幕层完成主屏/副屏无缝交替，彻底移除进出时对 `ResizePseudoConsole` 的调用，根除 ConPTY 触发终端尺寸重排注入 `\r\n` 导致 `nano && echo end` 出现多余空行的缺陷。
+  - **全屏程序删除滚动条**：Alt-Screen 模式（nano / vim / less）及独立关于面板直接独占全屏全宽，不渲染任何滚动条。
 
 ### v1.3.0
 - **直接在 Alt-Screen 渲染与零闪烁启动**：
