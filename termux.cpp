@@ -1,4 +1,4 @@
-// termux.cpp - Windows Terminal Multiplexer v1.2.4
+// termux.cpp - Windows Terminal Multiplexer v1.2.5
 // ---------------------------------------------------------------------------
 // v8.3 changes:
 //  19. ConPTY line-width autodetect: legacy full-screen apps (edit.com...) can
@@ -414,7 +414,7 @@ static void load_config(void) {
 static const ChooserItem g_presets[] = {
     {"cmd", "cmd.exe"},
     {"PowerShell", "powershell.exe"},
-    {"PowerShell (pwsh)", "pwsh.exe"},
+    {"Pwsh", "pwsh.exe"},
     {"WSL", "wsl.exe"},
     {"Git Bash", "bash.exe"},
     {"Python", "python -i"},
@@ -2894,22 +2894,28 @@ static void render_screen(void) {
         if (pane->scroll_offset > s->hist_lines) pane->scroll_offset = s->hist_lines;
         if (pane->scroll_offset < 0) pane->scroll_offset = 0;
         int vo = pane->scroll_offset, rr = s->rows < g_mux.host_rows ? s->rows : g_mux.host_rows, rc = s->cols < g_mux.host_cols ? s->cols : g_mux.host_cols;
-        int show_sb = (s->hist_lines > 0 && !s->in_alt_screen && g_mux.host_cols >= 10);
+        int show_sb = (!s->in_alt_screen && g_mux.host_cols >= 10);
         int sb_top = 0, sb_bot = 0;
         if (show_sb) {
             int hist = s->hist_lines;
-            int total = hist + rr;
-            int th = (rr * rr) / total;
-            if (th < 1) th = 1;
-            if (th >= rr) th = rr - 1;
-            int vtop = hist - vo;
-            int max_tpos = rr - th;
-            if (max_tpos <= 0) max_tpos = 1;
-            int tpos = (vtop * max_tpos + hist / 2) / hist;
-            if (tpos < 0) tpos = 0;
-            if (tpos + th > rr) tpos = rr - th;
-            sb_top = tpos;
-            sb_bot = tpos + th;
+            if (hist <= 0) {
+                // v1.2.5: when cannot scroll (hist_lines == 0), thumb is full track height (和轨道一样大)
+                sb_top = 0;
+                sb_bot = rr;
+            } else {
+                int total = hist + rr;
+                int th = (rr * rr) / total;
+                if (th < 1) th = 1;
+                if (th >= rr) th = rr - 1;
+                int vtop = hist - vo;
+                int max_tpos = rr - th;
+                if (max_tpos <= 0) max_tpos = 1;
+                int tpos = (vtop * max_tpos + hist / 2) / hist;
+                if (tpos < 0) tpos = 0;
+                if (tpos + th > rr) tpos = rr - th;
+                sb_top = tpos;
+                sb_bot = tpos + th;
+            }
         }
         int text_rc = (show_sb && rc >= g_mux.host_cols) ? (g_mux.host_cols - 1) : rc;
 
@@ -3179,7 +3185,7 @@ static unsigned __stdcall pane_read_thread(void *arg) {
 // mouse wheel). Termux renders it itself - no cmd process involved.
 static const char *const g_help_lines[] = {
     "\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m termux - 帮助",
-    "\x1b[38;2;139;148;158m  版本 v1.2.4 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
+    "\x1b[38;2;139;148;158m  版本 v1.2.5 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
     "",
     "\x1b[38;2;121;192;255;1m  键盘快捷键\x1b[0m",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mc\x1b[0m         新建默认 pane",
@@ -3323,7 +3329,7 @@ static int create_about_pane(void) {
         "  \x1b[38;2;217;119;54;1mWindows 终端复用器 (Terminal Multiplexer)\x1b[0m\r\n"
         "  \x1b[38;2;139;148;158m基于 Windows ConPTY 的高性能单文件 C 终端复用多标签环境\x1b[0m\r\n\r\n"
         "  \x1b[38;2;48;54;61m────────────────────────────────────────────────────────────\x1b[0m\r\n"
-        "  \x1b[38;2;217;119;54;1m■ 版本号 (Version)      :\x1b[0m \x1b[38;2;230;237;243;1mv1.2.4\x1b[0m\r\n"
+        "  \x1b[38;2;217;119;54;1m■ 版本号 (Version)      :\x1b[0m \x1b[38;2;230;237;243;1mv1.2.5\x1b[0m\r\n"
         "  \x1b[38;2;217;119;54;1m■ 作  者 (Author)       :\x1b[0m \x1b[38;2;63;185;80;1mwu_dream813\x1b[0m\r\n"
         "  \x1b[38;2;217;119;54;1m■ 系统版本 (OS Version) :\x1b[0m \x1b[38;2;230;237;243m%s\x1b[0m\r\n"
         "  \x1b[38;2;48;54;61m────────────────────────────────────────────────────────────\x1b[0m\r\n\r\n"
@@ -5187,7 +5193,7 @@ int main(void) {
     load_config();                               // load custom menu items from termux.ini
 
     host_printf("\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[2J\x1b[H");
-    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.2.4\x1b[0m\r\n");
+    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.2.5\x1b[0m\r\n");
     host_printf("  \x1b[33mhost: %dx%d\x1b[0m   (pane screen = host minus 1 tab bar row)\r\n\n", g_mux.host_cols, g_mux.host_rows);
     host_printf("  \x1b[33mCtrl+B\x1b[0m + c/n/p/x/d/0-9   (termux = 帮助)\r\n\n");
     host_printf("  \x1b[33m右键\x1b[0m 标签 = 改颜色、改标题\r\n\n");
