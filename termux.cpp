@@ -1,4 +1,4 @@
-// termux.cpp - Windows Terminal Multiplexer v1.2.6
+// termux.cpp - Windows Terminal Multiplexer v1.2.7
 // ---------------------------------------------------------------------------
 // v8.3 changes:
 //  19. ConPTY line-width autodetect: legacy full-screen apps (edit.com...) can
@@ -295,6 +295,9 @@ static char g_current_host_title[128] = {0};
 static int g_hover_preview_pane = -1;
 static DWORD64 g_hover_preview_start = 0;
 static int g_hover_preview_active = 0;
+static int g_hover_settings_name_idx = -1;
+static DWORD64 g_hover_settings_name_start = 0;
+static int g_hover_settings_name_active = 0;
 static int g_hover_settings_cmd_idx = -1;
 static DWORD64 g_hover_settings_cmd_start = 0;
 static int g_hover_settings_cmd_active = 0;
@@ -894,8 +897,148 @@ static void format_cmd_display(char *dst, int dst_max, const char *src) {
     dst[out_pos] = 0;
 }
 
-// ============================================================
-// Console helpers
+// v1.2.7: format settings display name - max 10 display columns, if longer truncate to <=7 cols + "..."
+static void format_name_display(char *dst, int dst_max, const char *src) {
+    if (!src || !*src) {
+        dst[0] = 0;
+        return;
+    }
+    int src_len = (int)strlen(src);
+    int total_cols = utf8_cols(src, src_len);
+    if (total_cols <= 10) {
+        snprintf(dst, dst_max, "%s", src);
+        return;
+    }
+
+    int cur_cols = 0;
+    int i = 0;
+    int out_pos = 0;
+    while (i < src_len && out_pos < dst_max - 4) {
+        int adv = 0;
+        unsigned int cp = utf8_decode_cp(src + i, src_len - i, &adv);
+        int w = is_zero_width_cp(cp) ? 0 : (is_wide_cp(cp) ? 2 : 1);
+        if (cur_cols + w > 7) break;
+        for (int k = 0; k < adv && out_pos < dst_max - 4; k++) {
+            dst[out_pos++] = src[i + k];
+        }
+        cur_cols += w;
+        i += adv;
+    }
+    dst[out_pos++] = '.';
+    dst[out_pos++] = '.';
+    dst[out_pos++] = '.';
+    dst[out_pos] = 0;
+}
+
+// v1.2.7: nano-style horizontal scrolling input field with < and > overflow indicators
+static void render_scrollable_input(char *out, int bs, int *posp,
+                                   const char *buf, int len, int cursor_byte_pos,
+                                   int vis_width, int *cursor_screen_offset) {
+    int pos = *posp;
+    int cursor_col = utf8_cols(buf, cursor_byte_pos);
+    int total_cols = utf8_cols(buf, len);
+
+    if (total_cols <= vis_width) {
+        pos += snprintf(out + pos, bs - pos, "\x1b[38;2;230;237;243m%s\x1b[0m", buf);
+        int used = total_cols;
+        while (used < vis_width && pos < bs - 8) { out[pos++] = ' '; used++; }
+        if (cursor_screen_offset) *cursor_screen_offset = cursor_col;
+        *posp = pos;
+        return;
+    }
+
+    int scroll_col = 0;
+    if (cursor_col >= vis_width - 2) {
+        scroll_col = cursor_col - (vis_width - 3);
+    }
+    if (scroll_col > total_cols - vis_width + 1) {
+        scroll_col = total_cols - vis_width + 1;
+    }
+    if (scroll_col < 0) scroll_col = 0;
+
+    int has_left = (scroll_col > 0);
+    int has_right = (scroll_col + vis_width - (has_left ? 1 : 0) < total_cols);
+
+    int text_slots = vis_width;
+    if (has_left) {
+        pos += snprintf(out + pos, bs - pos, "\x1b[38;2;210;153;34;1m<\x1b[0m");
+        text_slots--;
+    }
+    if (has_right) {
+        text_slots--;
+    }
+
+    int cur_c = 0;
+    int p = 0;
+    int start_byte = 0;
+    int end_byte = len;
+    int found_start = 0;
+
+    while (p < len) {
+        int adv = 0;
+        unsigned int cp = utf8_decode_cp(buf + p, len - p, &adv);
+        int w = is_zero_width_cp(cp) ? 0 : (is_wide_cp(cp) ? 2 : 1);
+        if (!found_start && cur_c >= scroll_col) {
+            start_byte = p;
+            found_start = 1;
+        }
+        if (found_start && cur_c + w > scroll_col + text_slots) {
+            end_byte = p;
+            break;
+        }
+        cur_c += w;
+        p += adv;
+    }
+
+    int rendered_cols = 0;
+    p = start_byte;
+    pos += snprintf(out + pos, bs - pos, "\x1b[38;2;230;237;243m");
+    while (p < end_byte && pos < bs - 16) {
+        int adv = 0;
+        unsigned int cp = utf8_decode_cp(buf + p, end_byte - p, &adv);
+        int w = is_zero_width_cp(cp) ? 0 : (is_wide_cp(cp) ? 2 : 1);
+        for (int k = 0; k < adv && pos < bs - 8; k++) out[pos++] = buf[p + k];
+        rendered_cols += w;
+        p += adv;
+    }
+    pos += snprintf(out + pos, bs - pos, "\x1b[0m");
+
+    while (rendered_cols < text_slots && pos < bs - 8) {
+        out[pos++] = ' ';
+        rendered_cols++;
+    }
+
+    if (has_right) {
+        pos += snprintf(out + pos, bs - pos, "\x1b[38;2;210;153;34;1m>\x1b[0m");
+    }
+
+    int cx_offset = cursor_col - scroll_col + (has_left ? 1 : 0);
+    if (cx_offset < (has_left ? 1 : 0)) cx_offset = (has_left ? 1 : 0);
+    if (cx_offset > vis_width - (has_right ? 1 : 0)) cx_offset = vis_width - (has_right ? 1 : 0);
+    if (cursor_screen_offset) *cursor_screen_offset = cx_offset;
+
+    *posp = pos;
+}
+
+static int get_input_screen_offset(const char *buf, int len, int cursor_byte_pos, int vis_width) {
+    int cursor_col = utf8_cols(buf, cursor_byte_pos);
+    int total_cols = utf8_cols(buf, len);
+    if (total_cols <= vis_width) return cursor_col;
+    int scroll_col = 0;
+    if (cursor_col >= vis_width - 2) {
+        scroll_col = cursor_col - (vis_width - 3);
+    }
+    if (scroll_col > total_cols - vis_width + 1) {
+        scroll_col = total_cols - vis_width + 1;
+    }
+    if (scroll_col < 0) scroll_col = 0;
+    int has_left = (scroll_col > 0);
+    int has_right = (scroll_col + vis_width - (has_left ? 1 : 0) < total_cols);
+    int cx = cursor_col - scroll_col + (has_left ? 1 : 0);
+    if (cx < (has_left ? 1 : 0)) cx = (has_left ? 1 : 0);
+    if (cx > vis_width - (has_right ? 1 : 0)) cx = vis_width - (has_right ? 1 : 0);
+    return cx;
+}
 // ============================================================
 static void host_write(const char *s, int len) {
     // WriteConsole may legally complete a short write. Keep advancing so a
@@ -2400,9 +2543,8 @@ static void render_custom_cmd_box(char *out, int bs, int *posp, int host_rows, i
     if (left + CMD_BOX_W > host_cols) left = ax - CMD_BOX_W;
     if (left < 0) left = 0;
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m┌─ 自定义命令行 ─────────────────────┐\x1b[0m", top, left);
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m \x1b[38;2;230;237;243m%s\x1b[0m", top + 1, left, g_mux.custom_cmd_buf);
-    int used = 2 + utf8_cols(g_mux.custom_cmd_buf, (int)strlen(g_mux.custom_cmd_buf));
-    while (used < CMD_BOX_W - 1 && pos < bs - 8) { out[pos++] = ' '; used++; }
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m ", top + 1, left);
+    render_scrollable_input(out, bs, &pos, g_mux.custom_cmd_buf, g_mux.custom_cmd_len, g_mux.custom_cmd_pos, CMD_BOX_W - 3, NULL);
     pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m└────────────────────────────────────┘\x1b[0m", top + 2, left);
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[30;43m[Enter=启动 Esc=取消]\x1b[0m", top + 3, left);
@@ -2420,13 +2562,8 @@ static void render_rename_box(char *out, int bs, int *posp, int host_rows, int h
     if (left + RENAME_W > host_cols) left = ax - RENAME_W;
     if (left < 0) left = 0;
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m┌─ 新标题 ───────────────────┐\x1b[0m", top, left);
-    // input row: │  + typed text + padding + │
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m \x1b[38;2;230;237;243m%s\x1b[0m", top + 1, left, g_mux.rename_buf);
-    // v8.50: pad by DISPLAY columns (utf8_cols), not bytes - CJK chars are 2
-    // cols but 3 bytes; using strlen made the right border drift left by 1 per
-    // CJK char.
-    int used = 2 + utf8_cols(g_mux.rename_buf, (int)strlen(g_mux.rename_buf));
-    while (used < RENAME_W - 1 && pos < bs - 8) { out[pos++] = ' '; used++; }
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m ", top + 1, left);
+    render_scrollable_input(out, bs, &pos, g_mux.rename_buf, g_mux.rename_len, g_mux.rename_pos, RENAME_W - 3, NULL);
     pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m└────────────────────────────┘\x1b[0m", top + 2, left);
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[30;43m[Enter=确认 Esc=取消]\x1b[0m", top + 3, left);
@@ -2502,7 +2639,7 @@ static void render_color_picker(char *out, int bs, int *posp, int host_rows, int
     *posp = pos;
 }
 
-#define SET_W 68
+#define SET_W 54
 static void settings_geom(int host_rows, int host_cols, int *top, int *left, int *w, int *h) {
     (void)host_rows;
     int sw = SET_W;
@@ -2532,16 +2669,16 @@ static void render_settings_main(char *out, int bs, int *posp, int host_rows, in
     }
     pos += snprintf(out + pos, bs - pos, "┐\x1b[0m");
 
-    // Subheader: │  【新建菜单项配置】 (Ctrl+↑/↓选 / ↑/↓排 / Enter改 / Ctrl+D删)    │
+    // Subheader: │  【新建菜单项配置】 (↑/↓选排 Enter改 Ctrl+D删)    │
     int r1 = top + 1;
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;121;192;255;1m【新建菜单项配置】\x1b[0m \x1b[38;2;139;148;158m(Ctrl+↑/↓选 / ↑/↓排 / Enter改 / Ctrl+D删)\x1b[0m", r1, left);
-    cols = 1 + 2 + utf8_cols("【新建菜单项配置】 (Ctrl+↑/↓选 / ↑/↓排 / Enter改 / Ctrl+D删)", (int)strlen("【新建菜单项配置】 (Ctrl+↑/↓选 / ↑/↓排 / Enter改 / Ctrl+D删)"));
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;121;192;255;1m【新建菜单项配置】\x1b[0m \x1b[38;2;139;148;158m(↑/↓选排 Enter改 Ctrl+D删)\x1b[0m", r1, left);
+    cols = 1 + 2 + utf8_cols("【新建菜单项配置】 (↑/↓选排 Enter改 Ctrl+D删)", (int)strlen("【新建菜单项配置】 (↑/↓选排 Enter改 Ctrl+D删)"));
     pad_to_right_border(out, bs, &pos, &cols, sw);
 
-    // Column headers: │   #   显示名称       启动命令行                 操作           │
+    // Column headers: │   #   显示名称    启动命令行       操作      │
     int r2 = top + 2;
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m   \x1b[38;2;210;153;34m#\x1b[0m   \x1b[38;2;230;237;243m显示名称       启动命令行                 操作\x1b[0m", r2, left);
-    cols = 1 + 3 + 1 + 3 + utf8_cols("显示名称       启动命令行                 操作", (int)strlen("显示名称       启动命令行                 操作"));
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m   \x1b[38;2;210;153;34m#\x1b[0m   \x1b[38;2;230;237;243m显示名称    启动命令行       操作\x1b[0m", r2, left);
+    cols = 1 + 3 + 1 + 3 + utf8_cols("显示名称    启动命令行       操作", (int)strlen("显示名称    启动命令行       操作"));
     pad_to_right_border(out, bs, &pos, &cols, sw);
 
     // Divider: │  ────────────────────────────────────────────────────────────  │
@@ -2559,24 +2696,27 @@ static void render_settings_main(char *out, int bs, int *posp, int host_rows, in
         int r = top + 4 + i;
         int is_sel = (i == g_mux.settings_sel);
         int row_hover = (g_mouse_y == r - 1);
-        int h_up = (row_hover && g_mouse_x >= left + 45 && g_mouse_x <= left + 47);
-        int h_dn = (row_hover && g_mouse_x >= left + 48 && g_mouse_x <= left + 50);
-        int h_ed = (row_hover && g_mouse_x >= left + 51 && g_mouse_x <= left + 54);
-        int h_del = (row_hover && g_mouse_x >= left + 55 && g_mouse_x <= left + 58);
+        int h_up = (row_hover && g_mouse_x >= left + 36 && g_mouse_x <= left + 38);
+        int h_dn = (row_hover && g_mouse_x >= left + 39 && g_mouse_x <= left + 41);
+        int h_ed = (row_hover && g_mouse_x >= left + 42 && g_mouse_x <= left + 45);
+        int h_del = (row_hover && g_mouse_x >= left + 46 && g_mouse_x <= left + 49);
 
         const char *bg = is_sel ? "\x1b[48;2;45;55;72m" : "";
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m%s  \x1b[38;2;210;153;34m[%d]\x1b[0m%s \x1b[38;2;230;237;243;1m",
                         r, left, bg, i + 1, bg);
         cols = 1 + 2 + 4;
-        append_padded_utf8(out, bs, &pos, &cols, g_chooser_items[i].name, 14);
-        pos += snprintf(out + pos, bs - pos, "\x1b[0m%s \x1b[38;2;139;148;158m", bg);
-        cols += 1;
+
+        char disp_name[64] = {0};
+        format_name_display(disp_name, sizeof(disp_name), g_chooser_items[i].name);
+        append_padded_utf8(out, bs, &pos, &cols, disp_name, 10);
+        pos += snprintf(out + pos, bs - pos, "\x1b[0m%s  \x1b[38;2;139;148;158m", bg);
+        cols += 2;
 
         char disp_cmd[64] = {0};
         format_cmd_display(disp_cmd, sizeof(disp_cmd), g_chooser_items[i].cmd);
         append_padded_utf8(out, bs, &pos, &cols, disp_cmd, 15);
-        pos += snprintf(out + pos, bs - pos, "\x1b[0m%s        ", bg);
-        cols += 8;
+        pos += snprintf(out + pos, bs - pos, "\x1b[0m%s  ", bg);
+        cols += 2;
 
         // [↑] button
         if (h_up)
@@ -2609,24 +2749,24 @@ static void render_settings_main(char *out, int bs, int *posp, int host_rows, in
         pad_to_right_border(out, bs, &pos, &cols, sw);
     }
 
-    // Action buttons row: [+] 添加新条目   [P] 快速添加预设
+    // Action buttons row: [+] 添加条目   [P] 快速预设
     int btn_r = top + 4 + g_chooser_item_count;
-    int h_add = (g_mouse_y == btn_r - 1 && g_mouse_x >= left + 2 && g_mouse_x <= left + 19);
-    int h_pre = (g_mouse_y == btn_r - 1 && g_mouse_x >= left + 22 && g_mouse_x <= left + 41);
+    int h_add = (g_mouse_y == btn_r - 1 && g_mouse_x >= left + 2 && g_mouse_x <= left + 17);
+    int h_pre = (g_mouse_y == btn_r - 1 && g_mouse_x >= left + 20 && g_mouse_x <= left + 35);
 
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  ", btn_r, left);
     cols = 1 + 2;
     if (h_add)
-        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;45;135;255m\x1b[38;2;255;255;255;1m [+] 添加新条目 \x1b[0m  ");
+        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;45;135;255m\x1b[38;2;255;255;255;1m [+] 添加条目 \x1b[0m  ");
     else
-        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;31;111;235m\x1b[38;2;255;255;255;1m [+] 添加新条目 \x1b[0m  ");
-    cols += 16 + 2;
+        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;31;111;235m\x1b[38;2;255;255;255;1m [+] 添加条目 \x1b[0m  ");
+    cols += 14 + 2;
 
     if (h_pre)
-        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;45;165;85m\x1b[38;2;255;255;255;1m [P] 快速添加预设 \x1b[0m");
+        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;45;165;85m\x1b[38;2;255;255;255;1m [P] 快速预设 \x1b[0m");
     else
-        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;31;136;61m\x1b[38;2;255;255;255;1m [P] 快速添加预设 \x1b[0m");
-    cols += 18;
+        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;31;136;61m\x1b[38;2;255;255;255;1m [P] 快速预设 \x1b[0m");
+    cols += 14;
 
     pad_to_right_border(out, bs, &pos, &cols, sw);
 
@@ -2640,24 +2780,24 @@ static void render_settings_main(char *out, int bs, int *posp, int host_rows, in
     }
     pos += snprintf(out + pos, bs - pos, "  \x1b[48;2;33;38;45m│\x1b[0m");
 
-    // Footer: [Ctrl+S] 保存配置          [Esc] 取消并返回
+    // Footer: [Ctrl+S] 保存          [Esc] 取消
     int f_r = top + 6 + g_chooser_item_count;
-    int h_save = (g_mouse_y == f_r - 1 && g_mouse_x >= left + 2 && g_mouse_x <= left + 20);
-    int h_esc = (g_mouse_y == f_r - 1 && g_mouse_x >= left + 31 && g_mouse_x <= left + 48);
+    int h_save = (g_mouse_y == f_r - 1 && g_mouse_x >= left + 2 && g_mouse_x <= left + 18);
+    int h_esc = (g_mouse_y == f_r - 1 && g_mouse_x >= left + 25 && g_mouse_x <= left + 39);
 
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  ", f_r, left);
     cols = 1 + 2;
     if (h_save)
-        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;63;185;80m\x1b[38;2;255;255;255;1m [Ctrl+S] 保存配置 \x1b[0m          ");
+        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;63;185;80m\x1b[38;2;255;255;255;1m [Ctrl+S] 保存 \x1b[0m       ");
     else
-        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m\x1b[38;2;63;185;80;1m [Ctrl+S] 保存配置 \x1b[0m          ");
-    cols += utf8_cols(" [Ctrl+S] 保存配置 ", (int)strlen(" [Ctrl+S] 保存配置 ")) + 10;
+        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m\x1b[38;2;63;185;80;1m [Ctrl+S] 保存 \x1b[0m       ");
+    cols += utf8_cols(" [Ctrl+S] 保存 ", (int)strlen(" [Ctrl+S] 保存 ")) + 7;
 
     if (h_esc)
-        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;217;119;54m\x1b[38;2;255;255;255;1m [Esc] 取消并返回 \x1b[0m");
+        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;217;119;54m\x1b[38;2;255;255;255;1m [Esc] 取消 \x1b[0m");
     else
-        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m\x1b[38;2;217;119;54;1m [Esc] 取消并返回 \x1b[0m");
-    cols += utf8_cols(" [Esc] 取消并返回 ", (int)strlen(" [Esc] 取消并返回 "));
+        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m\x1b[38;2;217;119;54;1m [Esc] 取消 \x1b[0m");
+    cols += utf8_cols(" [Esc] 取消 ", (int)strlen(" [Esc] 取消 "));
 
     pad_to_right_border(out, bs, &pos, &cols, sw);
 
@@ -2671,13 +2811,27 @@ static void render_settings_main(char *out, int bs, int *posp, int host_rows, in
     }
     pos += snprintf(out + pos, bs - pos, "┘\x1b[0m");
 
-    // v1.2.4: Floating tooltip preview for long command lines (hovering over cmd for 1.0s)
+    // Floating tooltip preview for long display names (hovering over name for 1.0s)
+    if (g_hover_settings_name_active && g_hover_settings_name_idx >= 0 && g_hover_settings_name_idx < g_chooser_item_count) {
+        const char *full_name = g_chooser_items[g_hover_settings_name_idx].name;
+        int tcols = utf8_cols(full_name, (int)strlen(full_name));
+        int tw = tcols + 14;
+        if (tw > host_cols) tw = host_cols;
+        int tleft = left + 6;
+        if (tleft + tw > host_cols) tleft = host_cols - tw;
+        if (tleft < 0) tleft = 0;
+        int tooltip_r = top + 4 + g_hover_settings_name_idx + 1;
+        if (tooltip_r > host_rows) tooltip_r = top + 4 + g_hover_settings_name_idx - 1;
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m\x1b[38;2;121;192;255;1m [完整名称] \x1b[38;2;255;255;255;1m%s \x1b[0m", tooltip_r, tleft + 1, full_name);
+    }
+
+    // Floating tooltip preview for long command lines (hovering over cmd for 1.0s)
     if (g_hover_settings_cmd_active && g_hover_settings_cmd_idx >= 0 && g_hover_settings_cmd_idx < g_chooser_item_count) {
         const char *full_cmd = g_chooser_items[g_hover_settings_cmd_idx].cmd;
         int tcols = utf8_cols(full_cmd, (int)strlen(full_cmd));
         int tw = tcols + 14;
         if (tw > host_cols) tw = host_cols;
-        int tleft = left + 20;
+        int tleft = left + 18;
         if (tleft + tw > host_cols) tleft = host_cols - tw;
         if (tleft < 0) tleft = 0;
         int tooltip_r = top + 4 + g_hover_settings_cmd_idx + 1;
@@ -2711,22 +2865,16 @@ static void render_settings_edit_dialog(char *out, int bs, int *posp, int host_r
     // Field 0: 名称
     int f0_sel = (g_mux.settings_edit_field == 0);
     const char *f0_bg = f0_sel ? "\x1b[48;2;50;60;80m" : "\x1b[48;2;22;27;34m";
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m名称: \x1b[0m%s\x1b[38;2;230;237;243;1m ", top + 1, left, f0_bg);
-    cols = 1 + 2 + 6 + 1;
-    append_padded_utf8(out, bs, &pos, &cols, g_mux.settings_edit_name, 36);
-    pos += snprintf(out + pos, bs - pos, " \x1b[0m");
-    cols += 1;
-    pad_to_right_border(out, bs, &pos, &cols, ew);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m名称: \x1b[0m%s ", top + 1, left, f0_bg);
+    render_scrollable_input(out, bs, &pos, g_mux.settings_edit_name, g_mux.settings_edit_name_len, g_mux.settings_edit_name_pos, ew - 12, NULL);
+    pos += snprintf(out + pos, bs - pos, " \x1b[0m\x1b[48;2;33;38;45m│\x1b[0m");
 
     // Field 1: 命令
     int f1_sel = (g_mux.settings_edit_field == 1);
     const char *f1_bg = f1_sel ? "\x1b[48;2;50;60;80m" : "\x1b[48;2;22;27;34m";
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m命令: \x1b[0m%s\x1b[38;2;230;237;243m ", top + 2, left, f1_bg);
-    cols = 1 + 2 + 6 + 1;
-    append_padded_utf8(out, bs, &pos, &cols, g_mux.settings_edit_cmd, 36);
-    pos += snprintf(out + pos, bs - pos, " \x1b[0m");
-    cols += 1;
-    pad_to_right_border(out, bs, &pos, &cols, ew);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;210;153;34m命令: \x1b[0m%s ", top + 2, left, f1_bg);
+    render_scrollable_input(out, bs, &pos, g_mux.settings_edit_cmd, g_mux.settings_edit_cmd_len, g_mux.settings_edit_cmd_pos, ew - 12, NULL);
+    pos += snprintf(out + pos, bs - pos, " \x1b[0m\x1b[48;2;33;38;45m│\x1b[0m");
 
     // Tips: [Tab] 切换输入行
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m  \x1b[38;2;139;148;158m[Tab] 切换输入项  (:custom 为自定义命令行)\x1b[0m", top + 3, left);
@@ -2870,25 +3018,25 @@ static const ScrollbarGrad g_sb_grad[11] = {
     // dist = 0 (base hover when not directly on thumb)
     { 145, 155, 170,  22, 27, 34,  110, 118, 129 },
     // dist = 1
-    { 135, 145, 160,  20, 24, 30,   96, 104, 114 },
+    { 135, 145, 160,  22, 27, 34,  100, 108, 118 },
     // dist = 2
-    { 120, 130, 144,  18, 22, 27,   84,  91, 100 },
+    { 120, 130, 144,  20, 24, 30,   90,  98, 108 },
     // dist = 3
-    { 106, 115, 128,  16, 20, 25,   73,  79,  87 },
+    { 108, 118, 130,  18, 22, 27,   80,  88,  98 },
     // dist = 4
-    {  92, 100, 112,  15, 18, 23,   63,  68,  75 },
+    {  96, 105, 116,  16, 20, 25,   70,  78,  88 },
     // dist = 5
-    {  78,  86,  96,  14, 17, 21,   53,  58,  64 },
+    {  84,  92, 102,  15, 18, 23,   60,  68,  78 },
     // dist = 6
-    {  65,  72,  82,  13, 16, 20,   44,  48,  54 },
+    {  72,  80,  90,  14, 17, 21,   50,  58,  68 },
     // dist = 7
-    {  52,  58,  66,  12, 15, 18,   36,  40,  45 },
+    {  60,  68,  78,  13, 16, 20,   40,  48,  58 },
     // dist = 8
-    {  40,  45,  52,  11, 14, 17,   28,  31,  36 },
+    {  48,  55,  65,  12, 15, 18,   32,  38,  48 },
     // dist = 9
-    {  29,  33,  38,  10, 13, 16,   22,  25,  29 },
+    {  38,  44,  52,  11, 14, 17,   26,  30,  38 },
     // dist = 10
-    {  20,  23,  27,   9, 12, 15,   16,  19,  23 }
+    {  30,  35,  42,  10, 13, 16,   20,  24,  30 }
 };
 
 static void render_screen(void) {
@@ -3097,13 +3245,15 @@ static void render_screen(void) {
         int r_top = 2, r_left = (g_pop_anchor_x >= 0) ? g_pop_anchor_x : g_mouse_x;
         if (r_left + RENAME_W > g_mux.host_cols) r_left = (g_pop_anchor_x >= 0 ? g_pop_anchor_x : g_mouse_x) - RENAME_W;
         if (r_left < 0) r_left = 0;
-        int cx = r_left + 2 + utf8_cols(g_mux.rename_buf, g_mux.rename_pos);
+        int scr_off = get_input_screen_offset(g_mux.rename_buf, g_mux.rename_len, g_mux.rename_pos, RENAME_W - 3);
+        int cx = r_left + 2 + scr_off;
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", r_top + 1, cx);
     } else if (g_mux.custom_cmd_mode) {
         int c_top = 2, c_left = (g_pop_anchor_x >= 0) ? g_pop_anchor_x : g_mouse_x;
         if (c_left + CMD_BOX_W > g_mux.host_cols) c_left = (g_pop_anchor_x >= 0 ? g_pop_anchor_x : g_mouse_x) - CMD_BOX_W;
         if (c_left < 0) c_left = 0;
-        int cx = c_left + 2 + utf8_cols(g_mux.custom_cmd_buf, g_mux.custom_cmd_pos);
+        int scr_off = get_input_screen_offset(g_mux.custom_cmd_buf, g_mux.custom_cmd_len, g_mux.custom_cmd_pos, CMD_BOX_W - 3);
+        int cx = c_left + 2 + scr_off;
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", c_top + 1, cx);
     } else if (g_mux.settings_mode == 2) {
         int top = 3;
@@ -3112,10 +3262,12 @@ static void render_screen(void) {
         int left = (g_mux.host_cols - ew) / 2;
         if (left < 0) left = 0;
         if (g_mux.settings_edit_field == 0) {
-            int cx = left + 1 + 2 + 6 + 1 + utf8_cols(g_mux.settings_edit_name, g_mux.settings_edit_name_pos);
+            int scr_off = get_input_screen_offset(g_mux.settings_edit_name, g_mux.settings_edit_name_len, g_mux.settings_edit_name_pos, ew - 12);
+            int cx = left + 1 + 2 + 6 + 1 + scr_off;
             pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", top + 1, cx);
         } else {
-            int cx = left + 1 + 2 + 6 + 1 + utf8_cols(g_mux.settings_edit_cmd, g_mux.settings_edit_cmd_pos);
+            int scr_off = get_input_screen_offset(g_mux.settings_edit_cmd, g_mux.settings_edit_cmd_len, g_mux.settings_edit_cmd_pos, ew - 12);
+            int cx = left + 1 + 2 + 6 + 1 + scr_off;
             pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", top + 2, cx);
         }
     } else if (g_mux.chooser_mode || g_mux.ctx_mode || g_mux.help_mode || g_mux.settings_mode) {
@@ -3640,6 +3792,16 @@ static void handle_prefix(WORD vk, DWORD ctrl) {
 }
 
 static void handle_key(KEY_EVENT_RECORD *ke) {
+    // v1.2.7: Any key event immediately dismisses active hover tooltips
+    if (g_hover_preview_active || g_hover_settings_name_active || g_hover_settings_cmd_active) {
+        g_hover_preview_active = 0;
+        g_hover_preview_pane = -1;
+        g_hover_settings_name_active = 0;
+        g_hover_settings_name_idx = -1;
+        g_hover_settings_cmd_active = 0;
+        g_hover_settings_cmd_idx = -1;
+        g_mux.needs_redraw = 1;
+    }
     if (!ke->bKeyDown) {
         if (!g_mux.prefix_mode && !g_mux.settings_mode && !g_mux.rename_mode && !g_mux.custom_cmd_mode &&
             !g_mux.chooser_mode && !g_mux.ctx_mode && !g_mux.help_mode) {
@@ -4426,18 +4588,26 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
             g_hover_preview_active = 0;
         }
 
-        // v1.2.4: settings cmd hover preview tracking (hovering over a cmd for 1s)
+        // v1.2.7: settings name & cmd hover preview tracking (hovering for 1s)
+        int hover_name_idx = -1;
         int hover_cmd_idx = -1;
         if (g_mux.settings_mode == 1) {
             int top, left, sw, sh;
             settings_geom(g_mux.host_rows, g_mux.host_cols, &top, &left, &sw, &sh);
             int r = my + 1, c = mx + 1;
             for (int i = 0; i < g_chooser_item_count; i++) {
-                if (r == top + 4 + i && c >= left + 22 && c <= left + 44) {
-                    hover_cmd_idx = i;
+                if (r == top + 4 + i) {
+                    if (c >= left + 7 && c <= left + 18) hover_name_idx = i;
+                    if (c >= left + 19 && c <= left + 35) hover_cmd_idx = i;
                     break;
                 }
             }
+        }
+        if (hover_name_idx != g_hover_settings_name_idx) {
+            if (g_hover_settings_name_active) g_mux.needs_redraw = 1;
+            g_hover_settings_name_idx = hover_name_idx;
+            g_hover_settings_name_start = (hover_name_idx >= 0) ? GetTickCount64() : 0;
+            g_hover_settings_name_active = 0;
         }
         if (hover_cmd_idx != g_hover_settings_cmd_idx) {
             if (g_hover_settings_cmd_active) g_mux.needs_redraw = 1;
@@ -4452,11 +4622,11 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
         // v8.52: while ANY popup is open, redraw on every move too - the color
         // picker's swatches need live hover highlights (previously the picker
         // was never redrawn on mouse move, so hovering did nothing).
-        // v1.1.8/v1.1.9: if scrollbar is active in pane and mouse moved in pane area, redraw for dynamic distance-based fading
+        // v1.1.8/v1.1.9/v1.2.7: if scrollbar is active in pane and mouse moved in pane area, redraw for dynamic distance-based fading
         int sb_fade_active = 0;
         if (!popup_open && g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
             Pane *p = &g_mux.panes[g_mux.active_pane];
-            if (p->screen.hist_lines > 0 && !p->screen.in_alt_screen && (my >= 1 || prev_in == 0)) {
+            if (!p->screen.in_alt_screen && (my >= 1 || prev_in == 0)) {
                 sb_fade_active = 1;
             }
         }
@@ -4650,7 +4820,7 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                             if (r == top + 4 + i) {
                                 g_mux.settings_sel = i;
                                 // [↑]
-                                if (c >= left + 46 && c <= left + 48) {
+                                if (c >= left + 37 && c <= left + 39) {
                                     if (i > 0) {
                                         ChooserItem tmp = g_chooser_items[i];
                                         g_chooser_items[i] = g_chooser_items[i - 1];
@@ -4659,7 +4829,7 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                                     }
                                 }
                                 // [↓]
-                                else if (c >= left + 49 && c <= left + 51) {
+                                else if (c >= left + 40 && c <= left + 42) {
                                     if (i < g_chooser_item_count - 1) {
                                         ChooserItem tmp = g_chooser_items[i];
                                         g_chooser_items[i] = g_chooser_items[i + 1];
@@ -4668,7 +4838,7 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                                     }
                                 }
                                 // [改]
-                                else if (c >= left + 52 && c <= left + 55) {
+                                else if (c >= left + 43 && c <= left + 46) {
                                     g_mux.settings_mode = 2;
                                     g_mux.settings_edit_idx = i;
                                     g_mux.settings_edit_field = 0;
@@ -4680,7 +4850,7 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                                     g_mux.settings_edit_cmd_pos = g_mux.settings_edit_cmd_len;
                                 }
                                 // [删]
-                                else if (c >= left + 56 && c <= left + 59) {
+                                else if (c >= left + 47 && c <= left + 50) {
                                     if (g_chooser_item_count > 1) {
                                         for (int k = i; k < g_chooser_item_count - 1; k++) {
                                             g_chooser_items[k] = g_chooser_items[k + 1];
@@ -4708,7 +4878,7 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                         }
                         // Click [+] 添加新条目
                         if (r == top + 4 + g_chooser_item_count) {
-                            if (c >= left + 2 && c <= left + 20) {
+                            if (c >= left + 2 && c <= left + 18) {
                                 if (g_chooser_item_count < MAX_CHOOSER_ITEMS) {
                                     g_mux.settings_mode = 2;
                                     g_mux.settings_edit_idx = -1;
@@ -4723,7 +4893,7 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                                     return;
                                 }
                             }
-                            if (c >= left + 22 && c <= left + 45) {
+                            if (c >= left + 20 && c <= left + 38) {
                                 g_mux.settings_mode = 3;
                                 g_mux.needs_redraw = 1;
                                 return;
@@ -4731,13 +4901,13 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                         }
                         // Click [Ctrl+S] 保存配置
                         if (r == top + 6 + g_chooser_item_count) {
-                            if (c >= left + 2 && c <= left + 22) {
+                            if (c >= left + 2 && c <= left + 20) {
                                 save_config();
                                 g_mux.settings_mode = 0;
                                 g_mux.needs_redraw = 1;
                                 return;
                             }
-                            if (c >= left + 31 && c <= left + sw - 2) {
+                            if (c >= left + 24 && c <= left + sw - 2) {
                                 load_config();
                                 g_mux.settings_mode = 0;
                                 g_mux.needs_redraw = 1;
