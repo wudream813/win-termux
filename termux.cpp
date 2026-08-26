@@ -1,4 +1,4 @@
-// termux.cpp - Windows Terminal Multiplexer v1.2.9
+// termux.cpp - Windows Terminal Multiplexer v1.3.0
 // ---------------------------------------------------------------------------
 // v8.3 changes:
 //  19. ConPTY line-width autodetect: legacy full-screen apps (edit.com...) can
@@ -3431,7 +3431,7 @@ static unsigned __stdcall pane_read_thread(void *arg) {
 // mouse wheel). Termux renders it itself - no cmd process involved.
 static const char *const g_help_lines[] = {
     "\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m termux - 帮助",
-    "\x1b[38;2;139;148;158m  版本 v1.2.9 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
+    "\x1b[38;2;139;148;158m  版本 v1.3.0 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
     "",
     "\x1b[38;2;121;192;255;1m  键盘快捷键\x1b[0m",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mc\x1b[0m         新建默认 pane",
@@ -3575,7 +3575,7 @@ static int create_about_pane(void) {
         "  \x1b[38;2;217;119;54;1mWindows 终端复用器 (Terminal Multiplexer)\x1b[0m\r\n"
         "  \x1b[38;2;139;148;158m基于 Windows ConPTY 的高性能单文件 C 终端复用多标签环境\x1b[0m\r\n\r\n"
         "  \x1b[38;2;48;54;61m────────────────────────────────────────────────────────────\x1b[0m\r\n"
-        "  \x1b[38;2;217;119;54;1m■ 版本号 (Version)      :\x1b[0m \x1b[38;2;230;237;243;1mv1.2.9\x1b[0m\r\n"
+        "  \x1b[38;2;217;119;54;1m■ 版本号 (Version)      :\x1b[0m \x1b[38;2;230;237;243;1mv1.3.0\x1b[0m\r\n"
         "  \x1b[38;2;217;119;54;1m■ 作  者 (Author)       :\x1b[0m \x1b[38;2;63;185;80;1mwu_dream813\x1b[0m\r\n"
         "  \x1b[38;2;217;119;54;1m■ 系统版本 (OS Version) :\x1b[0m \x1b[38;2;230;237;243m%s\x1b[0m\r\n"
         "  \x1b[38;2;48;54;61m────────────────────────────────────────────────────────────\x1b[0m\r\n\r\n"
@@ -5517,24 +5517,17 @@ int main(void) {
     SetConsoleCtrlHandler(ctrl_handler, TRUE);   // v7: restore console on Ctrl+C/close
     load_config();                               // load custom menu items from termux.ini
 
-    host_printf("\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[2J\x1b[H");
-    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.2.9\x1b[0m\r\n");
-    host_printf("  \x1b[33mhost: %dx%d\x1b[0m   (pane screen = host minus 1 tab bar row)\r\n\n", g_mux.host_cols, g_mux.host_rows);
-    host_printf("  \x1b[33mCtrl+B\x1b[0m + c/n/p/x/d/0-9   (termux = 帮助)\r\n\n");
-    host_printf("  \x1b[33m右键\x1b[0m 标签 = 改颜色、改标题\r\n\n");
-    host_printf("  \x1b[38;2;248;81;73m[注意]\x1b[0m 终端请使用等宽字体，否则会发生渲染故障\r\n\n");
-    // v8.56: removed the fixed Sleep(800) splash delay - "Starting..." now
-    // proceeds straight into pane creation (ConPTY+cmd take ~100-300ms on
-    // their own; the extra 800ms was pure dead time).
-    host_printf("Starting...\r\n");
+    // v1.3.0: enter alt-screen directly, clear screen and hide cursor for instant TUI rendering
+    host_printf("\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[2J\x1b[H\x1b[?25l");
     g_mux.running = 1;
     int first = create_pane();
     if (first < 0) { host_printf("\x1b[31mFailed! Need Win10 1809+ and enough memory\x1b[0m\r\n"); Sleep(3000); goto cleanup; }
     g_mux.active_pane = first; g_mux.needs_redraw = 1;
+    render_screen();
     handle_input();
     for (int i = 0; i < g_mux.pane_count; i++) close_pane(i);   // v7: close ALL panes (live or dead)
 cleanup:
-    host_printf("\x1b[?1003l\x1b[?1006l\x1b[?1049l\x1b[0m");
+    host_printf("\x1b[?1003l\x1b[?1006l\x1b[?1049l\x1b[?25h\x1b[0m");
     if (g_orig_title[0]) {
         SetConsoleTitleW(g_orig_title);
         char tbuf[512];
