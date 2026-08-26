@@ -1,4 +1,4 @@
-// termux.cpp - Windows Terminal Multiplexer v1.2.7
+// termux.cpp - Windows Terminal Multiplexer v1.2.9
 // ---------------------------------------------------------------------------
 // v8.3 changes:
 //  19. ConPTY line-width autodetect: legacy full-screen apps (edit.com...) can
@@ -279,6 +279,7 @@ typedef struct {
     UINT orig_cp, orig_input_cp;
     PaneTabInfo tab_info[MAX_PANES + 3];
     int tab_count;
+    int is_nested;   // v1.2.9: 1 if running inside another win-termux instance
 } Multiplexer;
 
 static Multiplexer g_mux;
@@ -2570,18 +2571,20 @@ static void render_chooser(char *out, int bs, int *posp, int host_rows, int host
     }
     pos += snprintf(out + pos, bs - pos, "┘\x1b[0m");
 
-    // v1.2.8: Floating tooltip preview for long chooser item names (hovering for 1.0s)
+    // v1.2.8/v1.2.9: Floating tooltip preview for long chooser item names (hovering for 1.0s, only when truncated)
     if (g_hover_chooser_active && g_hover_chooser_idx >= 0 && g_hover_chooser_idx < g_chooser_item_count) {
         const char *full_name = g_chooser_items[g_hover_chooser_idx].name;
         int tcols = utf8_cols(full_name, (int)strlen(full_name));
-        int tw = tcols + 14;
-        if (tw > host_cols) tw = host_cols;
-        int tleft = left + 6;
-        if (tleft + tw > host_cols) tleft = host_cols - tw;
-        if (tleft < 0) tleft = 0;
-        int tooltip_r = top + 1 + g_hover_chooser_idx + 1;
-        if (tooltip_r > host_rows) tooltip_r = top + 1 + g_hover_chooser_idx - 1;
-        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m\x1b[38;2;121;192;255;1m [完整名称] \x1b[38;2;255;255;255;1m%s \x1b[0m", tooltip_r, tleft + 1, full_name);
+        if (tcols > 15) {
+            int tw = tcols + 14;
+            if (tw > host_cols) tw = host_cols;
+            int tleft = left + 6;
+            if (tleft + tw > host_cols) tleft = host_cols - tw;
+            if (tleft < 0) tleft = 0;
+            int tooltip_r = top + 1 + g_hover_chooser_idx + 1;
+            if (tooltip_r > host_rows) tooltip_r = top + 1 + g_hover_chooser_idx - 1;
+            pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m\x1b[38;2;121;192;255;1m [完整名称] \x1b[38;2;255;255;255;1m%s \x1b[0m", tooltip_r, tleft + 1, full_name);
+        }
     }
 
     *posp = pos;
@@ -2866,32 +2869,36 @@ static void render_settings_main(char *out, int bs, int *posp, int host_rows, in
     }
     pos += snprintf(out + pos, bs - pos, "┘\x1b[0m");
 
-    // Floating tooltip preview for long display names (hovering over name for 1.0s)
+    // Floating tooltip preview for long display names (hovering over name for 1.0s, only when truncated)
     if (g_hover_settings_name_active && g_hover_settings_name_idx >= 0 && g_hover_settings_name_idx < g_chooser_item_count) {
         const char *full_name = g_chooser_items[g_hover_settings_name_idx].name;
         int tcols = utf8_cols(full_name, (int)strlen(full_name));
-        int tw = tcols + 14;
-        if (tw > host_cols) tw = host_cols;
-        int tleft = left + 6;
-        if (tleft + tw > host_cols) tleft = host_cols - tw;
-        if (tleft < 0) tleft = 0;
-        int tooltip_r = top + 4 + g_hover_settings_name_idx + 1;
-        if (tooltip_r > host_rows) tooltip_r = top + 4 + g_hover_settings_name_idx - 1;
-        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m\x1b[38;2;121;192;255;1m [完整名称] \x1b[38;2;255;255;255;1m%s \x1b[0m", tooltip_r, tleft + 1, full_name);
+        if (tcols > 10) {
+            int tw = tcols + 14;
+            if (tw > host_cols) tw = host_cols;
+            int tleft = left + 6;
+            if (tleft + tw > host_cols) tleft = host_cols - tw;
+            if (tleft < 0) tleft = 0;
+            int tooltip_r = top + 4 + g_hover_settings_name_idx + 1;
+            if (tooltip_r > host_rows) tooltip_r = top + 4 + g_hover_settings_name_idx - 1;
+            pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m\x1b[38;2;121;192;255;1m [完整名称] \x1b[38;2;255;255;255;1m%s \x1b[0m", tooltip_r, tleft + 1, full_name);
+        }
     }
 
-    // Floating tooltip preview for long command lines (hovering over cmd for 1.0s)
+    // Floating tooltip preview for long command lines (hovering over cmd for 1.0s, only when truncated)
     if (g_hover_settings_cmd_active && g_hover_settings_cmd_idx >= 0 && g_hover_settings_cmd_idx < g_chooser_item_count) {
         const char *full_cmd = g_chooser_items[g_hover_settings_cmd_idx].cmd;
         int tcols = utf8_cols(full_cmd, (int)strlen(full_cmd));
-        int tw = tcols + 14;
-        if (tw > host_cols) tw = host_cols;
-        int tleft = left + 18;
-        if (tleft + tw > host_cols) tleft = host_cols - tw;
-        if (tleft < 0) tleft = 0;
-        int tooltip_r = top + 4 + g_hover_settings_cmd_idx + 1;
-        if (tooltip_r > host_rows) tooltip_r = top + 4 + g_hover_settings_cmd_idx - 1;
-        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m\x1b[38;2;121;192;255;1m [完整命令] \x1b[38;2;255;255;255;1m%s \x1b[0m", tooltip_r, tleft + 1, full_cmd);
+        if (tcols > 15) {
+            int tw = tcols + 14;
+            if (tw > host_cols) tw = host_cols;
+            int tleft = left + 18;
+            if (tleft + tw > host_cols) tleft = host_cols - tw;
+            if (tleft < 0) tleft = 0;
+            int tooltip_r = top + 4 + g_hover_settings_cmd_idx + 1;
+            if (tooltip_r > host_rows) tooltip_r = top + 4 + g_hover_settings_cmd_idx - 1;
+            pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m\x1b[38;2;121;192;255;1m [完整命令] \x1b[38;2;255;255;255;1m%s \x1b[0m", tooltip_r, tleft + 1, full_cmd);
+        }
     }
 
     *posp = pos;
@@ -3117,7 +3124,7 @@ static void render_screen(void) {
         if (pane->scroll_offset > s->hist_lines) pane->scroll_offset = s->hist_lines;
         if (pane->scroll_offset < 0) pane->scroll_offset = 0;
         int vo = pane->scroll_offset, rr = s->rows < g_mux.host_rows ? s->rows : g_mux.host_rows, rc = s->cols < g_mux.host_cols ? s->cols : g_mux.host_cols;
-        int show_sb = (!s->in_alt_screen && g_mux.host_cols >= 10);
+        int show_sb = (!g_mux.is_nested && !s->in_alt_screen && g_mux.host_cols >= 10);
         int sb_top = 0, sb_bot = 0;
         if (show_sb) {
             int hist = s->hist_lines;
@@ -3140,7 +3147,8 @@ static void render_screen(void) {
                 sb_bot = tpos + th;
             }
         }
-        int text_rc = (show_sb && rc >= g_mux.host_cols) ? (g_mux.host_cols - 1) : rc;
+        int text_rc = rc;
+        if (show_sb && text_rc >= g_mux.host_cols) text_rc = g_mux.host_cols - 1;
 
         int popup_open = (g_mux.settings_mode || g_mux.chooser_mode || g_mux.ctx_mode || g_mux.rename_mode || g_mux.custom_cmd_mode);
         int dist = (popup_open) ? 99 : ((g_sb_dragging) ? 0 : ((g_mouse_y >= 1 && g_mouse_x >= 0) ? ((g_mux.host_cols - 1) - g_mouse_x) : 99));
@@ -3218,32 +3226,32 @@ static void render_screen(void) {
                     int in_thumb = (y >= sb_top && y < sb_bot);
                     if (in_thumb) {
                         if (mouse_on_thumb) {
-                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;225;235;250m \x1b[0m");
+                            pos += snprintf(out + pos, bs - pos, "\x1b[0;48;2;225;235;250m \x1b[0m");
                         } else {
-                            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;%d;%d;%dm \x1b[0m",
+                            pos += snprintf(out + pos, bs - pos, "\x1b[0;48;2;%d;%d;%dm \x1b[0m",
                                             g_sb_grad[dist].thumb_r, g_sb_grad[dist].thumb_g, g_sb_grad[dist].thumb_b);
                         }
                     } else {
-                        pos += snprintf(out + pos, bs - pos, "\x1b[48;2;%d;%d;%dm\x1b[38;2;%d;%d;%dm│\x1b[0m",
+                        pos += snprintf(out + pos, bs - pos, "\x1b[0;48;2;%d;%d;%dm\x1b[38;2;%d;%d;%dm│\x1b[0m",
                                         g_sb_grad[dist].track_bg_r, g_sb_grad[dist].track_bg_g, g_sb_grad[dist].track_bg_b,
                                         g_sb_grad[dist].track_fg_r, g_sb_grad[dist].track_fg_g, g_sb_grad[dist].track_fg_b);
                     }
                 }
                 la_attr = 0xFFFF;
             } else {
-                if (rc < g_mux.host_cols) pos += snprintf(out + pos, bs - pos, "\x1b[K");
+                if (text_rc < g_mux.host_cols) pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[K");
             }
             if (pos > bs - 256) break;
         }
 
         // clear leftover rows below pane
         for (int y = rr; y < g_mux.host_rows && pos < bs - 64; y++)
-            pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[K", y + 2);
+            pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[0m\x1b[K", y + 2);
 
-        if (vo > 0) { int pct = s->hist_lines > 0 ? (vo * 100 / s->hist_lines) : 0; pos += snprintf(out + pos, bs - pos, "\x1b[2;%dH\x1b[30;43m[%d%%]\x1b[0m", g_mux.host_cols - 10, pct); }
+        if (vo > 0) { int pct = s->hist_lines > 0 ? (vo * 100 / s->hist_lines) : 0; pos += snprintf(out + pos, bs - pos, "\x1b[2;%dH\x1b[0;30;43m[%d%%]\x1b[0m", g_mux.host_cols - 10, pct); }
     } else {
         for (int y = 0; y < g_mux.host_rows && pos < bs - 64; y++)
-            pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[K", y + 2);
+            pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[0m\x1b[K", y + 2);
     }
 
     // 2. Overlay popups (so popups cleanly replace each other without leftover rows)
@@ -3269,7 +3277,7 @@ static void render_screen(void) {
     pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[1;1H");
     draw_tab_bar(out, bs, &pos);
 
-    // 3.5 Floating title preview tooltip (hovering over tab for 1.5 seconds)
+    // 3.5 Floating title preview tooltip (hovering over tab for 1.5 seconds, only when truncated)
     if (g_hover_preview_pane >= 0 && g_hover_preview_active &&
         !g_mux.chooser_mode && !g_mux.ctx_mode && !g_mux.rename_mode &&
         !g_mux.custom_cmd_mode && !g_mux.settings_mode && !g_mux.help_mode) {
@@ -3278,20 +3286,22 @@ static void render_screen(void) {
             Pane *hp = &g_mux.panes[g_hover_preview_pane];
             const char *full_title = hp->full_title[0] ? hp->full_title :
                                      (hp->title[0] ? hp->title : "cmd");
-            int tab_col = 0;
-            for (int i = 0; i < g_mux.tab_count; i++) {
-                if (g_mux.tab_info[i].pane_idx == g_hover_preview_pane) {
-                    tab_col = g_mux.tab_info[i].start_col;
-                    break;
-                }
-            }
             int tcols = utf8_cols(full_title, (int)strlen(full_title));
-            int tw = tcols + 14;
-            if (tw > g_mux.host_cols) tw = g_mux.host_cols;
-            int left = tab_col;
-            if (left + tw > g_mux.host_cols) left = g_mux.host_cols - tw;
-            if (left < 0) left = 0;
-            pos += snprintf(out + pos, bs - pos, "\x1b[2;%dH\x1b[48;2;33;38;45m\x1b[38;2;121;192;255;1m [完整标题] \x1b[38;2;255;255;255;1m%s \x1b[0m", left + 1, full_title);
+            if (tcols > 15) {
+                int tab_col = 0;
+                for (int i = 0; i < g_mux.tab_count; i++) {
+                    if (g_mux.tab_info[i].pane_idx == g_hover_preview_pane) {
+                        tab_col = g_mux.tab_info[i].start_col;
+                        break;
+                    }
+                }
+                int tw = tcols + 14;
+                if (tw > g_mux.host_cols) tw = g_mux.host_cols;
+                int left = tab_col;
+                if (left + tw > g_mux.host_cols) left = g_mux.host_cols - tw;
+                if (left < 0) left = 0;
+                pos += snprintf(out + pos, bs - pos, "\x1b[2;%dH\x1b[48;2;33;38;45m\x1b[38;2;121;192;255;1m [完整标题] \x1b[38;2;255;255;255;1m%s \x1b[0m", left + 1, full_title);
+            }
         }
     }
 
@@ -3422,7 +3432,7 @@ static unsigned __stdcall pane_read_thread(void *arg) {
 // mouse wheel). Termux renders it itself - no cmd process involved.
 static const char *const g_help_lines[] = {
     "\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m termux - 帮助",
-    "\x1b[38;2;139;148;158m  版本 v1.2.6 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
+    "\x1b[38;2;139;148;158m  版本 v1.2.9 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
     "",
     "\x1b[38;2;121;192;255;1m  键盘快捷键\x1b[0m",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mc\x1b[0m         新建默认 pane",
@@ -3544,7 +3554,7 @@ static int create_about_pane(void) {
 
     Pane *pane = &g_mux.panes[idx];
     memset(pane, 0, sizeof(*pane));
-    int pane_cols = g_mux.host_cols > 1 ? g_mux.host_cols - 1 : 1;
+    int pane_cols = g_mux.is_nested ? g_mux.host_cols : (g_mux.host_cols > 1 ? g_mux.host_cols - 1 : 1);
     if (!screen_init(&pane->screen, pane_cols, g_mux.host_rows)) return -1;
     pane->screen.pane_index = idx;
     pane->active = 1;
@@ -3566,7 +3576,7 @@ static int create_about_pane(void) {
         "  \x1b[38;2;217;119;54;1mWindows 终端复用器 (Terminal Multiplexer)\x1b[0m\r\n"
         "  \x1b[38;2;139;148;158m基于 Windows ConPTY 的高性能单文件 C 终端复用多标签环境\x1b[0m\r\n\r\n"
         "  \x1b[38;2;48;54;61m────────────────────────────────────────────────────────────\x1b[0m\r\n"
-        "  \x1b[38;2;217;119;54;1m■ 版本号 (Version)      :\x1b[0m \x1b[38;2;230;237;243;1mv1.2.6\x1b[0m\r\n"
+        "  \x1b[38;2;217;119;54;1m■ 版本号 (Version)      :\x1b[0m \x1b[38;2;230;237;243;1mv1.2.9\x1b[0m\r\n"
         "  \x1b[38;2;217;119;54;1m■ 作  者 (Author)       :\x1b[0m \x1b[38;2;63;185;80;1mwu_dream813\x1b[0m\r\n"
         "  \x1b[38;2;217;119;54;1m■ 系统版本 (OS Version) :\x1b[0m \x1b[38;2;230;237;243m%s\x1b[0m\r\n"
         "  \x1b[38;2;48;54;61m────────────────────────────────────────────────────────────\x1b[0m\r\n\r\n"
@@ -3592,7 +3602,7 @@ static int create_pane_shell(const WCHAR *shell) {
     if (idx < 0) return -1;
 
     Pane *pane = &g_mux.panes[idx]; memset(pane, 0, sizeof(*pane));
-    int pane_cols = g_mux.host_cols > 1 ? g_mux.host_cols - 1 : 1;
+    int pane_cols = g_mux.is_nested ? g_mux.host_cols : (g_mux.host_cols > 1 ? g_mux.host_cols - 1 : 1);
     if (!screen_init(&pane->screen, pane_cols, g_mux.host_rows)) return -1;
     pane->screen.pane_index = idx;   // v7: needed for OSC title routing
 
@@ -4627,7 +4637,7 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
         int popup_open = (g_mux.settings_mode || g_mux.chooser_mode || g_mux.ctx_mode || g_mux.rename_mode || g_mux.custom_cmd_mode);
         int now_in = (!popup_open && my == 0);
 
-        // v1.1.5: hover preview tooltip tracking (hovering over a tab for 1.5s, only when no popup)
+        // v1.1.5/v1.2.9: hover preview tooltip tracking (hovering over a tab for 1.5s, only when truncated and no popup)
         int hover_pane = -1;
         if (!popup_open && my == 0) {
             for (int i = 0; i < g_mux.tab_count; i++) {
@@ -4638,6 +4648,13 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                 }
             }
         }
+        if (hover_pane >= 0 && hover_pane < g_mux.pane_count && g_mux.panes[hover_pane].active) {
+            Pane *hp = &g_mux.panes[hover_pane];
+            const char *full_title = hp->full_title[0] ? hp->full_title : (hp->title[0] ? hp->title : "cmd");
+            if (utf8_cols(full_title, (int)strlen(full_title)) <= 15) {
+                hover_pane = -1; // Not truncated: no preview needed
+            }
+        }
         if (hover_pane != g_hover_preview_pane) {
             if (g_hover_preview_active) g_mux.needs_redraw = 1;
             g_hover_preview_pane = hover_pane;
@@ -4645,7 +4662,7 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
             g_hover_preview_active = 0;
         }
 
-        // v1.2.7: settings name & cmd hover preview tracking (hovering for 1s)
+        // v1.2.7/v1.2.9: settings name & cmd hover preview tracking (hovering for 1s, only when truncated)
         int hover_name_idx = -1;
         int hover_cmd_idx = -1;
         if (g_mux.settings_mode == 1) {
@@ -4658,6 +4675,18 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                     if (c >= left + 19 && c <= left + 35) hover_cmd_idx = i;
                     break;
                 }
+            }
+        }
+        if (hover_name_idx >= 0 && hover_name_idx < g_chooser_item_count) {
+            const char *name = g_chooser_items[hover_name_idx].name;
+            if (utf8_cols(name, (int)strlen(name)) <= 10) {
+                hover_name_idx = -1; // Not truncated: no preview needed
+            }
+        }
+        if (hover_cmd_idx >= 0 && hover_cmd_idx < g_chooser_item_count) {
+            const char *cmd = g_chooser_items[hover_cmd_idx].cmd;
+            if (utf8_cols(cmd, (int)strlen(cmd)) <= 15) {
+                hover_cmd_idx = -1; // Not truncated: no preview needed
             }
         }
         if (hover_name_idx != g_hover_settings_name_idx) {
@@ -4673,7 +4702,7 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
             g_hover_settings_cmd_active = 0;
         }
 
-        // v1.2.8: chooser item hover preview tracking (hovering for 1s)
+        // v1.2.8/v1.2.9: chooser item hover preview tracking (hovering for 1s, only when truncated)
         int hover_chooser_idx = -1;
         if (g_mux.chooser_mode == 1) {
             int top, left, cw, ch;
@@ -4684,6 +4713,12 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                     hover_chooser_idx = i;
                     break;
                 }
+            }
+        }
+        if (hover_chooser_idx >= 0 && hover_chooser_idx < g_chooser_item_count) {
+            const char *name = g_chooser_items[hover_chooser_idx].name;
+            if (utf8_cols(name, (int)strlen(name)) <= 15) {
+                hover_chooser_idx = -1; // Not truncated: no preview needed
             }
         }
         if (hover_chooser_idx != g_hover_chooser_idx) {
@@ -4699,9 +4734,9 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
         // v8.52: while ANY popup is open, redraw on every move too - the color
         // picker's swatches need live hover highlights (previously the picker
         // was never redrawn on mouse move, so hovering did nothing).
-        // v1.1.8/v1.1.9/v1.2.7: if scrollbar is active in pane and mouse moved in pane area, redraw for dynamic distance-based fading
+        // v1.1.8/v1.1.9/v1.2.7/v1.2.9: if scrollbar is active in pane and mouse moved in pane area, redraw for dynamic distance-based fading
         int sb_fade_active = 0;
-        if (!popup_open && g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
+        if (!popup_open && !g_mux.is_nested && g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
             Pane *p = &g_mux.panes[g_mux.active_pane];
             if (!p->screen.in_alt_screen && (my >= 1 || prev_in == 0)) {
                 sb_fade_active = 1;
@@ -5167,8 +5202,8 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
         p->input_history_pos = 0;
     }
 
-    // v1.1.7: scrollbar mouse click & drag on rightmost column
-    if (s->hist_lines > 0 && !s->in_alt_screen) {
+    // v1.1.7/v1.2.9: scrollbar mouse click & drag on rightmost column (only when not nested)
+    if (!g_mux.is_nested && s->hist_lines > 0 && !s->in_alt_screen) {
         int has_btn = (me->dwButtonState & (FROM_LEFT_1ST_BUTTON_PRESSED | FROM_LEFT_2ND_BUTTON_PRESSED | RIGHTMOST_BUTTON_PRESSED)) != 0;
         if (has_btn) {
             int hist = s->hist_lines;
@@ -5352,7 +5387,7 @@ static void handle_resize(void) {
     int nr = nt - 1;
     if (nc == g_mux.host_cols && nt == g_mux.total_host_rows) return;
     g_mux.host_cols = nc; g_mux.total_host_rows = nt; g_mux.host_rows = nr;
-    int pane_cols = nc > 1 ? nc - 1 : 1;
+    int pane_cols = g_mux.is_nested ? nc : (nc > 1 ? nc - 1 : 1);
     for (int i = 0; i < g_mux.pane_count; i++) if (g_mux.panes[i].active) {
         EnterCriticalSection(&g_mux.cs);
         screen_resize(&g_mux.panes[i].screen, pane_cols, nr);
@@ -5448,6 +5483,9 @@ static BOOL WINAPI ctrl_handler(DWORD type) {
 // ============================================================
 int main(void) {
     memset(&g_mux, 0, sizeof(g_mux)); InitializeCriticalSection(&g_mux.cs);
+    g_mux.is_nested = (GetEnvironmentVariableW(L"WIN_TERMUX", NULL, 0) > 0);
+    SetEnvironmentVariableW(L"WIN_TERMUX", L"1");
+
     g_mux.hOut = GetStdHandle(STD_OUTPUT_HANDLE); g_mux.hIn = GetStdHandle(STD_INPUT_HANDLE);
     if (g_mux.hOut == INVALID_HANDLE_VALUE || g_mux.hIn == INVALID_HANDLE_VALUE ||
         g_mux.hOut == NULL || g_mux.hIn == NULL) {
@@ -5483,7 +5521,7 @@ int main(void) {
     load_config();                               // load custom menu items from termux.ini
 
     host_printf("\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[2J\x1b[H");
-    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.2.6\x1b[0m\r\n");
+    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.2.9\x1b[0m\r\n");
     host_printf("  \x1b[33mhost: %dx%d\x1b[0m   (pane screen = host minus 1 tab bar row)\r\n\n", g_mux.host_cols, g_mux.host_rows);
     host_printf("  \x1b[33mCtrl+B\x1b[0m + c/n/p/x/d/0-9   (termux = 帮助)\r\n\n");
     host_printf("  \x1b[33m右键\x1b[0m 标签 = 改颜色、改标题\r\n\n");
@@ -5499,6 +5537,9 @@ int main(void) {
     handle_input();
     for (int i = 0; i < g_mux.pane_count; i++) close_pane(i);   // v7: close ALL panes (live or dead)
 cleanup:
+    if (!g_mux.is_nested) {
+        SetEnvironmentVariableW(L"WIN_TERMUX", NULL);
+    }
     host_printf("\x1b[?1003l\x1b[?1006l\x1b[?1049l\x1b[0m");
     if (g_orig_title[0]) {
         SetConsoleTitleW(g_orig_title);
