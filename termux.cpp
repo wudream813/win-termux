@@ -1689,20 +1689,7 @@ static void execute_csi(ScreenBuffer *s, char final, char prefix, const char *pa
                             s->alt_buffer[j].Char.UnicodeChar = L' '; s->alt_buffer[j].Attributes = s->current_attr;
                             if (s->alt_fg_rgb) { s->alt_fg_rgb[j] = RGB565_WHITE; s->alt_bg_rgb[j] = RGB565_BLACK; s->alt_rgb_valid[j] = 0; }
                         }
-                        {
-                            int pi = s->pane_index;
-                            if (pi >= 0 && pi < MAX_PANES && g_mux.panes[pi].active) {
-                                g_mux.panes[pi].scroll_offset = 0;
-                                int target_cols = g_mux.host_cols;
-                                if (s->cols != target_cols) {
-                                    screen_resize(s, target_cols, g_mux.host_rows);
-                                    if (g_mux.panes[pi].hpc) {
-                                        COORD sz = {(SHORT)target_cols, (SHORT)g_mux.host_rows};
-                                        ResizePseudoConsole(g_mux.panes[pi].hpc, sz);
-                                    }
-                                }
-                            }
-                        }
+                        { int pi = s->pane_index; if (pi >= 0 && pi < MAX_PANES) g_mux.panes[pi].scroll_offset = 0; }
                         break;
                     case 1049:
                         s->saved_cx = s->cursor_x; s->saved_cy = s->cursor_y;
@@ -1715,20 +1702,7 @@ static void execute_csi(ScreenBuffer *s, char final, char prefix, const char *pa
                             if (s->alt_fg_rgb) { s->alt_fg_rgb[j] = RGB565_WHITE; s->alt_bg_rgb[j] = RGB565_BLACK; s->alt_rgb_valid[j] = 0; }
                         }
                         s->cursor_x = s->cursor_y = 0;
-                        {
-                            int pi = s->pane_index;
-                            if (pi >= 0 && pi < MAX_PANES && g_mux.panes[pi].active) {
-                                g_mux.panes[pi].scroll_offset = 0;
-                                int target_cols = g_mux.host_cols;
-                                if (s->cols != target_cols) {
-                                    screen_resize(s, target_cols, g_mux.host_rows);
-                                    if (g_mux.panes[pi].hpc) {
-                                        COORD sz = {(SHORT)target_cols, (SHORT)g_mux.host_rows};
-                                        ResizePseudoConsole(g_mux.panes[pi].hpc, sz);
-                                    }
-                                }
-                            }
-                        }
+                        { int pi = s->pane_index; if (pi >= 0 && pi < MAX_PANES) g_mux.panes[pi].scroll_offset = 0; }
                         break;
                     case 1048: s->saved_cx = s->cursor_x; s->saved_cy = s->cursor_y; break;   // v8: save cursor
                     case 1000: case 1002: case 1003: s->mouse_tracking = params[i]; break;
@@ -1751,14 +1725,6 @@ static void execute_csi(ScreenBuffer *s, char final, char prefix, const char *pa
                             int pi2 = s->pane_index;
                             if (pi2 >= 0 && pi2 < MAX_PANES && g_mux.panes[pi2].active) {
                                 if (g_mux.panes[pi2].scroll_offset > s->hist_lines) g_mux.panes[pi2].scroll_offset = s->hist_lines;
-                                int target_cols = g_mux.host_cols > 1 ? g_mux.host_cols - 1 : 1;
-                                if (s->cols != target_cols) {
-                                    screen_resize(s, target_cols, g_mux.host_rows);
-                                    if (g_mux.panes[pi2].hpc) {
-                                        COORD sz = {(SHORT)target_cols, (SHORT)g_mux.host_rows};
-                                        ResizePseudoConsole(g_mux.panes[pi2].hpc, sz);
-                                    }
-                                }
                             }
                         }
                         break;
@@ -1770,14 +1736,6 @@ static void execute_csi(ScreenBuffer *s, char final, char prefix, const char *pa
                             int pi2 = s->pane_index;
                             if (pi2 >= 0 && pi2 < MAX_PANES && g_mux.panes[pi2].active) {
                                 if (g_mux.panes[pi2].scroll_offset > s->hist_lines) g_mux.panes[pi2].scroll_offset = s->hist_lines;
-                                int target_cols = g_mux.host_cols > 1 ? g_mux.host_cols - 1 : 1;
-                                if (s->cols != target_cols) {
-                                    screen_resize(s, target_cols, g_mux.host_rows);
-                                    if (g_mux.panes[pi2].hpc) {
-                                        COORD sz = {(SHORT)target_cols, (SHORT)g_mux.host_rows};
-                                        ResizePseudoConsole(g_mux.panes[pi2].hpc, sz);
-                                    }
-                                }
                             }
                         }
                         break;
@@ -1924,14 +1882,6 @@ static void execute_csi(ScreenBuffer *s, char final, char prefix, const char *pa
                     int pi = s->pane_index;
                     if (pi >= 0 && pi < MAX_PANES && g_mux.panes[pi].active) {
                         g_mux.panes[pi].scroll_offset = 0;
-                        int target_cols = g_mux.host_cols;
-                        if (s->cols != target_cols) {
-                            screen_resize(s, target_cols, g_mux.host_rows);
-                            if (g_mux.panes[pi].hpc) {
-                                COORD sz = {(SHORT)target_cols, (SHORT)g_mux.host_rows};
-                                ResizePseudoConsole(g_mux.panes[pi].hpc, sz);
-                            }
-                        }
                     }
                 }
             }
@@ -1946,14 +1896,6 @@ static void execute_csi(ScreenBuffer *s, char final, char prefix, const char *pa
                         int pi2 = s->pane_index;
                         if (pi2 >= 0 && pi2 < MAX_PANES && g_mux.panes[pi2].active) {
                             if (g_mux.panes[pi2].scroll_offset > s->hist_lines) g_mux.panes[pi2].scroll_offset = s->hist_lines;
-                            int target_cols = g_mux.host_cols > 1 ? g_mux.host_cols - 1 : 1;
-                            if (s->cols != target_cols) {
-                                screen_resize(s, target_cols, g_mux.host_rows);
-                                if (g_mux.panes[pi2].hpc) {
-                                    COORD sz = {(SHORT)target_cols, (SHORT)g_mux.host_rows};
-                                    ResizePseudoConsole(g_mux.panes[pi2].hpc, sz);
-                                }
-                            }
                         }
                     }
                 }
@@ -3653,7 +3595,7 @@ static int create_about_pane(void) {
 
     Pane *pane = &g_mux.panes[idx];
     memset(pane, 0, sizeof(*pane));
-    int pane_cols = g_mux.host_cols > 1 ? g_mux.host_cols - 1 : 1;
+    int pane_cols = g_mux.host_cols;
     if (!screen_init(&pane->screen, pane_cols, g_mux.host_rows)) return -1;
     pane->screen.pane_index = idx;
     pane->screen.in_alt_screen = 1;
@@ -3702,7 +3644,7 @@ static int create_pane_shell(const WCHAR *shell) {
     if (idx < 0) return -1;
 
     Pane *pane = &g_mux.panes[idx]; memset(pane, 0, sizeof(*pane));
-    int pane_cols = g_mux.host_cols > 1 ? g_mux.host_cols - 1 : 1;
+    int pane_cols = g_mux.host_cols;
     if (!screen_init(&pane->screen, pane_cols, g_mux.host_rows)) return -1;
     pane->screen.pane_index = idx;   // v7: needed for OSC title routing
 
@@ -5487,8 +5429,8 @@ static void handle_resize(void) {
     int nr = nt - 1;
     if (nc == g_mux.host_cols && nt == g_mux.total_host_rows) return;
     g_mux.host_cols = nc; g_mux.total_host_rows = nt; g_mux.host_rows = nr;
+    int pane_cols = nc;
     for (int i = 0; i < g_mux.pane_count; i++) if (g_mux.panes[i].active) {
-        int pane_cols = g_mux.panes[i].screen.in_alt_screen ? nc : (nc > 1 ? nc - 1 : 1);
         EnterCriticalSection(&g_mux.cs);
         screen_resize(&g_mux.panes[i].screen, pane_cols, nr);
         g_mux.panes[i].screen.detect_count = 0;   // v8.3: host resized - allow re-adapt
