@@ -25,7 +25,9 @@ Windows 终端复用器（Terminal Multiplexer）—— 单文件 C 实现，基
 | 快捷键 | 功能 |
 |---|---|
 | `Ctrl+B c` | 新建默认 pane |
+| `Ctrl+B +` | 新建 pane 菜单（选已配置项目 / 自定义命令行） |
 | `Ctrl+B s` | 打开图形化设置页面 (`termux.ini`) |
+| `Ctrl+B ?` / `h` | 打开 / 关闭帮助 |
 | `Ctrl+B n / p` | 下一个 / 上一个 pane |
 | `Ctrl+B x` | 关闭当前 pane |
 | `Ctrl+B d` | 退出 termux |

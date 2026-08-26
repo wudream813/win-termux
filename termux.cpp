@@ -1,4 +1,4 @@
-// termux.cpp - Windows Terminal Multiplexer v1.4.3
+// termux.cpp - Windows Terminal Multiplexer v1.4.5
 // ---------------------------------------------------------------------------
 // v8.3 changes:
 //  19. ConPTY line-width autodetect: legacy full-screen apps (edit.com...) can
@@ -2819,7 +2819,8 @@ static void presets_geom(int host_rows, int host_cols, int *top, int *left, int 
     }
     if (mnw < 6) mnw = 6;
     if (mcw < 8) mcw = 8;
-    int min_hdr = utf8_cols("┌─ 常用命令行预设 (按数字添加) ┐", (int)strlen("┌─ 常用命令行预设 (按数字添加) "));
+    const char *hdr_full = "┌─ 常用命令行预设 (按数字/回车选择) ┐";
+    int min_hdr = utf8_cols(hdr_full, (int)strlen(hdr_full));
     int pw = 1 + 2 + 4 + mnw + 1 + mcw + 2; // "│  [1] " (7) + name + " " (1) + cmd + " │" (2)
     if (pw < min_hdr + 2) pw = min_hdr + 2;
     if (pw > host_cols) pw = host_cols;
@@ -3465,13 +3466,15 @@ static unsigned __stdcall pane_read_thread(void *arg) {
 // mouse wheel). Termux renders it itself - no cmd process involved.
 static const char *const g_help_lines[] = {
     "\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m termux - 帮助",
-    "\x1b[38;2;139;148;158m  版本 v1.4.3 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
+    "\x1b[38;2;139;148;158m  版本 v1.4.5 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
     "",
     "\x1b[38;2;121;192;255;1m  键盘快捷键\x1b[0m",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mc\x1b[0m         新建默认 pane",
+    "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243m+\x1b[0m         新建 pane 菜单 (选择/自定义命令行)",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mn / p\x1b[0m     下一个 / 上一个 pane",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mx\x1b[0m         关闭当前 pane",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243ms\x1b[0m         打开图形化设置 (termux.ini)",
+    "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243m? / h\x1b[0m     打开 / 关闭本帮助",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243md\x1b[0m         退出 termux",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mt\x1b[0m         轮换标签颜色 (Shift+t 反向)",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243m0-9\x1b[0m       跳转到 pane",
@@ -3482,7 +3485,7 @@ static const char *const g_help_lines[] = {
     "  \x1b[38;2;230;237;243m右键 tab\x1b[0m           改颜色 / 改标题",
     "  \x1b[38;2;230;237;243m点击 [+]\x1b[0m           新建 pane (支持选择/自定义命令行)",
     "  \x1b[38;2;230;237;243m点击 [*]\x1b[0m           打开图形化设置页面",
-    "  \x1b[38;2;230;237;243m点击 termux\x1b[0m       打开 / 关闭本帮助",
+    "  \x1b[38;2;230;237;243m点击 termux\x1b[0m        打开 / 关闭本帮助",
     "",
     "\x1b[38;2;121;192;255;1m  提示与警告\x1b[0m",
     "  - \x1b[38;2;248;81;73m警告: 终端必须使用等宽字体，否则会渲染故障\x1b[0m",
@@ -3611,7 +3614,7 @@ static int create_about_pane(void) {
         "  \x1b[38;2;217;119;54;1mWindows 终端复用器 (Terminal Multiplexer)\x1b[0m\r\n"
         "  \x1b[38;2;139;148;158m基于 Windows ConPTY 的高性能单文件 C 终端复用多标签环境\x1b[0m\r\n\r\n"
         "  \x1b[38;2;48;54;61m────────────────────────────────────────────────────────────\x1b[0m\r\n"
-        "  \x1b[38;2;217;119;54;1m■ 版本号 (Version)      :\x1b[0m \x1b[38;2;230;237;243;1mv1.4.3\x1b[0m\r\n"
+        "  \x1b[38;2;217;119;54;1m■ 版本号 (Version)      :\x1b[0m \x1b[38;2;230;237;243;1mv1.4.5\x1b[0m\r\n"
         "  \x1b[38;2;217;119;54;1m■ 作  者 (Author)       :\x1b[0m \x1b[38;2;63;185;80;1mwu_dream813\x1b[0m\r\n"
         "  \x1b[38;2;217;119;54;1m■ 系统版本 (OS Version) :\x1b[0m \x1b[38;2;230;237;243m%s\x1b[0m\r\n"
         "  \x1b[38;2;48;54;61m────────────────────────────────────────────────────────────\x1b[0m\r\n\r\n"
@@ -4538,9 +4541,42 @@ static void handle_settings_mouse(MOUSE_EVENT_RECORD *me) {
     }
 }
 
-static void handle_prefix(WORD vk, DWORD ctrl) {
+static void handle_prefix(WORD vk, DWORD ctrl, WCHAR uc) {
     g_mux.prefix_mode = 0;
     if (vk == 'B' && (ctrl & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED))) { char c = 2; write_to_pane(&c, 1); return; }
+
+    // v1.4.4 / v1.4.5: Ctrl+B + (open [+] chooser submenu)
+    // Matches uc == '+' or '=' (with or without Shift) or VK_OEM_PLUS or VK_ADD
+    if (uc == '+' || uc == '=' || vk == VK_OEM_PLUS || vk == VK_ADD || vk == '+') {
+        g_mux.ctx_mode = 0;
+        g_mux.rename_mode = 0;
+        g_mux.custom_cmd_mode = 0;
+        g_mux.help_mode = 0;
+        g_mux.chooser_mode = 1;
+        g_pop_anchor_x = 20;
+        for (int k = 0; k < g_mux.tab_count; k++) {
+            if (g_mux.tab_info[k].pane_idx == -1) {
+                g_pop_anchor_x = g_mux.tab_info[k].start_col;
+                break;
+            }
+        }
+        g_mux.needs_redraw = 1;
+        return;
+    }
+
+    // v1.4.4 / v1.4.5: Ctrl+B ? or Ctrl+B h (open/close help view)
+    // Matches uc == '?' or '/' (with or without Shift) or 'h' / 'H' or VK_OEM_2 or VK_DIVIDE
+    if (uc == '?' || uc == '/' || uc == 'h' || uc == 'H' || vk == 'H' || vk == 'h' || vk == VK_OEM_2 || vk == VK_DIVIDE || vk == '?') {
+        g_mux.help_mode = !g_mux.help_mode;
+        if (!g_mux.help_mode) g_mux.help_scroll = 0;
+        g_mux.chooser_mode = 0;
+        g_mux.ctx_mode = 0;
+        g_mux.rename_mode = 0;
+        g_mux.custom_cmd_mode = 0;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+
     switch (vk) {
         case 'C': case 'c': { int i = create_pane(); if (i >= 0) switch_pane(i); break; }
         case 'N': case 'n': { int n = find_next_active_pane(g_mux.active_pane); if (n >= 0) switch_pane(n); break; }
@@ -4552,7 +4588,7 @@ static void handle_prefix(WORD vk, DWORD ctrl) {
                 // v1.4.1: About and Settings tabs cannot cycle color
                 if (!g_mux.panes[g_mux.active_pane].is_about && !g_mux.panes[g_mux.active_pane].is_settings) {
                     int c = g_mux.panes[g_mux.active_pane].color;
-                    c += (vk == 'T') ? -1 : 1;
+                    c += (ctrl & SHIFT_PRESSED) ? -1 : 1;
                     if (c > 8) c = 1;
                     if (c < 1) c = 8;
                     g_mux.panes[g_mux.active_pane].color = c;
@@ -4625,7 +4661,7 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
         return;
     }
 
-    if (g_mux.prefix_mode) { handle_prefix(vk, ctrl); return; }
+    if (g_mux.prefix_mode) { handle_prefix(vk, ctrl, uc); return; }
     if ((uc == 0x02) || (vk == 'B' && is_ctrl && !is_alt && !is_shift)) { g_mux.prefix_mode = 1; return; }
 
     // Settings panel active
