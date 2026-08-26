@@ -14,6 +14,7 @@ CHECKS = (
     "verify_emoji.py",
     "verify_v140.py",
     "verify_v142.py",
+    "verify_v143.py",
 )
 
 

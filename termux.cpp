@@ -1,4 +1,4 @@
-// termux.cpp - Windows Terminal Multiplexer v1.4.2
+// termux.cpp - Windows Terminal Multiplexer v1.4.3
 // ---------------------------------------------------------------------------
 // v8.3 changes:
 //  19. ConPTY line-width autodetect: legacy full-screen apps (edit.com...) can
@@ -321,8 +321,10 @@ static int g_chooser_item_count = 0;
 
 static int g_settings_nav = 0;           // 0 = 启动 (Startup), 1..N = Menu Item index (0..N-1)
 static int g_settings_field = 0;         // 0 = Name, 1 = Cmd, 2 = Workdir
+static int g_settings_table_sel = 0;     // focused row index in startup view table (0..count-1)
 static int g_default_startup = 0;        // 0 = 默认终端 (Terminal), 1 = 内置帮助 (Help)
 static int g_settings_show_presets = 0;  // 1 = show presets dialog overlay inside settings
+static int g_preset_sel = 0;             // selected row in presets dialog
 static char g_edit_name[32] = {0};
 static int g_edit_name_len = 0, g_edit_name_pos = 0;
 static char g_edit_cmd[256] = {0};
@@ -2836,8 +2838,8 @@ static void render_settings_presets(char *out, int bs, int *posp, int host_rows,
     presets_geom(host_rows, host_cols, &top, &left, &pw, &ph, &mnw, &mcw);
     int pos = *posp;
 
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[38;2;13;17;23m\x1b[48;2;121;192;255;1m┌─ 常用命令行预设 (按数字添加) ", top, left);
-    int cols = utf8_cols("┌─ 常用命令行预设 (按数字添加) ", (int)strlen("┌─ 常用命令行预设 (按数字添加) "));
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[38;2;255;255;255m\x1b[48;2;31;136;61;1m┌─ 常用命令行预设 (按数字/回车选择) ", top, left);
+    int cols = utf8_cols("┌─ 常用命令行预设 (按数字/回车选择) ", (int)strlen("┌─ 常用命令行预设 (按数字/回车选择) "));
     while (cols < pw - 1 && pos < bs - 8) {
         out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
         cols++;
@@ -2847,7 +2849,8 @@ static void render_settings_presets(char *out, int bs, int *posp, int host_rows,
     for (int i = 0; i < g_preset_count; i++) {
         int r = top + 1 + i;
         int row_hover = (g_mouse_y == r - 1 && g_mouse_x >= left && g_mouse_x < left + pw);
-        const char *bg = row_hover ? "\x1b[48;2;45;55;72m" : "";
+        int is_sel = (i == g_preset_sel);
+        const char *bg = (row_hover || is_sel) ? "\x1b[48;2;45;55;72m" : "";
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m%s  \x1b[38;2;210;153;34m[%d]\x1b[0m%s \x1b[38;2;230;237;243;1m",
                         r, left, bg, i + 1, bg);
         cols = 1 + 2 + 4;
@@ -2896,9 +2899,9 @@ static void render_settings_panel(char *out, int bs, int *posp, int host_rows, i
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[0m\x1b[K", r);
     }
 
-    // Header Title at row 2 (Light Blue theme v1.4.1)
-    pos += snprintf(out + pos, bs - pos, "\x1b[2;1H\x1b[48;2;121;192;255m\x1b[38;2;13;17;23;1m  ⚙️  termux - 设置面板 (Settings Panel)");
-    int hdr_used = utf8_cols("  ⚙️  termux - 设置面板 (Settings Panel)", (int)strlen("  ⚙️  termux - 设置面板 (Settings Panel)"));
+    // Header Title at row 2 (Light Blue theme v1.4.1, '*' icon v1.4.3)
+    pos += snprintf(out + pos, bs - pos, "\x1b[2;1H\x1b[48;2;121;192;255m\x1b[38;2;13;17;23;1m  *  termux - 设置面板 (Settings Panel)");
+    int hdr_used = utf8_cols("  *  termux - 设置面板 (Settings Panel)", (int)strlen("  *  termux - 设置面板 (Settings Panel)"));
     while (hdr_used < host_cols && pos < bs - 8) { out[pos++] = ' '; hdr_used++; }
     pos += snprintf(out + pos, bs - pos, "\x1b[0m");
 
@@ -2943,11 +2946,11 @@ static void render_settings_panel(char *out, int bs, int *posp, int host_rows, i
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H%s  [+] 添加新条目    \x1b[0m", add_r, h_add ? "\x1b[48;2;63;185;80m\x1b[38;2;13;17;23;1m" : "\x1b[38;2;63;185;80;1m");
     }
 
-    // Row 8 + g_chooser_item_count: [P] 快速预设库
+    // Row 8 + g_chooser_item_count: [P] 快速预设库 (Dark green v1.4.3)
     int pre_r = 8 + g_chooser_item_count;
     if (pre_r <= host_rows - 2) {
         int h_pre = (g_mouse_y == pre_r - 1 && g_mouse_x >= 0 && g_mouse_x < sb_w);
-        pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H%s  [P] 快速预设库    \x1b[0m", pre_r, h_pre ? "\x1b[48;2;121;192;255m\x1b[38;2;13;17;23;1m" : "\x1b[38;2;121;192;255;1m");
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H%s  [P] 快速预设库    \x1b[0m", pre_r, h_pre ? "\x1b[48;2;31;136;61m\x1b[38;2;255;255;255;1m" : "\x1b[38;2;31;136;61;1m");
     }
 
     // Bottom of sidebar: [Ctrl+S] 保存配置
@@ -2964,7 +2967,7 @@ static void render_settings_panel(char *out, int bs, int *posp, int host_rows, i
     if (g_settings_nav == 0) {
         // === 启动 (Startup) View ===
         pos += snprintf(out + pos, bs - pos, "\x1b[3;%dH\x1b[38;2;121;192;255;1m■ 默认启动项设置 (Default Startup Item)\x1b[0m", main_left);
-        pos += snprintf(out + pos, bs - pos, "\x1b[4;%dH\x1b[38;2;139;148;158m选择每次打开 termux 窗口时默认显示的界面：\x1b[0m", main_left);
+        pos += snprintf(out + pos, bs - pos, "\x1b[4;%dH\x1b[38;2;139;148;158m选择每次打开 termux 窗口时默认显示的界面 (按 ←/→/Space/T/H 切换)：\x1b[0m", main_left);
 
         int opt0_hover = (g_mouse_y == 4 && g_mouse_x >= main_left && g_mouse_x < main_left + 24);
         int opt1_hover = (g_mouse_y == 4 && g_mouse_x >= main_left + 26 && g_mouse_x < main_left + 48);
@@ -2978,14 +2981,15 @@ static void render_settings_panel(char *out, int bs, int *posp, int host_rows, i
                         main_left, opt0_style, opt1_style);
 
         pos += snprintf(out + pos, bs - pos, "\x1b[7;%dH\x1b[38;2;121;192;255;1m■ [+] 新建菜单项顺序与管理 ([+] Menu Order)\x1b[0m", main_left);
-        pos += snprintf(out + pos, bs - pos, "\x1b[8;%dH\x1b[38;2;139;148;158m点击 [↑][↓] 调整快捷键 1-9 的顺序，点击 [改] 编辑，点击 [删] 移除：\x1b[0m", main_left);
+        pos += snprintf(out + pos, bs - pos, "\x1b[8;%dH\x1b[38;2;139;148;158m按 ↑/↓ 选择行，U/D 调顺序，Enter/[改] 编辑，X/[删] 移除：\x1b[0m", main_left);
 
-        pos += snprintf(out + pos, bs - pos, "\x1b[9;%dH\x1b[38;2;121;192;255;1m  序号  显示名称        启动命令行                       操作\x1b[0m", main_left);
+        pos += snprintf(out + pos, bs - pos, "\x1b[9;%dH\x1b[38;2;121;192;255;1m   序号  显示名称        启动命令行                       操作\x1b[0m", main_left);
 
         for (int i = 0; i < g_chooser_item_count; i++) {
             int r = 10 + i;
             if (r > host_rows - 2) break;
             int row_hover = (g_mouse_y == r - 1 && g_mouse_x >= main_left && g_mouse_x < host_cols);
+            int row_focus = (i == g_settings_table_sel);
             int h_up = (row_hover && g_mouse_x >= main_left + 52 && g_mouse_x <= main_left + 54);
             int h_dn = (row_hover && g_mouse_x >= main_left + 55 && g_mouse_x <= main_left + 57);
             int h_ed = (row_hover && g_mouse_x >= main_left + 58 && g_mouse_x <= main_left + 61);
@@ -2994,10 +2998,11 @@ static void render_settings_panel(char *out, int bs, int *posp, int host_rows, i
             char dname[32] = {0}; format_name_display(dname, sizeof(dname), g_chooser_items[i].name);
             char dcmd[64] = {0}; format_cmd_display(dcmd, sizeof(dcmd), g_chooser_items[i].cmd);
 
-            const char *row_bg = (row_hover && !h_up && !h_dn && !h_ed && !h_del) ? "\x1b[48;2;27;33;44m" : "";
+            const char *row_bg = (row_focus && !h_up && !h_dn && !h_ed && !h_del) ? "\x1b[48;2;38;50;68m" :
+                                 ((row_hover && !h_up && !h_dn && !h_ed && !h_del) ? "\x1b[48;2;27;33;44m" : "");
 
-            pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s  \x1b[38;2;210;153;34m[%d]\x1b[0m%s  \x1b[38;2;230;237;243;1m%-12s\x1b[0m%s  \x1b[38;2;139;148;158m%-30s\x1b[0m%s",
-                            r, main_left, row_bg, i + 1, row_bg, dname, row_bg, dcmd, row_bg);
+            pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s %s\x1b[38;2;210;153;34m[%d]\x1b[0m%s  \x1b[38;2;230;237;243;1m%-12s\x1b[0m%s  \x1b[38;2;139;148;158m%-30s\x1b[0m%s",
+                            r, main_left, row_bg, (row_focus ? "▶" : " "), i + 1, row_bg, dname, row_bg, dcmd, row_bg);
 
             pos += snprintf(out + pos, bs - pos, "  %s[↑]\x1b[0m", h_up ? "\x1b[48;2;63;185;80m\x1b[38;2;13;17;23;1m" : "\x1b[38;2;63;185;80m");
             pos += snprintf(out + pos, bs - pos, "%s[↓]\x1b[0m", h_dn ? "\x1b[48;2;217;119;54m\x1b[38;2;13;17;23;1m" : "\x1b[38;2;217;119;54m");
@@ -3012,8 +3017,11 @@ static void render_settings_panel(char *out, int bs, int *posp, int host_rows, i
 
             pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH", btn_r, main_left);
             pos += snprintf(out + pos, bs - pos, "%s [+] 添加条目 \x1b[0m  ", h_add ? "\x1b[48;2;63;185;80m\x1b[38;2;13;17;23;1m" : "\x1b[48;2;33;38;45m\x1b[38;2;63;185;80;1m");
-            pos += snprintf(out + pos, bs - pos, "%s [P] 快速预设 \x1b[0m", h_pre ? "\x1b[48;2;121;192;255m\x1b[38;2;13;17;23;1m" : "\x1b[48;2;33;38;45m\x1b[38;2;121;192;255;1m");
+            pos += snprintf(out + pos, bs - pos, "%s [P] 快速预设 \x1b[0m", h_pre ? "\x1b[48;2;31;136;61m\x1b[38;2;255;255;255;1m" : "\x1b[48;2;33;38;45m\x1b[38;2;31;136;61;1m");
         }
+
+        int hint_r = btn_r + 2 <= host_rows ? btn_r + 2 : host_rows;
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[38;2;139;148;158m提示: ↑/↓ 选择, Enter 编辑, U/D 调序, X 删除, + 新建, P 预设, Ctrl+S 保存, Esc 退出\x1b[0m", hint_r, main_left);
     } else {
         // === 菜单项单独配置 (Item Detail) View ===
         int item_idx = g_settings_nav - 1;
@@ -3059,10 +3067,10 @@ static void render_settings_panel(char *out, int bs, int *posp, int host_rows, i
 
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH", act_r, main_left);
         pos += snprintf(out + pos, bs - pos, "%s [保存并应用此项] \x1b[0m  ", h_apply ? "\x1b[48;2;121;192;255m\x1b[38;2;13;17;23;1m" : "\x1b[48;2;33;38;45m\x1b[38;2;121;192;255;1m");
-        pos += snprintf(out + pos, bs - pos, "%s [从预设库导入] \x1b[0m  ", h_imp ? "\x1b[48;2;63;185;80m\x1b[38;2;13;17;23;1m" : "\x1b[48;2;33;38;45m\x1b[38;2;63;185;80;1m");
+        pos += snprintf(out + pos, bs - pos, "%s [从预设库导入] \x1b[0m  ", h_imp ? "\x1b[48;2;31;136;61m\x1b[38;2;255;255;255;1m" : "\x1b[48;2;33;38;45m\x1b[38;2;31;136;61;1m");
         pos += snprintf(out + pos, bs - pos, "%s [删除此项] \x1b[0m", h_del ? "\x1b[48;2;248;81;73m\x1b[38;2;255;255;255;1m" : "\x1b[48;2;33;38;45m\x1b[38;2;248;81;73;1m");
 
-        pos += snprintf(out + pos, bs - pos, "\x1b[16;%dH\x1b[38;2;139;148;158m提示: 点击输入框或按 Tab 切换，输入后按 Enter 保存，左下角 [Ctrl+S] 保存所有配置\x1b[0m", main_left);
+        pos += snprintf(out + pos, bs - pos, "\x1b[16;%dH\x1b[38;2;139;148;158m提示: Tab 切换输入框, Enter 保存应用, Ctrl+P 导入预设, Ctrl+D 删除, Esc 返回\x1b[0m", main_left);
     }
 
     if (g_settings_show_presets) {
@@ -3457,7 +3465,7 @@ static unsigned __stdcall pane_read_thread(void *arg) {
 // mouse wheel). Termux renders it itself - no cmd process involved.
 static const char *const g_help_lines[] = {
     "\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m termux - 帮助",
-    "\x1b[38;2;139;148;158m  版本 v1.4.2 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
+    "\x1b[38;2;139;148;158m  版本 v1.4.3 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
     "",
     "\x1b[38;2;121;192;255;1m  键盘快捷键\x1b[0m",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mc\x1b[0m         新建默认 pane",
@@ -3603,7 +3611,7 @@ static int create_about_pane(void) {
         "  \x1b[38;2;217;119;54;1mWindows 终端复用器 (Terminal Multiplexer)\x1b[0m\r\n"
         "  \x1b[38;2;139;148;158m基于 Windows ConPTY 的高性能单文件 C 终端复用多标签环境\x1b[0m\r\n\r\n"
         "  \x1b[38;2;48;54;61m────────────────────────────────────────────────────────────\x1b[0m\r\n"
-        "  \x1b[38;2;217;119;54;1m■ 版本号 (Version)      :\x1b[0m \x1b[38;2;230;237;243;1mv1.4.2\x1b[0m\r\n"
+        "  \x1b[38;2;217;119;54;1m■ 版本号 (Version)      :\x1b[0m \x1b[38;2;230;237;243;1mv1.4.3\x1b[0m\r\n"
         "  \x1b[38;2;217;119;54;1m■ 作  者 (Author)       :\x1b[0m \x1b[38;2;63;185;80;1mwu_dream813\x1b[0m\r\n"
         "  \x1b[38;2;217;119;54;1m■ 系统版本 (OS Version) :\x1b[0m \x1b[38;2;230;237;243m%s\x1b[0m\r\n"
         "  \x1b[38;2;48;54;61m────────────────────────────────────────────────────────────\x1b[0m\r\n\r\n"
@@ -3816,7 +3824,9 @@ static int open_settings_pane(void) {
 
     g_settings_nav = 0;
     g_settings_field = 0;
+    g_settings_table_sel = 0;
     g_settings_show_presets = 0;
+    g_preset_sel = 0;
     if (g_chooser_item_count > 0) {
         load_item_to_editor(0);
     }
@@ -3921,6 +3931,7 @@ static void handle_settings_key(KEY_EVENT_RECORD *ke) {
     WORD vk = ke->wVirtualKeyCode; DWORD ctrl = ke->dwControlKeyState; WCHAR uc = ke->uChar.UnicodeChar;
     BOOL is_ctrl = (ctrl & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0;
     BOOL is_shift = (ctrl & SHIFT_PRESSED) != 0;
+    BOOL is_alt = (ctrl & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) != 0;
 
     // Presets popup active inside settings
     if (g_settings_show_presets) {
@@ -3928,6 +3939,42 @@ static void handle_settings_key(KEY_EVENT_RECORD *ke) {
             g_settings_show_presets = 0;
             g_mux.needs_redraw = 1;
             return;
+        }
+        if (vk == VK_UP) {
+            g_preset_sel = (g_preset_sel - 1 + g_preset_count) % g_preset_count;
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (vk == VK_DOWN) {
+            g_preset_sel = (g_preset_sel + 1) % g_preset_count;
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (vk == VK_RETURN) {
+            int i = g_preset_sel;
+            if (i >= 0 && i < g_preset_count) {
+                if (g_settings_nav >= 1) {
+                    int idx = g_settings_nav - 1;
+                    if (idx >= 0 && idx < g_chooser_item_count) {
+                        strncpy(g_edit_name, g_presets[i].name, sizeof(g_edit_name) - 1);
+                        g_edit_name_len = (int)strlen(g_edit_name);
+                        g_edit_name_pos = g_edit_name_len;
+                        strncpy(g_edit_cmd, g_presets[i].cmd, sizeof(g_edit_cmd) - 1);
+                        g_edit_cmd_len = (int)strlen(g_edit_cmd);
+                        g_edit_cmd_pos = g_edit_cmd_len;
+                        save_editor_to_item(idx);
+                    }
+                } else if (g_chooser_item_count < MAX_CHOOSER_ITEMS) {
+                    int idx = g_chooser_item_count++;
+                    strncpy(g_chooser_items[idx].name, g_presets[i].name, sizeof(g_chooser_items[0].name) - 1);
+                    strncpy(g_chooser_items[idx].cmd, g_presets[i].cmd, sizeof(g_chooser_items[0].cmd) - 1);
+                    g_chooser_items[idx].workdir[0] = 0;
+                    save_config();
+                }
+                g_settings_show_presets = 0;
+                g_mux.needs_redraw = 1;
+                return;
+            }
         }
         for (int i = 0; i < g_preset_count; i++) {
             char digit = (char)('1' + i);
@@ -3969,30 +4016,16 @@ static void handle_settings_key(KEY_EVENT_RECORD *ke) {
         return;
     }
 
-    // Tab / Shift+Tab: switch input fields in item editor
-    if (vk == VK_TAB) {
-        if (g_settings_nav >= 1) {
-            if (is_shift) {
-                g_settings_field = (g_settings_field + 2) % 3;
-            } else {
-                g_settings_field = (g_settings_field + 1) % 3;
-            }
-            g_mux.needs_redraw = 1;
-            return;
-        }
+    // Global: Ctrl+P / Alt+P to open presets
+    if (((vk == 'P' || vk == 'p') && (is_ctrl || is_alt)) || uc == 0x10) {
+        g_settings_show_presets = 1;
+        g_preset_sel = 0;
+        g_mux.needs_redraw = 1;
+        return;
     }
 
-    // Enter: apply/save current item
-    if (vk == VK_RETURN) {
-        if (g_settings_nav >= 1) {
-            save_editor_to_item(g_settings_nav - 1);
-            g_mux.needs_redraw = 1;
-            return;
-        }
-    }
-
-    // Up / Down with Ctrl
-    if (vk == VK_UP && is_ctrl) {
+    // Navigation switching: Ctrl+Up / Ctrl+Down or Alt+Up / Alt+Down
+    if ((is_ctrl || is_alt) && vk == VK_UP) {
         if (g_settings_nav > 0) {
             g_settings_nav--;
             if (g_settings_nav >= 1) load_item_to_editor(g_settings_nav - 1);
@@ -4000,7 +4033,7 @@ static void handle_settings_key(KEY_EVENT_RECORD *ke) {
             return;
         }
     }
-    if (vk == VK_DOWN && is_ctrl) {
+    if ((is_ctrl || is_alt) && vk == VK_DOWN) {
         if (g_settings_nav < g_chooser_item_count) {
             g_settings_nav++;
             load_item_to_editor(g_settings_nav - 1);
@@ -4009,8 +4042,178 @@ static void handle_settings_key(KEY_EVENT_RECORD *ke) {
         }
     }
 
-    // Text editing when an item is selected on the left (g_settings_nav >= 1)
+    // --- Startup View (g_settings_nav == 0) Keyboard Handling ---
+    if (g_settings_nav == 0) {
+        if (vk == VK_ESCAPE) {
+            // Close settings pane and return to previous active pane
+            int c = g_mux.active_pane;
+            int n = find_next_active_pane(c);
+            close_pane(c);
+            if (n >= 0 && g_mux.panes[n].active) switch_pane(n);
+            else {
+                int f = 0;
+                for (int i = 0; i < g_mux.pane_count; i++) if (g_mux.panes[i].active) { switch_pane(i); f = 1; break; }
+                if (!f) g_mux.running = 0;
+            }
+            g_mux.needs_redraw = 1;
+            return;
+        }
+
+        // Toggle radio option: Left / Right / Space / T / H
+        if (vk == VK_LEFT || vk == VK_RIGHT || vk == VK_SPACE || uc == 't' || uc == 'T' || uc == 'h' || uc == 'H') {
+            if (uc == 't' || uc == 'T') g_default_startup = 0;
+            else if (uc == 'h' || uc == 'H') g_default_startup = 1;
+            else g_default_startup = !g_default_startup;
+            save_config();
+            g_mux.needs_redraw = 1;
+            return;
+        }
+
+        // Table cursor movement: Up / Down
+        if (vk == VK_UP) {
+            if (g_settings_table_sel > 0) g_settings_table_sel--;
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (vk == VK_DOWN) {
+            if (g_settings_table_sel < g_chooser_item_count - 1) g_settings_table_sel++;
+            g_mux.needs_redraw = 1;
+            return;
+        }
+
+        // Reorder Up: U / u / Shift+Up
+        if (uc == 'u' || uc == 'U' || (is_shift && vk == VK_UP)) {
+            int i = g_settings_table_sel;
+            if (i > 0 && i < g_chooser_item_count) {
+                ChooserItem tmp = g_chooser_items[i];
+                g_chooser_items[i] = g_chooser_items[i - 1];
+                g_chooser_items[i - 1] = tmp;
+                g_settings_table_sel = i - 1;
+                save_config();
+                g_mux.needs_redraw = 1;
+            }
+            return;
+        }
+
+        // Reorder Down: D / d / Shift+Down
+        if (uc == 'd' || uc == 'D' || (is_shift && vk == VK_DOWN)) {
+            int i = g_settings_table_sel;
+            if (i >= 0 && i < g_chooser_item_count - 1) {
+                ChooserItem tmp = g_chooser_items[i];
+                g_chooser_items[i] = g_chooser_items[i + 1];
+                g_chooser_items[i + 1] = tmp;
+                g_settings_table_sel = i + 1;
+                save_config();
+                g_mux.needs_redraw = 1;
+            }
+            return;
+        }
+
+        // Edit selected item: Enter / E / e
+        if (vk == VK_RETURN || uc == 'e' || uc == 'E') {
+            int i = g_settings_table_sel;
+            if (i >= 0 && i < g_chooser_item_count) {
+                g_settings_nav = i + 1;
+                load_item_to_editor(i);
+                g_mux.needs_redraw = 1;
+                return;
+            }
+        }
+
+        // Delete selected item: Delete / Backspace / X / x
+        if (vk == VK_DELETE || vk == VK_BACK || uc == 'x' || uc == 'X') {
+            int i = g_settings_table_sel;
+            if (g_chooser_item_count > 1 && i >= 0 && i < g_chooser_item_count) {
+                for (int k = i; k < g_chooser_item_count - 1; k++)
+                    g_chooser_items[k] = g_chooser_items[k + 1];
+                g_chooser_item_count--;
+                if (g_settings_table_sel >= g_chooser_item_count) g_settings_table_sel = g_chooser_item_count - 1;
+                save_config();
+                g_mux.needs_redraw = 1;
+                return;
+            }
+        }
+
+        // Add new item: + / = / A / a / N / n
+        if (uc == '+' || uc == '=' || uc == 'a' || uc == 'A' || uc == 'n' || uc == 'N') {
+            if (g_chooser_item_count < MAX_CHOOSER_ITEMS) {
+                int idx = g_chooser_item_count++;
+                strcpy(g_chooser_items[idx].name, "新终端");
+                strcpy(g_chooser_items[idx].cmd, "cmd.exe");
+                g_chooser_items[idx].workdir[0] = 0;
+                save_config();
+                g_settings_table_sel = idx;
+                g_settings_nav = idx + 1;
+                load_item_to_editor(idx);
+                g_mux.needs_redraw = 1;
+                return;
+            }
+        }
+
+        // Open Presets: P / p
+        if (uc == 'p' || uc == 'P') {
+            g_settings_show_presets = 1;
+            g_preset_sel = 0;
+            g_mux.needs_redraw = 1;
+            return;
+        }
+
+        // Digit jump 1..9
+        if ((uc >= '1' && uc <= '9') || (vk >= '1' && vk <= '9') || (vk >= VK_NUMPAD1 && vk <= VK_NUMPAD9)) {
+            int num = (uc >= '1' && uc <= '9') ? (uc - '0') : ((vk >= '1' && vk <= '9') ? (vk - '0') : (vk - VK_NUMPAD1 + 1));
+            if (num <= g_chooser_item_count) {
+                g_settings_table_sel = num - 1;
+                g_settings_nav = num;
+                load_item_to_editor(num - 1);
+                g_mux.needs_redraw = 1;
+                return;
+            }
+        }
+        return;
+    }
+
+    // --- Item Detail View (g_settings_nav >= 1) Keyboard Handling ---
     if (g_settings_nav >= 1) {
+        if (vk == VK_ESCAPE) {
+            g_settings_nav = 0;
+            g_mux.needs_redraw = 1;
+            return;
+        }
+
+        // Tab / Shift+Tab: switch input fields in item editor
+        if (vk == VK_TAB) {
+            if (is_shift) {
+                g_settings_field = (g_settings_field + 2) % 3;
+            } else {
+                g_settings_field = (g_settings_field + 1) % 3;
+            }
+            g_mux.needs_redraw = 1;
+            return;
+        }
+
+        // Ctrl+D or Alt+D: Delete current item
+        if (((vk == 'D' || vk == 'd') && (is_ctrl || is_alt)) || uc == 0x04) {
+            int item_idx = g_settings_nav - 1;
+            if (g_chooser_item_count > 1 && item_idx >= 0 && item_idx < g_chooser_item_count) {
+                for (int k = item_idx; k < g_chooser_item_count - 1; k++)
+                    g_chooser_items[k] = g_chooser_items[k + 1];
+                g_chooser_item_count--;
+                g_settings_nav = 0;
+                if (g_settings_table_sel >= g_chooser_item_count) g_settings_table_sel = g_chooser_item_count - 1;
+                save_config();
+                g_mux.needs_redraw = 1;
+                return;
+            }
+        }
+
+        // Enter: apply/save current item
+        if (vk == VK_RETURN) {
+            save_editor_to_item(g_settings_nav - 1);
+            g_mux.needs_redraw = 1;
+            return;
+        }
+
+        // Text editing when an item is selected on the left (g_settings_nav >= 1)
         char *buf = NULL;
         int *len = NULL;
         int *pos = NULL;
@@ -4220,23 +4423,30 @@ static void handle_settings_mouse(MOUSE_EVENT_RECORD *me) {
                     int h_dn = (c >= main_left + 55 && c <= main_left + 57);
                     int h_ed = (c >= main_left + 58 && c <= main_left + 61);
                     int h_del = (c >= main_left + 62 && c <= main_left + 65);
-                    if (h_up && i > 0) {
-                        ChooserItem tmp = g_chooser_items[i];
-                        g_chooser_items[i] = g_chooser_items[i - 1];
-                        g_chooser_items[i - 1] = tmp;
-                        save_config();
-                        g_mux.needs_redraw = 1;
+                    if (h_up) {
+                        if (i > 0) {
+                            ChooserItem tmp = g_chooser_items[i];
+                            g_chooser_items[i] = g_chooser_items[i - 1];
+                            g_chooser_items[i - 1] = tmp;
+                            g_settings_table_sel = i - 1;
+                            save_config();
+                            g_mux.needs_redraw = 1;
+                        }
                         return;
                     }
-                    if (h_dn && i < g_chooser_item_count - 1) {
-                        ChooserItem tmp = g_chooser_items[i];
-                        g_chooser_items[i] = g_chooser_items[i + 1];
-                        g_chooser_items[i + 1] = tmp;
-                        save_config();
-                        g_mux.needs_redraw = 1;
+                    if (h_dn) {
+                        if (i < g_chooser_item_count - 1) {
+                            ChooserItem tmp = g_chooser_items[i];
+                            g_chooser_items[i] = g_chooser_items[i + 1];
+                            g_chooser_items[i + 1] = tmp;
+                            g_settings_table_sel = i + 1;
+                            save_config();
+                            g_mux.needs_redraw = 1;
+                        }
                         return;
                     }
                     if (h_ed) {
+                        g_settings_table_sel = i;
                         g_settings_nav = i + 1;
                         load_item_to_editor(i);
                         g_mux.needs_redraw = 1;
@@ -4247,11 +4457,14 @@ static void handle_settings_mouse(MOUSE_EVENT_RECORD *me) {
                             for (int k = i; k < g_chooser_item_count - 1; k++)
                                 g_chooser_items[k] = g_chooser_items[k + 1];
                             g_chooser_item_count--;
+                            if (g_settings_table_sel >= g_chooser_item_count) g_settings_table_sel = g_chooser_item_count - 1;
                             save_config();
                             g_mux.needs_redraw = 1;
-                            return;
                         }
+                        return;
                     }
+                    // Clicked on row body
+                    g_settings_table_sel = i;
                     g_settings_nav = i + 1;
                     load_item_to_editor(i);
                     g_mux.needs_redraw = 1;
@@ -5083,7 +5296,7 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                     return;
                 }
                 if (t->pane_idx == -3) {
-                    // [⚙] opens graphical settings panel tab
+                    // [*] opens graphical settings panel tab
                     g_mux.chooser_mode = 0;
                     g_mux.ctx_mode = 0;
                     g_mux.rename_mode = 0;
