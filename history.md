@@ -7,11 +7,11 @@
 ## 版本更新记录
 
 ### v1.3.1
-- **精准隔离 Alt-Screen 运行程序（nano / vim / less）的滚动条展示**：
-  - 明确滚动条渲染边界：普通命令行会话（cmd / PowerShell / bash）中滚动条始终正常渲染且常驻可见；仅当子程序处于 Alt-Screen 全屏模式（nano / vim / less）时，当前 Pane 自动隐藏滚动条。
-  - 完善 Alt-Screen 状态机的全套进入与退出控制指令捕获（`DECSET/DECRST 1049/1047/47` 及无前缀 `h/l` 兜底兼容）。
-  - 进入 Alt-Screen 时强制清零历史滚动偏移量（`scroll_offset = 0`），退出 Alt-Screen 时即刻恢复主屏滚动条与视口。
-  - 独立关于标签页（About Panel）同步以 Alt-Screen 规范模式运行，不展示多余滚动条。
+- **Alt-Screen 全屏程序（nano / vim / less）直接扩展全宽并删除滚动条**：
+  - 明确并重构滚动条架构：Alt-Screen 模式直接比普通会话宽 1 格（`cols = host_cols`），彻底删除滚动条列（全宽铺满）而非留白隐藏。
+  - 在进入 Alt-Screen（`DECSET 1049/1047/47` 及无前缀 `h/l`）时动态扩容终端至 `host_cols`，并在退出 Alt-Screen（`DECRST`）时平滑恢复为 `host_cols - 1` + 滚动条。
+  - 进入 Alt-Screen 时强制清零历史滚动偏移量（`scroll_offset = 0`），全面屏蔽 Alt-Screen 模式下的滚动条渲染、百分比进度徽标以及鼠标滚轮滚动冲突。
+  - 独立关于标签页（About Panel）同步以规范的 Alt-Screen 全宽模式运行。
 
 ### v1.3.0
 - **直接在 Alt-Screen 渲染与零闪烁启动**：
