@@ -1,4 +1,4 @@
-// termux.cpp - Windows Terminal Multiplexer v1.2.5
+// termux.cpp - Windows Terminal Multiplexer v1.2.6
 // ---------------------------------------------------------------------------
 // v8.3 changes:
 //  19. ConPTY line-width autodetect: legacy full-screen apps (edit.com...) can
@@ -2764,14 +2764,34 @@ static void render_settings_edit_dialog(char *out, int bs, int *posp, int host_r
     *posp = pos;
 }
 
-#define PRESET_BOX_W 50
-static void render_settings_presets(char *out, int bs, int *posp, int host_rows, int host_cols) {
+static void presets_geom(int host_rows, int host_cols, int *top, int *left, int *w, int *h, int *max_nw, int *max_cw) {
     (void)host_rows;
-    int top = 3;
-    int pw = PRESET_BOX_W;
+    int mnw = 0, mcw = 0;
+    for (int i = 0; i < g_preset_count; i++) {
+        int nw = utf8_cols(g_presets[i].name, (int)strlen(g_presets[i].name));
+        int cw = utf8_cols(g_presets[i].cmd, (int)strlen(g_presets[i].cmd));
+        if (nw > mnw) mnw = nw;
+        if (cw > mcw) mcw = cw;
+    }
+    if (mnw < 6) mnw = 6;
+    if (mcw < 8) mcw = 8;
+    int min_hdr = utf8_cols("┌─ 常用命令行预设 (按数字添加) ┐", (int)strlen("┌─ 常用命令行预设 (按数字添加) "));
+    int pw = 1 + 2 + 4 + mnw + 1 + mcw + 2; // "│  [1] " (7) + name + " " (1) + cmd + " │" (2)
+    if (pw < min_hdr + 2) pw = min_hdr + 2;
     if (pw > host_cols) pw = host_cols;
-    int left = (host_cols - pw) / 2;
-    if (left < 0) left = 0;
+    int ph = g_preset_count + 3;
+    if (w) *w = pw;
+    if (h) *h = ph;
+    if (max_nw) *max_nw = mnw;
+    if (max_cw) *max_cw = mcw;
+    *top = 3;
+    *left = (host_cols - pw) / 2;
+    if (*left < 0) *left = 0;
+}
+
+static void render_settings_presets(char *out, int bs, int *posp, int host_rows, int host_cols) {
+    int top, left, pw, ph, mnw, mcw;
+    presets_geom(host_rows, host_cols, &top, &left, &pw, &ph, &mnw, &mcw);
     int pos = *posp;
 
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[38;2;255;255;255m\x1b[48;2;31;136;61m┌─ 常用命令行预设 (按数字添加) ", top, left);
@@ -2789,10 +2809,10 @@ static void render_settings_presets(char *out, int bs, int *posp, int host_rows,
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m%s  \x1b[38;2;210;153;34m[%d]\x1b[0m%s \x1b[38;2;230;237;243;1m",
                         r, left, bg, i + 1, bg);
         cols = 1 + 2 + 4;
-        append_padded_utf8(out, bs, &pos, &cols, g_presets[i].name, 12);
+        append_padded_utf8(out, bs, &pos, &cols, g_presets[i].name, mnw);
         pos += snprintf(out + pos, bs - pos, "\x1b[0m%s \x1b[38;2;139;148;158m", bg);
         cols += 1;
-        append_padded_utf8(out, bs, &pos, &cols, g_presets[i].cmd, 26);
+        append_padded_utf8(out, bs, &pos, &cols, g_presets[i].cmd, mcw);
         pos += snprintf(out + pos, bs - pos, "\x1b[0m");
         pad_to_right_border(out, bs, &pos, &cols, pw);
     }
@@ -3106,8 +3126,18 @@ static void render_screen(void) {
         int vo = pane->scroll_offset;
         int rr = s->rows < g_mux.host_rows ? s->rows : g_mux.host_rows;
         int rc = s->cols < g_mux.host_cols ? s->cols : g_mux.host_cols;
-        if (vo == 0 && s->cursor_visible && s->cursor_y + 1 <= rr && s->cursor_x + 1 <= rc) {
-            pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", s->cursor_y + 2, s->cursor_x + 1);
+        if (vo == 0 && s->cursor_visible) {
+            int cx = s->cursor_x;
+            int cy = s->cursor_y;
+            if (s->wraparound_pending && cy + 1 < rr) {
+                cy++;
+                cx = 0;
+            }
+            if (cy + 1 <= rr && cx + 1 <= rc) {
+                pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", cy + 2, cx + 1);
+            } else {
+                pos += snprintf(out + pos, bs - pos, "\x1b[?25l");
+            }
         } else {
             pos += snprintf(out + pos, bs - pos, "\x1b[?25l");
         }
@@ -3185,7 +3215,7 @@ static unsigned __stdcall pane_read_thread(void *arg) {
 // mouse wheel). Termux renders it itself - no cmd process involved.
 static const char *const g_help_lines[] = {
     "\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m termux - 帮助",
-    "\x1b[38;2;139;148;158m  版本 v1.2.5 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
+    "\x1b[38;2;139;148;158m  版本 v1.2.6 | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
     "",
     "\x1b[38;2;121;192;255;1m  键盘快捷键\x1b[0m",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mc\x1b[0m         新建默认 pane",
@@ -3329,7 +3359,7 @@ static int create_about_pane(void) {
         "  \x1b[38;2;217;119;54;1mWindows 终端复用器 (Terminal Multiplexer)\x1b[0m\r\n"
         "  \x1b[38;2;139;148;158m基于 Windows ConPTY 的高性能单文件 C 终端复用多标签环境\x1b[0m\r\n\r\n"
         "  \x1b[38;2;48;54;61m────────────────────────────────────────────────────────────\x1b[0m\r\n"
-        "  \x1b[38;2;217;119;54;1m■ 版本号 (Version)      :\x1b[0m \x1b[38;2;230;237;243;1mv1.2.5\x1b[0m\r\n"
+        "  \x1b[38;2;217;119;54;1m■ 版本号 (Version)      :\x1b[0m \x1b[38;2;230;237;243;1mv1.2.6\x1b[0m\r\n"
         "  \x1b[38;2;217;119;54;1m■ 作  者 (Author)       :\x1b[0m \x1b[38;2;63;185;80;1mwu_dream813\x1b[0m\r\n"
         "  \x1b[38;2;217;119;54;1m■ 系统版本 (OS Version) :\x1b[0m \x1b[38;2;230;237;243m%s\x1b[0m\r\n"
         "  \x1b[38;2;48;54;61m────────────────────────────────────────────────────────────\x1b[0m\r\n\r\n"
@@ -4757,11 +4787,8 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
                     return;
                 }
                 if (g_mux.settings_mode == 3) {
-                    int top = 3;
-                    int pw = PRESET_BOX_W;
-                    if (pw > g_mux.host_cols) pw = g_mux.host_cols;
-                    int left = (g_mux.host_cols - pw) / 2;
-                    if (left < 0) left = 0;
+                    int top, left, pw, ph, mnw, mcw;
+                    presets_geom(g_mux.host_rows, g_mux.host_cols, &top, &left, &pw, &ph, &mnw, &mcw);
                     int r = my + 1;
                     for (int i = 0; i < g_preset_count; i++) {
                         if (r == top + 1 + i) {
@@ -5193,7 +5220,7 @@ int main(void) {
     load_config();                               // load custom menu items from termux.ini
 
     host_printf("\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[2J\x1b[H");
-    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.2.5\x1b[0m\r\n");
+    host_printf("\x1b[36;1m Windows Terminal Multiplexer v1.2.6\x1b[0m\r\n");
     host_printf("  \x1b[33mhost: %dx%d\x1b[0m   (pane screen = host minus 1 tab bar row)\r\n\n", g_mux.host_cols, g_mux.host_rows);
     host_printf("  \x1b[33mCtrl+B\x1b[0m + c/n/p/x/d/0-9   (termux = 帮助)\r\n\n");
     host_printf("  \x1b[33m右键\x1b[0m 标签 = 改颜色、改标题\r\n\n");
