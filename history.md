@@ -6,6 +6,24 @@
 
 ## 版本更新记录
 
+### v1.7.0
+- **模块化架构重构（Multi-file Modular Architecture）**：
+  - 将单文件源码全面重构为清晰、高内聚、低耦合的多文件模块化 C 架构：
+    - `include/common.h`：核心 Windows 头文件、版本号宏、RGB565 颜色定义与全局常量。
+    - `include/types.h`：VT 解析器状态机、屏幕环形缓冲区、多路复用器 `MuxState` 与面板数据结构。
+    - `include/utf8.h` / `src/utf8.c`：UTF-8 编解码、宽字符判断、Emoji 字素簇识别与文本行编辑。
+    - `include/screen.h` / `src/screen.c`：环形缓冲区管理、真彩色属性存储、局部与全屏滚动、光标与属性构建。
+    - `include/vt.h` / `src/vt.c`：ANSI / VT100 / xterm 状态机解析、SGR 属性处理、OSC 标题过滤与路由。
+    - `include/config.h` / `src/config.c`：`termux.ini` 配置文件读写、快速预设库、设置编辑器状态维护。
+    - `include/pane.h` / `src/pane.c`：ConPTY 伪终端进程生命周期管理、I/O 读写线程、UI 特殊面板（设置/关于）管理。
+    - `include/render.h` / `src/render.c`：真彩色 TUI 渲染引擎、多标签栏、弹窗菜单、设置界面、选色器、搜索框绘制。
+    - `include/input.h` / `src/input.c`：键盘与前缀键分发、鼠标交互与滚动条拖拽、复制模式与剪贴板交互、历史滚动搜索匹配与跳转。
+    - `src/main.c`：控制台初始化与模式配置、主事件循环、窗口缩放、Ctrl+C/退出信号守卫与清理。
+- **构建系统与跨编译器支持**：
+  - 新增 `Makefile`，支持一键 `make`（MinGW GCC）、`make cpp`（G++）与 `make test`。
+  - 维持全平台 **0 Warnings, 0 Errors**（MinGW GCC、G++ 及 MSVC 100% 编译通过）。
+  - 更新 GitHub Actions CI 构建流程与所有回归测试套件。
+
 ### v1.6.2
 - **修复快捷键优先级与去除未组合键映射**：
   - 修复 `Ctrl+B /` 因键码重叠被优先误识别为帮助的 Bug，确保 `Ctrl+B /` 准确触发搜索，`Ctrl+B ? / h` 准确触发帮助。

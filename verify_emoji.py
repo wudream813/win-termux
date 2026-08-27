@@ -17,13 +17,12 @@ test_c = """
 typedef unsigned short WCHAR;
 """
 
-with open(ROOT / "termux.cpp", "r", encoding="utf-8") as f:
+with open(ROOT / "src" / "utf8.c", "r", encoding="utf-8") as f:
     src = f.read()
 
-# Extract functions from termux.cpp
-start_idx = src.find("static inline unsigned int utf8_decode_cp")
-end_idx = src.find("static WCHAR g_high_surrogate = 0;")
-extracted = src[start_idx:end_idx]
+# Strip #include "utf8.h"
+if '#include "utf8.h"' in src:
+    src = src.replace('#include "utf8.h"', "")
 
 driver = """
 int main() {
@@ -82,7 +81,7 @@ int main() {
 }
 """
 
-full_c = test_c + extracted + driver
+full_c = test_c + src + driver
 
 with tempfile.TemporaryDirectory() as tmpdir:
     c_path = os.path.join(tmpdir, "test_emoji_runner.c")

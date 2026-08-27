@@ -6,12 +6,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
-      - run: x86_64-w64-mingw32-gcc -O2 -Wall -x c -o termux.exe termux.cpp -luser32
-      - run: x86_64-w64-mingw32-g++ -O2 -Wall -o termux_cpp.exe termux.cpp -luser32
+      - run: x86_64-w64-mingw32-gcc -O2 -s -Wall -Wextra -Iinclude src/*.c -o termux.exe -luser32
+      - run: x86_64-w64-mingw32-g++ -O2 -s -Wall -Wextra -Iinclude src/*.c -o termux_cpp.exe -luser32
       - run: python3 verify_all.py
   msvc:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: ilammy/msvc-dev-cmd@v1
-      - run: cl /O2 termux.cpp /link user32.lib
+      - run: cl /O2 /Iinclude src\*.c /Fe:termux.exe /link user32.lib

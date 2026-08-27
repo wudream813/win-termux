@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Windows 终端复用器（Terminal Multiplexer）—— 单文件 C 实现，基于 Windows ConPTY。
+Windows 终端复用器（Terminal Multiplexer）—— 模块化 C 架构，基于 Windows ConPTY。
 在 Windows 控制台里管理多个 cmd / PowerShell 会话，像 tmux 一样分标签页。
 
 > ⚠️ **警告 / 注意事项**：
@@ -54,14 +54,13 @@ Windows 终端复用器（Terminal Multiplexer）—— 单文件 C 实现，基
 
 ```bat
 :: MSVC
-cl /O2 termux.cpp /link user32.lib
+cl /O2 /Iinclude src\*.c /Fe:termux.exe /link user32.lib
 
-:: MinGW-w64
-x86_64-w64-mingw32-gcc -O2 -Wall -x c -o termux.exe termux.cpp -luser32
+:: MinGW-w64 (GCC / Make)
+make
+:: 或手动执行
+x86_64-w64-mingw32-gcc -O2 -s -Wall -Wextra -Iinclude src/*.c -o termux.exe -luser32
 ```
-
-> 注意：`-x c` 必须保留 —— 文件扩展名是 `.cpp`，但代码是纯 C，
-> 不加 `-x c` 会让 gcc 按 C++ 编译。
 
 ## 运行
 
@@ -100,7 +99,7 @@ termux.exe
 
 ## 开发说明
 
-源码是**单文件 C**（`termux.cpp`），无第三方依赖，仅链接 `user32`。
+源码采用模块化架构（`include/` 与 `src/`），无第三方依赖，仅链接 `user32`。
 每次改动可一键运行仓库内的全部 Python 回归验证：
 
 ```bash
@@ -110,10 +109,13 @@ python3 verify_all.py
 也可以单独运行验证脚本：
 
 ```bash
-python3 verify_picker.py    # 选色器几何 / 点击 / hover 命中
-python3 verify_flow.py      # 弹窗端到端流程
-python3 verify_mouse53.py   # 鼠标按钮优先级 / 兜底 / 渲染用色
-python3 verify_color8.py    # color=8 渲染用色回归
+python3 verify_picker.py        # 选色器几何 / 点击 / hover 命中
+python3 verify_flow.py          # 弹窗端到端流程
+python3 verify_mouse53.py       # 鼠标按钮优先级 / 兜底 / 渲染用色
+python3 verify_color8.py        # color=8 渲染用色回归
+python3 verify_emoji.py         # Emoji 与字素簇边界测试
+python3 verify_ringbuf_asan.py  # 环形缓冲区局部滚动 ASAN 内存安全
+python3 verify_search.py        # 滚动历史搜索行为验证
 ```
 
 
