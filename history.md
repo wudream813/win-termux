@@ -7,6 +7,12 @@
 ## 版本更新记录
 
 ### v1.8.0
+- **滚动缓冲按行懒分配架构（Lazy Line Allocation）**：
+  - 将 10000 行环形缓冲区从一次性连续大内存申请重构为按行动态懒分配结构（`ScreenLine *lines`）。
+  - 新建或空闲面板内存占用从 ~11MB 骤降至 ~350KB（内存节省超 95%），各行按需分配并在环形滚动绕回时自动回收复用。
+- **修复设置界面 Hover 与点击判定向右偏移 1 格 Bug**：
+  - 全面修正 `render_settings_panel`、`render_settings_presets` 与 `handle_settings_mouse` 中 0-based 鼠标坐标与 1-based ANSI 控制台输出坐标系的映射偏差。
+  - 完美修复默认启动项按钮、新建菜单项表格行与操作按钮（[↑]、[↓]、[改]、[删]）、编辑字段输入框、操作按钮及预设选择列表的 Hover 高亮与点击热区错位。
 - **ASAN 内存安全测试真实源码动态抽取与变异验证（BUG-4）**：
   - 重构 `verify_ringbuf_asan.py` 与 `verify_search.py`，改为动态解析并抽取 `include/screen.h`、`src/screen.c` 及 `src/input.c` 中的真实实现，彻底根除静态代码硬编码副本与源码脱钩的隐患。
   - 引入变异测试（Mutation Testing）机制，确保测试套件对环形缓冲溢出及越界读写具备 100% 真实拦截能力。

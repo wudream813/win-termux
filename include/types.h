@@ -22,7 +22,14 @@ enum {
 };
 
 typedef struct {
-    CHAR_INFO *buffer;
+    CHAR_INFO *cells;
+    WORD *fg_rgb;
+    WORD *bg_rgb;
+    unsigned char *rgb_valid;
+} ScreenLine;
+
+typedef struct {
+    ScreenLine *lines;
     int cols, rows, total_lines, scroll_top;
     int cursor_x, cursor_y, cursor_visible;
     WORD current_attr;
@@ -56,9 +63,8 @@ typedef struct {
 
     int fg_r, fg_g, fg_b, bg_r, bg_g, bg_b;
     int fg_rgb_on, bg_rgb_on;
-    WORD *fg_rgb, *bg_rgb;
     WORD *alt_fg_rgb, *alt_bg_rgb;
-    unsigned char *rgb_valid, *alt_rgb_valid;
+    unsigned char *alt_rgb_valid;
     int hist_lines;
     int alt_hist_lines;
 } ScreenBuffer;

@@ -334,7 +334,7 @@ void render_settings_presets(char *out, int bs, int *posp, int host_rows, int ho
 
     for (int i = 0; i < g_preset_count; i++) {
         int r = top + 1 + i;
-        int row_hover = (g_mouse_y == r - 1 && g_mouse_x >= left && g_mouse_x < left + pw);
+        int row_hover = (g_mouse_y == r - 1 && g_mouse_x >= left - 1 && g_mouse_x < left - 1 + pw);
         int is_sel = (i == g_preset_sel);
         const char *bg = (row_hover || is_sel) ? "\x1b[48;2;45;55;72m" : "\x1b[48;2;22;27;34m";
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m%s  \x1b[38;2;210;153;34m[%d]\x1b[0m%s \x1b[38;2;230;237;243;1m",
@@ -349,7 +349,7 @@ void render_settings_presets(char *out, int bs, int *posp, int host_rows, int ho
     }
 
     int esc_r = top + 1 + g_preset_count;
-    int h_esc = (g_mouse_y == esc_r - 1 && g_mouse_x >= left + 2 && g_mouse_x <= left + 14);
+    int h_esc = (g_mouse_y == esc_r - 1 && g_mouse_x >= left - 1 + 2 && g_mouse_x <= left - 1 + 14);
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m\x1b[48;2;22;27;34m  ", esc_r, left);
     cols = 1 + 2;
     if (h_esc)
@@ -438,8 +438,8 @@ void render_settings_panel(char *out, int bs, int *posp, int host_rows, int host
         pos += snprintf(out + pos, bs - pos, "\x1b[3;%dH\x1b[38;2;121;192;255;1m■ 默认启动项设置 (Default Startup Item)\x1b[0m", main_left);
         pos += snprintf(out + pos, bs - pos, "\x1b[4;%dH\x1b[38;2;139;148;158m选择每次打开 termux 窗口时默认显示的界面 (按 ←/→/Space/T/H 切换)：\x1b[0m", main_left);
 
-        int opt0_hover = (g_mouse_y == 4 && g_mouse_x >= main_left && g_mouse_x < main_left + 24);
-        int opt1_hover = (g_mouse_y == 4 && g_mouse_x >= main_left + 26 && g_mouse_x < main_left + 48);
+        int opt0_hover = (g_mouse_y == 4 && g_mouse_x >= main_left - 1 && g_mouse_x < main_left + 25);
+        int opt1_hover = (g_mouse_y == 4 && g_mouse_x >= main_left + 28 && g_mouse_x < main_left + 50);
 
         const char *opt0_style = (g_default_startup == 0) ? (opt0_hover ? "\x1b[48;2;140;205;255m\x1b[38;2;13;17;23;1m" : "\x1b[48;2;121;192;255m\x1b[38;2;13;17;23;1m")
                                                           : (opt0_hover ? "\x1b[48;2;45;55;72m\x1b[38;2;255;255;255;1m" : "\x1b[48;2;33;38;45m\x1b[38;2;230;237;243m");
@@ -457,7 +457,7 @@ void render_settings_panel(char *out, int bs, int *posp, int host_rows, int host
         for (int i = 0; i < g_chooser_item_count; i++) {
             int r = 10 + i;
             if (r > host_rows - 2) break;
-            int row_hover = (g_mouse_y == r - 1 && g_mouse_x >= main_left && g_mouse_x < host_cols);
+            int row_hover = (g_mouse_y == r - 1 && g_mouse_x >= main_left - 1 && g_mouse_x < host_cols);
             int row_focus = (i == g_settings_table_sel);
             int h_up = (row_hover && g_mouse_x >= main_left + 52 && g_mouse_x <= main_left + 54);
             int h_dn = (row_hover && g_mouse_x >= main_left + 55 && g_mouse_x <= main_left + 57);
@@ -481,8 +481,8 @@ void render_settings_panel(char *out, int bs, int *posp, int host_rows, int host
 
         int btn_r = 10 + g_chooser_item_count + 1;
         if (btn_r <= host_rows) {
-            int h_add = (g_mouse_y == btn_r - 1 && g_mouse_x >= main_left && g_mouse_x <= main_left + 16);
-            int h_pre = (g_mouse_y == btn_r - 1 && g_mouse_x >= main_left + 18 && g_mouse_x <= main_left + 34);
+            int h_add = (g_mouse_y == btn_r - 1 && g_mouse_x >= main_left - 1 && g_mouse_x < main_left + 13);
+            int h_pre = (g_mouse_y == btn_r - 1 && g_mouse_x >= main_left + 15 && g_mouse_x < main_left + 29);
 
             pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH", btn_r, main_left);
             pos += snprintf(out + pos, bs - pos, "%s [+] 添加条目 \x1b[0m  ", h_add ? "\x1b[48;2;63;185;80m\x1b[38;2;13;17;23;1m" : "\x1b[48;2;33;38;45m\x1b[38;2;63;185;80;1m");
@@ -501,7 +501,7 @@ void render_settings_panel(char *out, int bs, int *posp, int host_rows, int host
         if (input_w < 20) input_w = 20;
 
         int f0_sel = (g_settings_field == 0);
-        int f0_hover = (g_mouse_y == 5 && g_mouse_x >= main_left && g_mouse_x <= main_left + input_w + 3);
+        int f0_hover = (g_mouse_y == 5 && g_mouse_x >= main_left - 1 && g_mouse_x <= main_left + input_w + 2);
         const char *f0_bg = f0_sel ? "\x1b[48;2;38;60;88m" : (f0_hover ? "\x1b[48;2;33;38;45m" : "\x1b[48;2;22;27;34m");
         pos += snprintf(out + pos, bs - pos, "\x1b[5;%dH\x1b[38;2;230;237;243;1m1. 显示名称 (Display Name):\x1b[0m", main_left);
         pos += snprintf(out + pos, bs - pos, "\x1b[6;%dH\x1b[48;2;33;38;45m│\x1b[0m%s ", main_left, f0_bg);
@@ -509,7 +509,7 @@ void render_settings_panel(char *out, int bs, int *posp, int host_rows, int host
         pos += snprintf(out + pos, bs - pos, " \x1b[0m\x1b[48;2;33;38;45m│\x1b[0m");
 
         int f1_sel = (g_settings_field == 1);
-        int f1_hover = (g_mouse_y == 8 && g_mouse_x >= main_left && g_mouse_x <= main_left + input_w + 3);
+        int f1_hover = (g_mouse_y == 8 && g_mouse_x >= main_left - 1 && g_mouse_x <= main_left + input_w + 2);
         const char *f1_bg = f1_sel ? "\x1b[48;2;38;60;88m" : (f1_hover ? "\x1b[48;2;33;38;45m" : "\x1b[48;2;22;27;34m");
         pos += snprintf(out + pos, bs - pos, "\x1b[8;%dH\x1b[38;2;230;237;243;1m2. 启动命令行 (Command Line):\x1b[0m", main_left);
         pos += snprintf(out + pos, bs - pos, "\x1b[9;%dH\x1b[48;2;33;38;45m│\x1b[0m%s ", main_left, f1_bg);
@@ -517,7 +517,7 @@ void render_settings_panel(char *out, int bs, int *posp, int host_rows, int host
         pos += snprintf(out + pos, bs - pos, " \x1b[0m\x1b[48;2;33;38;45m│\x1b[0m");
 
         int f2_sel = (g_settings_field == 2);
-        int f2_hover = (g_mouse_y == 11 && g_mouse_x >= main_left && g_mouse_x <= main_left + input_w + 3);
+        int f2_hover = (g_mouse_y == 11 && g_mouse_x >= main_left - 1 && g_mouse_x <= main_left + input_w + 2);
         const char *f2_bg = f2_sel ? "\x1b[48;2;38;60;88m" : (f2_hover ? "\x1b[48;2;33;38;45m" : "\x1b[48;2;22;27;34m");
         pos += snprintf(out + pos, bs - pos, "\x1b[11;%dH\x1b[38;2;230;237;243;1m3. 启动目录 (Working Directory) \x1b[38;2;139;148;158m[留空为当前目录，支持 %%USERPROFILE%%]:\x1b[0m", main_left);
         pos += snprintf(out + pos, bs - pos, "\x1b[12;%dH\x1b[48;2;33;38;45m│\x1b[0m%s ", main_left, f2_bg);
@@ -525,9 +525,9 @@ void render_settings_panel(char *out, int bs, int *posp, int host_rows, int host
         pos += snprintf(out + pos, bs - pos, " \x1b[0m\x1b[48;2;33;38;45m│\x1b[0m");
 
         int act_r = 14;
-        int h_apply = (g_mouse_y == act_r - 1 && g_mouse_x >= main_left && g_mouse_x <= main_left + 18);
-        int h_imp = (g_mouse_y == act_r - 1 && g_mouse_x >= main_left + 20 && g_mouse_x <= main_left + 36);
-        int h_del = (g_mouse_y == act_r - 1 && g_mouse_x >= main_left + 38 && g_mouse_x <= main_left + 50);
+        int h_apply = (g_mouse_y == act_r - 1 && g_mouse_x >= main_left - 1 && g_mouse_x < main_left + 17);
+        int h_imp = (g_mouse_y == act_r - 1 && g_mouse_x >= main_left + 19 && g_mouse_x < main_left + 35);
+        int h_del = (g_mouse_y == act_r - 1 && g_mouse_x >= main_left + 37 && g_mouse_x < main_left + 49);
 
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH", act_r, main_left);
         pos += snprintf(out + pos, bs - pos, "%s [保存并应用此项] \x1b[0m  ", h_apply ? "\x1b[48;2;121;192;255m\x1b[38;2;13;17;23;1m" : "\x1b[48;2;33;38;45m\x1b[38;2;121;192;255;1m");
@@ -763,7 +763,7 @@ void render_screen(void) {
                     match_hi = lo;
                 }
                 for (int x = 0; x < text_rc; x++) {
-                    CHAR_INFO *cell = (ar >= 0) ? &s->buffer[ar * s->cols + x] : screen_cell(s, y, x);
+                    CHAR_INFO *cell = (ar >= 0) ? ((s->lines && s->lines[ar].cells) ? &s->lines[ar].cells[x] : NULL) : screen_cell(s, y, x);
                     WCHAR wc = L' '; WORD attr = 0x07;
                     if (cell) { wc = cell->Char.UnicodeChar; attr = cell->Attributes; }
                     if (wc == 0) continue;
@@ -817,7 +817,7 @@ void render_screen(void) {
                         la_attr = attr; la_fr = frgb; la_br = brgb; la_fv = fgv; la_bv = bgv;
                     }
                     if (wc >= 0xD800 && wc <= 0xDBFF && x + 1 < text_rc) {
-                        CHAR_INFO *next_cell = (ar >= 0) ? &s->buffer[ar * s->cols + x + 1] : screen_cell(s, y, x + 1);
+                        CHAR_INFO *next_cell = (ar >= 0) ? ((s->lines && s->lines[ar].cells) ? &s->lines[ar].cells[x + 1] : NULL) : screen_cell(s, y, x + 1);
                         if (next_cell && next_cell->Char.UnicodeChar >= 0xDC00 && next_cell->Char.UnicodeChar <= 0xDFFF) {
                             WCHAR low = next_cell->Char.UnicodeChar;
                             unsigned int cp = 0x10000 + (((unsigned int)(wc & 0x3FF)) << 10) + (low & 0x3FF);

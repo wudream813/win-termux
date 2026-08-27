@@ -1,68 +1,95 @@
 #include "screen.h"
 
+int screen_ensure_line(ScreenBuffer *s, int pr) {
+    if (!s->lines || pr < 0 || pr >= s->total_lines) return 0;
+    if (s->lines[pr].cells) return 1;
+
+    s->lines[pr].cells = (CHAR_INFO *)malloc(s->cols * sizeof(CHAR_INFO));
+    s->lines[pr].fg_rgb = (WORD *)malloc(s->cols * sizeof(WORD));
+    s->lines[pr].bg_rgb = (WORD *)malloc(s->cols * sizeof(WORD));
+    s->lines[pr].rgb_valid = (unsigned char *)calloc(s->cols, 1);
+
+    if (!s->lines[pr].cells || !s->lines[pr].fg_rgb || !s->lines[pr].bg_rgb || !s->lines[pr].rgb_valid) {
+        free(s->lines[pr].cells);
+        free(s->lines[pr].fg_rgb);
+        free(s->lines[pr].bg_rgb);
+        free(s->lines[pr].rgb_valid);
+        s->lines[pr].cells = NULL;
+        s->lines[pr].fg_rgb = NULL;
+        s->lines[pr].bg_rgb = NULL;
+        s->lines[pr].rgb_valid = NULL;
+        return 0;
+    }
+
+    for (int j = 0; j < s->cols; j++) {
+        s->lines[pr].cells[j].Char.UnicodeChar = L' ';
+        s->lines[pr].cells[j].Attributes = s->current_attr ? s->current_attr : 0x07;
+        s->lines[pr].fg_rgb[j] = RGB565_WHITE;
+        s->lines[pr].bg_rgb[j] = RGB565_BLACK;
+    }
+    return 1;
+}
+
 int screen_init(ScreenBuffer *s, int cols, int rows) {
     memset(s, 0, sizeof(*s));
+    if (cols < 1) cols = 1;
+    if (rows < 1) rows = 1;
     s->cols = cols;
     s->rows = rows;
     s->total_lines = rows + SCROLL_BUF_LINES;
-    s->buffer = (CHAR_INFO *)malloc(s->total_lines * cols * sizeof(CHAR_INFO));
-    s->alt_buffer = (CHAR_INFO *)malloc(rows * cols * sizeof(CHAR_INFO));
-    s->fg_rgb = (WORD *)malloc(s->total_lines * cols * sizeof(WORD));
-    s->bg_rgb = (WORD *)malloc(s->total_lines * cols * sizeof(WORD));
-    s->alt_fg_rgb = (WORD *)malloc(rows * cols * sizeof(WORD));
-    s->alt_bg_rgb = (WORD *)malloc(rows * cols * sizeof(WORD));
-    s->rgb_valid = (unsigned char *)calloc(s->total_lines * cols, 1);
-    s->alt_rgb_valid = (unsigned char *)calloc(rows * cols, 1);
-    if (!s->buffer || !s->alt_buffer || !s->fg_rgb || !s->bg_rgb || !s->alt_fg_rgb || !s->alt_bg_rgb ||
-        !s->rgb_valid || !s->alt_rgb_valid) {
-        free(s->buffer); free(s->alt_buffer);
-        free(s->fg_rgb); free(s->bg_rgb); free(s->alt_fg_rgb); free(s->alt_bg_rgb);
-        free(s->rgb_valid); free(s->alt_rgb_valid);
-        s->buffer = s->alt_buffer = NULL;
-        s->fg_rgb = s->bg_rgb = s->alt_fg_rgb = s->alt_bg_rgb = NULL;
-        s->rgb_valid = s->alt_rgb_valid = NULL;
-        return 0;
-    }
-    for (int i = 0; i < s->total_lines * cols; i++) {
-        s->fg_rgb[i] = RGB565_WHITE;
-        s->bg_rgb[i] = 0;
-    }
-    for (int i = 0; i < rows * cols; i++) {
-        s->alt_fg_rgb[i] = RGB565_WHITE;
-        s->alt_bg_rgb[i] = 0;
-    }
-    s->scroll_top = 0;
-    s->cursor_visible = 1;
     s->current_attr = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
     s->fg_color = 7;
-    s->auto_wrap = 1;
-    s->scroll_region_bottom = rows - 1;
+    s->bg_color = 0;
 
-    for (int i = 0; i < s->total_lines * cols; i++) {
-        s->buffer[i].Char.UnicodeChar = L' ';
-        s->buffer[i].Attributes = s->current_attr;
+    s->lines = (ScreenLine *)calloc(s->total_lines, sizeof(ScreenLine));
+    s->alt_buffer = (CHAR_INFO *)malloc(rows * cols * sizeof(CHAR_INFO));
+    s->alt_fg_rgb = (WORD *)malloc(rows * cols * sizeof(WORD));
+    s->alt_bg_rgb = (WORD *)malloc(rows * cols * sizeof(WORD));
+    s->alt_rgb_valid = (unsigned char *)calloc(rows * cols, 1);
+
+    if (!s->lines || !s->alt_buffer || !s->alt_fg_rgb || !s->alt_bg_rgb || !s->alt_rgb_valid) {
+        screen_free(s);
+        return 0;
     }
+
     for (int i = 0; i < rows * cols; i++) {
+        s->alt_fg_rgb[i] = RGB565_WHITE;
+        s->alt_bg_rgb[i] = RGB565_BLACK;
         s->alt_buffer[i].Char.UnicodeChar = L' ';
         s->alt_buffer[i].Attributes = s->current_attr;
     }
+
+    // Allocate initial visible rows
+    for (int r = 0; r < rows; r++) {
+        screen_ensure_line(s, r);
+    }
+
+    s->scroll_top = 0;
+    s->cursor_visible = 1;
+    s->auto_wrap = 1;
+    s->scroll_region_top = 0;
+    s->scroll_region_bottom = rows - 1;
+
     for (int i = 0; i < cols && i < 512; i += 8)
         s->tab_stops[i] = 1;
     return 1;
 }
 
 void screen_free(ScreenBuffer *s) {
-    free(s->buffer);
-    free(s->alt_buffer);
-    free(s->fg_rgb);
-    free(s->bg_rgb);
-    free(s->alt_fg_rgb);
-    free(s->alt_bg_rgb);
-    free(s->rgb_valid);
-    free(s->alt_rgb_valid);
-    s->buffer = s->alt_buffer = NULL;
-    s->fg_rgb = s->bg_rgb = s->alt_fg_rgb = s->alt_bg_rgb = NULL;
-    s->rgb_valid = s->alt_rgb_valid = NULL;
+    if (s->lines) {
+        for (int i = 0; i < s->total_lines; i++) {
+            free(s->lines[i].cells);
+            free(s->lines[i].fg_rgb);
+            free(s->lines[i].bg_rgb);
+            free(s->lines[i].rgb_valid);
+        }
+        free(s->lines);
+        s->lines = NULL;
+    }
+    free(s->alt_buffer); s->alt_buffer = NULL;
+    free(s->alt_fg_rgb); s->alt_fg_rgb = NULL;
+    free(s->alt_bg_rgb); s->alt_bg_rgb = NULL;
+    free(s->alt_rgb_valid); s->alt_rgb_valid = NULL;
 }
 
 CHAR_INFO *screen_cell(ScreenBuffer *s, int row, int col) {
@@ -73,7 +100,8 @@ CHAR_INFO *screen_cell(ScreenBuffer *s, int row, int col) {
     }
     if (row >= s->rows) return NULL;
     int pr = screen_phys_row(s, row);
-    return &s->buffer[pr * s->cols + col];
+    if (!screen_ensure_line(s, pr)) return NULL;
+    return &s->lines[pr].cells[col];
 }
 
 WORD build_attr(ScreenBuffer *s) {
@@ -117,14 +145,12 @@ void screen_write_cell(ScreenBuffer *s, int row, int col, WCHAR ch, WORD attr) {
         }
     } else {
         int pr = screen_phys_row(s, row);
-        if (s->buffer) {
-            s->buffer[pr * s->cols + col].Char.UnicodeChar = ch;
-            s->buffer[pr * s->cols + col].Attributes = attr;
-        }
-        if (s->fg_rgb) {
-            s->fg_rgb[pr * s->cols + col] = s->fg_rgb_on ? rgb565(s->fg_r, s->fg_g, s->fg_b) : RGB565_WHITE;
-            s->bg_rgb[pr * s->cols + col] = s->bg_rgb_on ? rgb565(s->bg_r, s->bg_g, s->bg_b) : RGB565_BLACK;
-            if (s->rgb_valid) s->rgb_valid[pr * s->cols + col] = v;
+        if (screen_ensure_line(s, pr)) {
+            s->lines[pr].cells[col].Char.UnicodeChar = ch;
+            s->lines[pr].cells[col].Attributes = attr;
+            s->lines[pr].fg_rgb[col] = s->fg_rgb_on ? rgb565(s->fg_r, s->fg_g, s->fg_b) : RGB565_WHITE;
+            s->lines[pr].bg_rgb[col] = s->bg_rgb_on ? rgb565(s->bg_r, s->bg_g, s->bg_b) : RGB565_BLACK;
+            s->lines[pr].rgb_valid[col] = v;
         }
     }
 }
@@ -152,6 +178,7 @@ void screen_scroll_up(ScreenBuffer *s, int top, int bottom, int count) {
                 screen_write_cell(s, i, j, L' ', s->current_attr);
         return;
     }
+
     if (top == 0 && bottom == s->rows - 1) {
         s->hist_lines += count;
         if (s->hist_lines > SCROLL_BUF_LINES) s->hist_lines = SCROLL_BUF_LINES;
@@ -185,37 +212,48 @@ void screen_scroll_up(ScreenBuffer *s, int top, int bottom, int count) {
 
         for (int c = 0; c < count; c++) {
             int pr = screen_phys_row(s, s->rows + c);
-            for (int j = 0; j < s->cols; j++) {
-                int idx = pr * s->cols + j;
-                s->buffer[idx].Char.UnicodeChar = L' ';
-                s->buffer[idx].Attributes = s->current_attr;
-                if (s->fg_rgb) { s->fg_rgb[idx] = RGB565_WHITE; s->bg_rgb[idx] = RGB565_BLACK; }
-                if (s->rgb_valid) s->rgb_valid[idx] = 0;
+            if (s->lines && s->lines[pr].cells) {
+                for (int j = 0; j < s->cols; j++) {
+                    s->lines[pr].cells[j].Char.UnicodeChar = L' ';
+                    s->lines[pr].cells[j].Attributes = s->current_attr;
+                    s->lines[pr].fg_rgb[j] = RGB565_WHITE;
+                    s->lines[pr].bg_rgb[j] = RGB565_BLACK;
+                    s->lines[pr].rgb_valid[j] = 0;
+                }
             }
         }
         s->scroll_top = (s->scroll_top + count) % s->total_lines;
     } else {
-        // v1.6.0 modulo wrapping fix
+        // Partial scroll
         for (int i = top; i <= bottom - count; i++) {
             int dst_pr = screen_phys_row(s, i);
             int src_pr = screen_phys_row(s, i + count);
-            memcpy(&s->buffer[dst_pr * s->cols], &s->buffer[src_pr * s->cols], s->cols * sizeof(CHAR_INFO));
-            if (s->fg_rgb) {
-                memcpy(&s->fg_rgb[dst_pr * s->cols], &s->fg_rgb[src_pr * s->cols], s->cols * sizeof(WORD));
-                memcpy(&s->bg_rgb[dst_pr * s->cols], &s->bg_rgb[src_pr * s->cols], s->cols * sizeof(WORD));
-            }
-            if (s->rgb_valid) {
-                memcpy(&s->rgb_valid[dst_pr * s->cols], &s->rgb_valid[src_pr * s->cols], s->cols * sizeof(unsigned char));
+            if (s->lines && s->lines[src_pr].cells) {
+                screen_ensure_line(s, dst_pr);
+                memcpy(s->lines[dst_pr].cells, s->lines[src_pr].cells, s->cols * sizeof(CHAR_INFO));
+                memcpy(s->lines[dst_pr].fg_rgb, s->lines[src_pr].fg_rgb, s->cols * sizeof(WORD));
+                memcpy(s->lines[dst_pr].bg_rgb, s->lines[src_pr].bg_rgb, s->cols * sizeof(WORD));
+                memcpy(s->lines[dst_pr].rgb_valid, s->lines[src_pr].rgb_valid, s->cols * sizeof(unsigned char));
+            } else if (s->lines && s->lines[dst_pr].cells) {
+                for (int j = 0; j < s->cols; j++) {
+                    s->lines[dst_pr].cells[j].Char.UnicodeChar = L' ';
+                    s->lines[dst_pr].cells[j].Attributes = s->current_attr;
+                    s->lines[dst_pr].fg_rgb[j] = RGB565_WHITE;
+                    s->lines[dst_pr].bg_rgb[j] = RGB565_BLACK;
+                    s->lines[dst_pr].rgb_valid[j] = 0;
+                }
             }
         }
         for (int i = bottom - count + 1; i <= bottom; i++) {
             int pr = screen_phys_row(s, i);
-            for (int j = 0; j < s->cols; j++) {
-                int idx = pr * s->cols + j;
-                s->buffer[idx].Char.UnicodeChar = L' ';
-                s->buffer[idx].Attributes = s->current_attr;
-                if (s->fg_rgb) { s->fg_rgb[idx] = RGB565_WHITE; s->bg_rgb[idx] = RGB565_BLACK; }
-                if (s->rgb_valid) s->rgb_valid[idx] = 0;
+            if (s->lines && s->lines[pr].cells) {
+                for (int j = 0; j < s->cols; j++) {
+                    s->lines[pr].cells[j].Char.UnicodeChar = L' ';
+                    s->lines[pr].cells[j].Attributes = s->current_attr;
+                    s->lines[pr].fg_rgb[j] = RGB565_WHITE;
+                    s->lines[pr].bg_rgb[j] = RGB565_BLACK;
+                    s->lines[pr].rgb_valid[j] = 0;
+                }
             }
         }
     }
@@ -260,35 +298,46 @@ void screen_scroll_down(ScreenBuffer *s, int top, int bottom, int count) {
         s->scroll_top = (s->scroll_top - count % s->total_lines + s->total_lines) % s->total_lines;
         for (int c = 0; c < count; c++) {
             int pr = screen_phys_row(s, c);
-            for (int j = 0; j < s->cols; j++) {
-                int idx = pr * s->cols + j;
-                s->buffer[idx].Char.UnicodeChar = L' ';
-                s->buffer[idx].Attributes = s->current_attr;
-                if (s->fg_rgb) { s->fg_rgb[idx] = RGB565_WHITE; s->bg_rgb[idx] = RGB565_BLACK; }
-                if (s->rgb_valid) s->rgb_valid[idx] = 0;
+            if (s->lines && s->lines[pr].cells) {
+                for (int j = 0; j < s->cols; j++) {
+                    s->lines[pr].cells[j].Char.UnicodeChar = L' ';
+                    s->lines[pr].cells[j].Attributes = s->current_attr;
+                    s->lines[pr].fg_rgb[j] = RGB565_WHITE;
+                    s->lines[pr].bg_rgb[j] = RGB565_BLACK;
+                    s->lines[pr].rgb_valid[j] = 0;
+                }
             }
         }
     } else {
         for (int i = bottom; i >= top + count; i--) {
             int dst_pr = screen_phys_row(s, i);
             int src_pr = screen_phys_row(s, i - count);
-            memcpy(&s->buffer[dst_pr * s->cols], &s->buffer[src_pr * s->cols], s->cols * sizeof(CHAR_INFO));
-            if (s->fg_rgb) {
-                memcpy(&s->fg_rgb[dst_pr * s->cols], &s->fg_rgb[src_pr * s->cols], s->cols * sizeof(WORD));
-                memcpy(&s->bg_rgb[dst_pr * s->cols], &s->bg_rgb[src_pr * s->cols], s->cols * sizeof(WORD));
-            }
-            if (s->rgb_valid) {
-                memcpy(&s->rgb_valid[dst_pr * s->cols], &s->rgb_valid[src_pr * s->cols], s->cols * sizeof(unsigned char));
+            if (s->lines && s->lines[src_pr].cells) {
+                screen_ensure_line(s, dst_pr);
+                memcpy(s->lines[dst_pr].cells, s->lines[src_pr].cells, s->cols * sizeof(CHAR_INFO));
+                memcpy(s->lines[dst_pr].fg_rgb, s->lines[src_pr].fg_rgb, s->cols * sizeof(WORD));
+                memcpy(s->lines[dst_pr].bg_rgb, s->lines[src_pr].bg_rgb, s->cols * sizeof(WORD));
+                memcpy(s->lines[dst_pr].rgb_valid, s->lines[src_pr].rgb_valid, s->cols * sizeof(unsigned char));
+            } else if (s->lines && s->lines[dst_pr].cells) {
+                for (int j = 0; j < s->cols; j++) {
+                    s->lines[dst_pr].cells[j].Char.UnicodeChar = L' ';
+                    s->lines[dst_pr].cells[j].Attributes = s->current_attr;
+                    s->lines[dst_pr].fg_rgb[j] = RGB565_WHITE;
+                    s->lines[dst_pr].bg_rgb[j] = RGB565_BLACK;
+                    s->lines[dst_pr].rgb_valid[j] = 0;
+                }
             }
         }
         for (int i = top; i < top + count && i <= bottom; i++) {
             int pr = screen_phys_row(s, i);
-            for (int j = 0; j < s->cols; j++) {
-                int idx = pr * s->cols + j;
-                s->buffer[idx].Char.UnicodeChar = L' ';
-                s->buffer[idx].Attributes = s->current_attr;
-                if (s->fg_rgb) { s->fg_rgb[idx] = RGB565_WHITE; s->bg_rgb[idx] = RGB565_BLACK; }
-                if (s->rgb_valid) s->rgb_valid[idx] = 0;
+            if (s->lines && s->lines[pr].cells) {
+                for (int j = 0; j < s->cols; j++) {
+                    s->lines[pr].cells[j].Char.UnicodeChar = L' ';
+                    s->lines[pr].cells[j].Attributes = s->current_attr;
+                    s->lines[pr].fg_rgb[j] = RGB565_WHITE;
+                    s->lines[pr].bg_rgb[j] = RGB565_BLACK;
+                    s->lines[pr].rgb_valid[j] = 0;
+                }
             }
         }
     }
@@ -332,79 +381,124 @@ void detect_conpty_width(ScreenBuffer *s, int written_len) {
 
 int screen_resize(ScreenBuffer *s, int nc, int nr) {
     if (nc == s->cols && nr == s->rows) return 1;
+    if (nc < 1) nc = 1;
+    if (nr < 1) nr = 1;
     int nt = nr + SCROLL_BUF_LINES;
-    CHAR_INFO *nb = (CHAR_INFO *)malloc(nt * nc * sizeof(CHAR_INFO));
-    CHAR_INFO *na = (CHAR_INFO *)malloc(nr * nc * sizeof(CHAR_INFO));
-    WORD *nfr = (WORD *)malloc(nt * nc * sizeof(WORD));
-    WORD *nbr = (WORD *)malloc(nt * nc * sizeof(WORD));
+
+    ScreenLine *nl = (ScreenLine *)calloc(nt, sizeof(ScreenLine));
+    CHAR_INFO *na = (CHAR_INFO *)calloc(nr * nc, sizeof(CHAR_INFO));
     WORD *nafr = (WORD *)malloc(nr * nc * sizeof(WORD));
     WORD *nabr = (WORD *)malloc(nr * nc * sizeof(WORD));
-    unsigned char *nrv = (unsigned char *)calloc(nt * nc, 1);
     unsigned char *nav = (unsigned char *)calloc(nr * nc, 1);
-    if (!nb || !na || !nfr || !nbr || !nafr || !nabr || !nrv || !nav) {
-        free(nb); free(na); free(nfr); free(nbr); free(nafr); free(nabr); free(nrv); free(nav);
+
+    if (!nl || !na || !nafr || !nabr || !nav) {
+        free(nl); free(na); free(nafr); free(nabr); free(nav);
         return 0;
     }
-    for (int i = 0; i < nt * nc; i++) {
-        nb[i].Char.UnicodeChar = L' '; nb[i].Attributes = s->current_attr;
-        nfr[i] = RGB565_WHITE; nbr[i] = 0;
-    }
     for (int i = 0; i < nr * nc; i++) {
-        na[i].Char.UnicodeChar = L' '; na[i].Attributes = s->current_attr;
-        nafr[i] = RGB565_WHITE; nabr[i] = 0;
+        nafr[i] = RGB565_WHITE; nabr[i] = RGB565_BLACK;
+        na[i].Char.UnicodeChar = L' '; na[i].Attributes = s->current_attr ? s->current_attr : 0x07;
     }
+
     int cc = nc < s->cols ? nc : s->cols;
     int cr = nr < s->rows ? nr : s->rows;
     int nst = 0;
 
     int old_hist = s->hist_lines;
     if (old_hist > SCROLL_BUF_LINES) old_hist = SCROLL_BUF_LINES;
+
+    // Migrate history lines that were allocated
     for (int h = 1; h <= old_hist; h++) {
         int old_r = screen_phys_row(s, -h);
-        int new_r = nst - h;
-        if (old_r >= 0 && old_r < s->total_lines && new_r >= 0 && new_r < nt) {
-            for (int x = 0; x < cc; x++) {
-                int old_idx = old_r * s->cols + x;
-                int new_idx = new_r * nc + x;
-                nb[new_idx] = s->buffer[old_idx];
-                if (s->fg_rgb) { nfr[new_idx] = s->fg_rgb[old_idx]; nbr[new_idx] = s->bg_rgb[old_idx]; }
-                if (s->rgb_valid) nrv[new_idx] = s->rgb_valid[old_idx];
+        int new_r = (nst - h % nt + nt) % nt;
+        if (old_r >= 0 && old_r < s->total_lines && s->lines && s->lines[old_r].cells) {
+            nl[new_r].cells = (CHAR_INFO *)malloc(nc * sizeof(CHAR_INFO));
+            nl[new_r].fg_rgb = (WORD *)malloc(nc * sizeof(WORD));
+            nl[new_r].bg_rgb = (WORD *)malloc(nc * sizeof(WORD));
+            nl[new_r].rgb_valid = (unsigned char *)calloc(nc, 1);
+            if (nl[new_r].cells && nl[new_r].fg_rgb && nl[new_r].bg_rgb && nl[new_r].rgb_valid) {
+                for (int j = 0; j < nc; j++) {
+                    nl[new_r].cells[j].Char.UnicodeChar = L' ';
+                    nl[new_r].cells[j].Attributes = s->current_attr ? s->current_attr : 0x07;
+                    nl[new_r].fg_rgb[j] = RGB565_WHITE;
+                    nl[new_r].bg_rgb[j] = RGB565_BLACK;
+                }
+                memcpy(nl[new_r].cells, s->lines[old_r].cells, cc * sizeof(CHAR_INFO));
+                memcpy(nl[new_r].fg_rgb, s->lines[old_r].fg_rgb, cc * sizeof(WORD));
+                memcpy(nl[new_r].bg_rgb, s->lines[old_r].bg_rgb, cc * sizeof(WORD));
+                memcpy(nl[new_r].rgb_valid, s->lines[old_r].rgb_valid, cc * sizeof(unsigned char));
             }
         }
     }
 
+    // Migrate visible lines
     for (int y = 0; y < cr; y++) {
-        int new_r = nst + y;
+        int new_r = (nst + y) % nt;
         int old_r = screen_phys_row(s, y);
-        for (int x = 0; x < cc; x++) {
-            CHAR_INFO *src = screen_cell(s, y, x);
-            if (src) nb[new_r * nc + x] = *src;
-            WORD fv = RGB565_WHITE, bv = RGB565_BLACK; unsigned char vv = 0;
-            if (old_r >= 0 && old_r < s->total_lines && s->fg_rgb) {
-                fv = s->fg_rgb[old_r * s->cols + x];
-                bv = s->bg_rgb[old_r * s->cols + x];
-                if (s->rgb_valid) vv = s->rgb_valid[old_r * s->cols + x];
+        if (old_r >= 0 && old_r < s->total_lines && s->lines && s->lines[old_r].cells) {
+            nl[new_r].cells = (CHAR_INFO *)malloc(nc * sizeof(CHAR_INFO));
+            nl[new_r].fg_rgb = (WORD *)malloc(nc * sizeof(WORD));
+            nl[new_r].bg_rgb = (WORD *)malloc(nc * sizeof(WORD));
+            nl[new_r].rgb_valid = (unsigned char *)calloc(nc, 1);
+            if (nl[new_r].cells && nl[new_r].fg_rgb && nl[new_r].bg_rgb && nl[new_r].rgb_valid) {
+                for (int j = 0; j < nc; j++) {
+                    nl[new_r].cells[j].Char.UnicodeChar = L' ';
+                    nl[new_r].cells[j].Attributes = s->current_attr ? s->current_attr : 0x07;
+                    nl[new_r].fg_rgb[j] = RGB565_WHITE;
+                    nl[new_r].bg_rgb[j] = RGB565_BLACK;
+                }
+                memcpy(nl[new_r].cells, s->lines[old_r].cells, cc * sizeof(CHAR_INFO));
+                memcpy(nl[new_r].fg_rgb, s->lines[old_r].fg_rgb, cc * sizeof(WORD));
+                memcpy(nl[new_r].bg_rgb, s->lines[old_r].bg_rgb, cc * sizeof(WORD));
+                memcpy(nl[new_r].rgb_valid, s->lines[old_r].rgb_valid, cc * sizeof(unsigned char));
             }
-            nfr[new_r * nc + x] = fv; nbr[new_r * nc + x] = bv; nrv[new_r * nc + x] = vv;
+        } else {
+            // Allocate blank visible line
+            nl[new_r].cells = (CHAR_INFO *)malloc(nc * sizeof(CHAR_INFO));
+            nl[new_r].fg_rgb = (WORD *)malloc(nc * sizeof(WORD));
+            nl[new_r].bg_rgb = (WORD *)malloc(nc * sizeof(WORD));
+            nl[new_r].rgb_valid = (unsigned char *)calloc(nc, 1);
+            if (nl[new_r].cells && nl[new_r].fg_rgb && nl[new_r].bg_rgb && nl[new_r].rgb_valid) {
+                for (int j = 0; j < nc; j++) {
+                    nl[new_r].cells[j].Char.UnicodeChar = L' ';
+                    nl[new_r].cells[j].Attributes = s->current_attr ? s->current_attr : 0x07;
+                    nl[new_r].fg_rgb[j] = RGB565_WHITE;
+                    nl[new_r].bg_rgb[j] = RGB565_BLACK;
+                }
+            }
         }
     }
 
+    // Migrate alt buffer
     for (int y = 0; y < cr && y < s->rows; y++) {
-        for (int x = 0; x < cc; x++) {
-            na[y * nc + x] = s->alt_buffer[y * s->cols + x];
-            if (s->alt_fg_rgb) { nafr[y * nc + x] = s->alt_fg_rgb[y * s->cols + x]; nabr[y * nc + x] = s->alt_bg_rgb[y * s->cols + x]; }
-            if (s->alt_rgb_valid) nav[y * nc + x] = s->alt_rgb_valid[y * s->cols + x];
+        memcpy(&na[y * nc], &s->alt_buffer[y * s->cols], cc * sizeof(CHAR_INFO));
+        if (s->alt_fg_rgb) {
+            memcpy(&nafr[y * nc], &s->alt_fg_rgb[y * s->cols], cc * sizeof(WORD));
+            memcpy(&nabr[y * nc], &s->alt_bg_rgb[y * s->cols], cc * sizeof(WORD));
         }
+        if (s->alt_rgb_valid) nav[y * nc] = s->alt_rgb_valid[y * s->cols];
     }
 
-    free(s->buffer); free(s->alt_buffer);
-    free(s->fg_rgb); free(s->bg_rgb); free(s->alt_fg_rgb); free(s->alt_bg_rgb);
-    free(s->rgb_valid); free(s->alt_rgb_valid);
+    if (s->lines) {
+        for (int i = 0; i < s->total_lines; i++) {
+            free(s->lines[i].cells);
+            free(s->lines[i].fg_rgb);
+            free(s->lines[i].bg_rgb);
+            free(s->lines[i].rgb_valid);
+        }
+        free(s->lines);
+    }
+    free(s->alt_buffer); free(s->alt_fg_rgb); free(s->alt_bg_rgb); free(s->alt_rgb_valid);
 
-    s->buffer = nb; s->alt_buffer = na;
-    s->fg_rgb = nfr; s->bg_rgb = nbr; s->alt_fg_rgb = nafr; s->alt_bg_rgb = nabr;
-    s->rgb_valid = nrv; s->alt_rgb_valid = nav;
-    s->cols = nc; s->rows = nr; s->total_lines = nt; s->scroll_top = nst;
+    s->lines = nl;
+    s->alt_buffer = na;
+    s->alt_fg_rgb = nafr;
+    s->alt_bg_rgb = nabr;
+    s->alt_rgb_valid = nav;
+    s->cols = nc;
+    s->rows = nr;
+    s->total_lines = nt;
+    s->scroll_top = nst;
     s->hist_lines = old_hist;
     if (s->alt_hist_lines > SCROLL_BUF_LINES) s->alt_hist_lines = SCROLL_BUF_LINES;
     if (s->cursor_x >= nc) s->cursor_x = nc - 1;
@@ -432,11 +526,11 @@ void cell_truecolor(ScreenBuffer *s, int row, int col, int ar, WORD *out_f, WORD
         return;
     }
     int pr = (ar >= 0) ? ar : screen_phys_row(s, row);
-    if (pr >= 0 && pr < s->total_lines && s->fg_rgb) {
-        unsigned char v = s->rgb_valid ? s->rgb_valid[pr * s->cols + col] : 0;
+    if (pr >= 0 && pr < s->total_lines && s->lines && s->lines[pr].cells) {
+        unsigned char v = s->lines[pr].rgb_valid ? s->lines[pr].rgb_valid[col] : 0;
         *out_fv = (v & 1) ? 1 : 0;
         *out_bv = (v & 2) ? 1 : 0;
-        *out_f = s->fg_rgb[pr * s->cols + col];
-        *out_b = s->bg_rgb[pr * s->cols + col];
+        *out_f = s->lines[pr].fg_rgb[col];
+        *out_b = s->lines[pr].bg_rgb[col];
     }
 }

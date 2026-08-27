@@ -8,6 +8,7 @@
 int screen_init(ScreenBuffer *s, int cols, int rows);
 void screen_free(ScreenBuffer *s);
 int screen_resize(ScreenBuffer *s, int nc, int nr);
+int screen_ensure_line(ScreenBuffer *s, int pr);
 
 static inline int screen_phys_row(ScreenBuffer *s, int rel_row) {
     int r = (s->scroll_top + rel_row) % s->total_lines;

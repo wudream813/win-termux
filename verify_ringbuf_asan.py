@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 verify_ringbuf_asan.py - Real AddressSanitizer verification for win-termux ring buffer & scrolling.
-Dynamically extracts screen_phys_row, screen_write_cell, and screen_scroll_up from
+Dynamically extracts screen_ensure_line, screen_phys_row, screen_write_cell, and screen_scroll_up from
 include/screen.h and src/screen.c, compiles with gcc -fsanitize=address,undefined and tests 1200+ edge cases.
 """
 
@@ -33,6 +33,10 @@ def extract_func(text, prefix):
             if depth == 0:
                 return text[idx : i + 1]
     return None
+
+f_ensure = extract_func(src, "int screen_ensure_line(")
+if not f_ensure:
+    sys.exit("FAIL: screen_ensure_line not found in src/screen.c")
 
 f_phys = extract_func(hdr, "static inline int screen_phys_row(")
 if not f_phys:
@@ -74,7 +78,14 @@ typedef struct {
 } CHAR_INFO;
 
 typedef struct {
-    CHAR_INFO *buffer;
+    CHAR_INFO *cells;
+    WORD *fg_rgb;
+    WORD *bg_rgb;
+    unsigned char *rgb_valid;
+} ScreenLine;
+
+typedef struct {
+    ScreenLine *lines;
     int cols, rows, total_lines, scroll_top;
     int cursor_x, cursor_y, cursor_visible;
     WORD current_attr;
@@ -94,9 +105,8 @@ typedef struct {
     int detect_col, detect_count;
     int fg_r, fg_g, fg_b, bg_r, bg_g, bg_b;
     int fg_rgb_on, bg_rgb_on;
-    WORD *fg_rgb, *bg_rgb;
     WORD *alt_fg_rgb, *alt_bg_rgb;
-    unsigned char *rgb_valid, *alt_rgb_valid;
+    unsigned char *alt_rgb_valid;
     int hist_lines;
     int alt_hist_lines;
 } ScreenBuffer;
@@ -147,11 +157,8 @@ int main(void) {
     s.total_lines = s.rows + SCROLL_BUF_LINES;
     s.current_attr = 0x07;
 
-    s.buffer = (CHAR_INFO *)calloc(s.total_lines * s.cols, sizeof(CHAR_INFO));
-    s.fg_rgb = (WORD *)calloc(s.total_lines * s.cols, sizeof(WORD));
-    s.bg_rgb = (WORD *)calloc(s.total_lines * s.cols, sizeof(WORD));
-    s.rgb_valid = (unsigned char *)calloc(s.total_lines * s.cols, sizeof(unsigned char));
-    assert(s.buffer && s.fg_rgb && s.bg_rgb && s.rgb_valid);
+    s.lines = (ScreenLine *)calloc(s.total_lines, sizeof(ScreenLine));
+    assert(s.lines);
 
     // Test 1: simulate long output wrap-around (10025 line feeds)
     for (int i = 0; i < 10025; i++) {
@@ -172,17 +179,20 @@ int main(void) {
     }
 
     // Cleanup
-    free(s.buffer);
-    free(s.fg_rgb);
-    free(s.bg_rgb);
-    free(s.rgb_valid);
+    for (int i = 0; i < s.total_lines; i++) {
+        free(s.lines[i].cells);
+        free(s.lines[i].fg_rgb);
+        free(s.lines[i].bg_rgb);
+        free(s.lines[i].rgb_valid);
+    }
+    free(s.lines);
 
     printf("ASAN Ring Buffer verification passed: 0 overflows, 0 memory leaks.\n");
     return 0;
 }
 """
 
-C_TEST_CODE = PRELUDE + "\n" + f_phys + "\n" + f_write + "\n" + f_up + "\n" + DRIVER
+C_TEST_CODE = PRELUDE + "\n" + f_phys + "\n" + f_ensure + "\n" + f_write + "\n" + f_up + "\n" + DRIVER
 
 def main():
     print("=== ASAN Ring Buffer Scrolling Test (verify_ringbuf_asan.py) ===")

@@ -44,11 +44,13 @@ void execute_search(void) {
         for (int x = 0; x < s->cols; x++) {
             CHAR_INFO *cell = NULL;
             if (s->in_alt_screen) {
-                cell = &s->alt_buffer[abs_y * s->cols + x];
+                if (abs_y >= 0 && abs_y < s->rows && s->alt_buffer)
+                    cell = &s->alt_buffer[abs_y * s->cols + x];
             } else {
                 int ar = abs_y;
                 int pr = (s->scroll_top - s->hist_lines + ar + s->total_lines * 2) % s->total_lines;
-                cell = &s->buffer[pr * s->cols + x];
+                if (pr >= 0 && pr < s->total_lines && s->lines && s->lines[pr].cells)
+                    cell = &s->lines[pr].cells[x];
             }
             row_chars[x] = cell ? cell->Char.UnicodeChar : L' ';
         }
@@ -232,12 +234,13 @@ void copy_range_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs) {
         for (int x = x_start; x <= x_end; x++) {
             CHAR_INFO *cell = NULL;
             if (s->in_alt_screen) {
-                if (abs_y >= 0 && abs_y < s->rows) cell = &s->alt_buffer[abs_y * s->cols + x];
+                if (abs_y >= 0 && abs_y < s->rows && s->alt_buffer) cell = &s->alt_buffer[abs_y * s->cols + x];
             } else {
                 int ar = abs_y;
-                if (ar >= 0 && ar < s->total_lines && s->buffer) {
+                if (ar >= 0 && ar < s->total_lines && s->lines) {
                     int pr = (s->scroll_top - s->hist_lines + ar + s->total_lines * 2) % s->total_lines;
-                    cell = &s->buffer[pr * s->cols + x];
+                    if (pr >= 0 && pr < s->total_lines && s->lines[pr].cells)
+                        cell = &s->lines[pr].cells[x];
                 }
             }
             if (cell) {
@@ -822,13 +825,13 @@ void handle_settings_mouse(MOUSE_EVENT_RECORD *me) {
     if (c >= main_left) {
         if (g_settings_nav == 0) {
             if (r == 5) {
-                if (c >= main_left && c < main_left + 24) {
+                if (c >= main_left && c < main_left + 26) {
                     g_default_startup = 0;
                     save_config();
                     g_mux.needs_redraw = 1;
                     return;
                 }
-                if (c >= main_left + 26 && c < main_left + 48) {
+                if (c >= main_left + 29 && c < main_left + 51) {
                     g_default_startup = 1;
                     save_config();
                     g_mux.needs_redraw = 1;
@@ -837,10 +840,10 @@ void handle_settings_mouse(MOUSE_EVENT_RECORD *me) {
             }
             for (int i = 0; i < g_chooser_item_count; i++) {
                 if (r == 10 + i) {
-                    int h_up = (c >= main_left + 52 && c <= main_left + 54);
-                    int h_dn = (c >= main_left + 55 && c <= main_left + 57);
-                    int h_ed = (c >= main_left + 58 && c <= main_left + 61);
-                    int h_del = (c >= main_left + 62 && c <= main_left + 65);
+                    int h_up = (c >= main_left + 53 && c <= main_left + 55);
+                    int h_dn = (c >= main_left + 56 && c <= main_left + 58);
+                    int h_ed = (c >= main_left + 59 && c <= main_left + 62);
+                    int h_del = (c >= main_left + 63 && c <= main_left + 66);
                     if (h_up) {
                         if (i > 0) {
                             ChooserItem tmp = g_chooser_items[i];
@@ -890,7 +893,7 @@ void handle_settings_mouse(MOUSE_EVENT_RECORD *me) {
             }
             int btn_r = 10 + g_chooser_item_count + 1;
             if (r == btn_r) {
-                if (c >= main_left && c <= main_left + 16) {
+                if (c >= main_left && c < main_left + 14) {
                     if (g_chooser_item_count < MAX_CHOOSER_ITEMS) {
                         int idx = g_chooser_item_count++;
                         snprintf(g_chooser_items[idx].name, sizeof(g_chooser_items[0].name), "新终端");
@@ -903,7 +906,7 @@ void handle_settings_mouse(MOUSE_EVENT_RECORD *me) {
                         return;
                     }
                 }
-                if (c >= main_left + 18 && c <= main_left + 34) {
+                if (c >= main_left + 16 && c < main_left + 30) {
                     g_settings_show_presets = 1;
                     g_preset_sel = 0;
                     g_mux.needs_redraw = 1;
@@ -928,18 +931,18 @@ void handle_settings_mouse(MOUSE_EVENT_RECORD *me) {
                 return;
             }
             if (r == 14) {
-                if (c >= main_left && c <= main_left + 18) {
+                if (c >= main_left && c < main_left + 18) {
                     save_editor_to_item(item_idx);
                     g_mux.needs_redraw = 1;
                     return;
                 }
-                if (c >= main_left + 20 && c <= main_left + 36) {
+                if (c >= main_left + 20 && c < main_left + 36) {
                     g_settings_show_presets = 1;
                     g_preset_sel = 0;
                     g_mux.needs_redraw = 1;
                     return;
                 }
-                if (c >= main_left + 38 && c <= main_left + 50) {
+                if (c >= main_left + 38 && c < main_left + 50) {
                     if (g_chooser_item_count > 1) {
                         for (int k = item_idx; k < g_chooser_item_count - 1; k++)
                             g_chooser_items[k] = g_chooser_items[k + 1];

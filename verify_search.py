@@ -70,7 +70,14 @@ typedef struct {
 } CHAR_INFO;
 
 typedef struct {
-    CHAR_INFO *buffer;
+    CHAR_INFO *cells;
+    WORD *fg_rgb;
+    WORD *bg_rgb;
+    unsigned char *rgb_valid;
+} ScreenLine;
+
+typedef struct {
+    ScreenLine *lines;
     int cols, rows, total_lines, scroll_top;
     int cursor_x, cursor_y, cursor_visible;
     WORD current_attr;
@@ -90,9 +97,8 @@ typedef struct {
     int detect_col, detect_count;
     int fg_r, fg_g, fg_b, bg_r, bg_g, bg_b;
     int fg_rgb_on, bg_rgb_on;
-    WORD *fg_rgb, *bg_rgb;
     WORD *alt_fg_rgb, *alt_bg_rgb;
-    unsigned char *rgb_valid, *alt_rgb_valid;
+    unsigned char *alt_rgb_valid;
     int hist_lines;
     int alt_hist_lines;
 } ScreenBuffer;
@@ -165,8 +171,8 @@ int main(void) {
     s->hist_lines = 100;
     s->scroll_top = 50;
 
-    s->buffer = (CHAR_INFO *)calloc(s->total_lines * s->cols, sizeof(CHAR_INFO));
-    assert(s->buffer);
+    s->lines = (ScreenLine *)calloc(s->total_lines, sizeof(ScreenLine));
+    assert(s->lines);
 
     // Populate lines with test text
     // Line 10: "Error: file not found"
@@ -181,9 +187,13 @@ int main(void) {
     int pr50 = (s->scroll_top - s->hist_lines + ar50 + s->total_lines * 2) % s->total_lines;
     int pr95 = (s->scroll_top - s->hist_lines + ar95 + s->total_lines * 2) % s->total_lines;
 
-    for (int i = 0; i < (int)strlen(l10); i++) s->buffer[pr10 * s->cols + i].Char.UnicodeChar = l10[i];
-    for (int i = 0; i < (int)strlen(l50); i++) s->buffer[pr50 * s->cols + i].Char.UnicodeChar = l50[i];
-    for (int i = 0; i < (int)strlen(l95); i++) s->buffer[pr95 * s->cols + i].Char.UnicodeChar = l95[i];
+    s->lines[pr10].cells = (CHAR_INFO *)calloc(s->cols, sizeof(CHAR_INFO));
+    s->lines[pr50].cells = (CHAR_INFO *)calloc(s->cols, sizeof(CHAR_INFO));
+    s->lines[pr95].cells = (CHAR_INFO *)calloc(s->cols, sizeof(CHAR_INFO));
+
+    for (int i = 0; i < (int)strlen(l10); i++) s->lines[pr10].cells[i].Char.UnicodeChar = l10[i];
+    for (int i = 0; i < (int)strlen(l50); i++) s->lines[pr50].cells[i].Char.UnicodeChar = l50[i];
+    for (int i = 0; i < (int)strlen(l95); i++) s->lines[pr95].cells[i].Char.UnicodeChar = l95[i];
 
     // Search for "error" (case-insensitive)
     strcpy(g_search_buf, "error");
@@ -205,7 +215,10 @@ int main(void) {
     search_jump_prev(); // Should go forward to 1
     assert(g_search_match_cur == 1);
 
-    free(s->buffer);
+    free(s->lines[pr10].cells);
+    free(s->lines[pr50].cells);
+    free(s->lines[pr95].cells);
+    free(s->lines);
     printf("Scrollback Search real source test passed successfully: 3/3 matches found and verified.\n");
     return 0;
 }
