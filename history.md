@@ -6,6 +6,21 @@
 
 ## 版本更新记录
 
+### v1.8.0
+- **ASAN 内存安全测试真实源码动态抽取与变异验证（BUG-4）**：
+  - 重构 `verify_ringbuf_asan.py` 与 `verify_search.py`，改为动态解析并抽取 `include/screen.h`、`src/screen.c` 及 `src/input.c` 中的真实实现，彻底根除静态代码硬编码副本与源码脱钩的隐患。
+  - 引入变异测试（Mutation Testing）机制，确保测试套件对环形缓冲溢出及越界读写具备 100% 真实拦截能力。
+- **并发临界区安全加固（BUG-5）**：
+  - 为 `execute_search()` 与 `copy_range_to_clipboard()` 缓冲区遍历操作引入原子临界区保护（`EnterCriticalSection(&g_mux.cs)`），彻底消除后台 `pane_read_thread` 持续输出与前端主线程遍历 `ScreenBuffer` 之间的数据竞争与撕裂读问题。
+  - 剪贴板 Win32 API 调用（`OpenClipboard`/`SetClipboardData`）移至锁外执行，杜绝拖慢后台 I/O 线程。
+- **搜索高亮渲染二分查找优化（BUG-6）**：
+  - 优化 `render_screen()` 渲染管线，利用搜索匹配列表天然按 `abs_y` 单调递增的特性，在渲染各行前通过二分查找定位当前行匹配区间。
+  - 将单帧匹配搜索从 O(cells × matches) 降至 O(rows × log(matches) + cols × matches_in_row)，彻底消除高频字符搜索下的高 CPU 占用与帧率卡顿。
+- **搜索结果滚动生命周期自适应同步（BUG-7）**：
+  - 在 `screen_scroll_up()` 全屏滚动分支中加入搜索匹配项动态偏移计算：当满历史缓冲区丢弃最旧行时，自动调整所有匹配项的 `abs_y -= count`，丢弃越界项并自适应更新聚焦索引，防止新输出产生时搜索高亮发生行漂移。
+- **仓库元数据与生态优化**：
+  - 为仓库补齐关键 GitHub Topics 标签（`windows`、`tmux`、`conpty`、`terminal-multiplexer`、`terminal`）。
+
 ### v1.7.0
 - **模块化架构重构（Multi-file Modular Architecture）**：
   - 将单文件源码全面重构为清晰、高内聚、低耦合的多文件模块化 C 架构：

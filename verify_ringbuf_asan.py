@@ -2,26 +2,68 @@
 # -*- coding: utf-8 -*-
 """
 verify_ringbuf_asan.py - Real AddressSanitizer verification for win-termux ring buffer & scrolling.
-Compiles ring buffer functions with gcc -fsanitize=address,undefined and tests 1200+ edge cases.
+Dynamically extracts screen_phys_row, screen_write_cell, and screen_scroll_up from
+include/screen.h and src/screen.c, compiles with gcc -fsanitize=address,undefined and tests 1200+ edge cases.
 """
 
 import subprocess
 import tempfile
 import os
 import sys
+from pathlib import Path
 
-C_TEST_CODE = r"""
+ROOT = Path(__file__).resolve().parent
+
+hdr = (ROOT / "include" / "screen.h").read_text(encoding="utf-8")
+src = (ROOT / "src" / "screen.c").read_text(encoding="utf-8")
+
+def extract_func(text, prefix):
+    idx = text.find(prefix)
+    if idx == -1:
+        return None
+    brace_start = text.find("{", idx)
+    if brace_start == -1:
+        return None
+    depth = 0
+    for i in range(brace_start, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[idx : i + 1]
+    return None
+
+f_phys = extract_func(hdr, "static inline int screen_phys_row(")
+if not f_phys:
+    sys.exit("FAIL: screen_phys_row not found in include/screen.h")
+
+f_write = extract_func(src, "void screen_write_cell(")
+if not f_write:
+    sys.exit("FAIL: screen_write_cell not found in src/screen.c")
+
+f_up = extract_func(src, "void screen_scroll_up(")
+if not f_up:
+    sys.exit("FAIL: screen_scroll_up not found in src/screen.c")
+
+PRELUDE = r"""
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
 
 #define SCROLL_BUF_LINES 10000
+#define MAX_PANES 16
+#define MAX_SEARCH_MATCHES 2048
 #define RGB565_WHITE 0xFFFF
 #define RGB565_BLACK 0x0000
 
 typedef unsigned short WORD;
 typedef unsigned short WCHAR;
+
+static inline WORD rgb565(int r, int g, int b) {
+    return (WORD)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+}
 
 typedef struct {
     union {
@@ -32,75 +74,72 @@ typedef struct {
 } CHAR_INFO;
 
 typedef struct {
-    int rows, cols, total_lines, hist_lines, scroll_top;
-    int in_alt_screen;
-    CHAR_INFO *buffer, *alt_buffer;
-    WORD *fg_rgb, *bg_rgb, *alt_fg_rgb, *alt_bg_rgb;
-    unsigned char *rgb_valid, *alt_rgb_valid;
+    CHAR_INFO *buffer;
+    int cols, rows, total_lines, scroll_top;
+    int cursor_x, cursor_y, cursor_visible;
     WORD current_attr;
+    int fg_color, bg_color, bold, underline, reverse_video;
+    int saved_cx, saved_cy;
+    CHAR_INFO *alt_buffer;
+    int in_alt_screen, alt_scroll_top;
+    int origin_mode, auto_wrap, wraparound_pending;
+    int scroll_region_top, scroll_region_bottom;
+    int app_cursor_keys, app_keypad;
+    int mouse_tracking, mouse_sgr, bracketed_paste, win32_input_mode;
+    char tab_stops[512];
+    char response_buf[256];
+    int response_len;
+    unsigned utf8_state, utf8_cp;
+    int pane_index;
+    int detect_col, detect_count;
+    int fg_r, fg_g, fg_b, bg_r, bg_g, bg_b;
+    int fg_rgb_on, bg_rgb_on;
+    WORD *fg_rgb, *bg_rgb;
+    WORD *alt_fg_rgb, *alt_bg_rgb;
+    unsigned char *rgb_valid, *alt_rgb_valid;
+    int hist_lines;
+    int alt_hist_lines;
 } ScreenBuffer;
 
-static inline int screen_phys_row(ScreenBuffer *s, int row) {
-    if (row < 0) return 0;
-    return (s->scroll_top + row) % s->total_lines;
-}
+typedef struct {
+    int active;
+    void *hpc;
+    void *pipe_in, *pipe_out, *process, *thread, *read_thread;
+    ScreenBuffer screen;
+    char title[64];
+    char full_title[256];
+    int scroll_offset;
+    int color;
+    int is_settings;
+    int is_about;
+    int exited_hold;
+    unsigned long exit_code;
+    WCHAR input_history[256];
+    int input_history_len;
+    int input_history_pos;
+} Pane;
 
-static void screen_write_cell(ScreenBuffer *s, int row, int col, WCHAR ch, WORD attr) {
-    int pr = screen_phys_row(s, row);
-    int idx = pr * s->cols + col;
-    s->buffer[idx].Char.UnicodeChar = ch;
-    s->buffer[idx].Attributes = attr;
-}
+typedef struct {
+    int abs_y;
+    int start_x;
+    int end_x;
+} SearchMatch;
 
-static void screen_scroll_up(ScreenBuffer *s, int top, int bottom, int count) {
-    if (count <= 0) return;
-    if (top < 0) top = 0;
-    if (bottom >= s->rows) bottom = s->rows - 1;
-    if (bottom < top) return;
-    if (count > bottom - top + 1) count = bottom - top + 1;
+typedef struct {
+    Pane panes[MAX_PANES];
+    int pane_count, active_pane;
+} MuxState;
 
-    if (top == 0 && bottom == s->rows - 1) {
-        s->hist_lines += count;
-        if (s->hist_lines > SCROLL_BUF_LINES) s->hist_lines = SCROLL_BUF_LINES;
-        for (int c = 0; c < count; c++) {
-            int pr = screen_phys_row(s, s->rows + c);
-            for (int j = 0; j < s->cols; j++) {
-                int idx = pr * s->cols + j;
-                s->buffer[idx].Char.UnicodeChar = L' ';
-                s->buffer[idx].Attributes = s->current_attr;
-                if (s->fg_rgb) { s->fg_rgb[idx] = RGB565_WHITE; s->bg_rgb[idx] = RGB565_BLACK; }
-                if (s->rgb_valid) s->rgb_valid[idx] = 0;
-            }
-        }
-        s->scroll_top = (s->scroll_top + count) % s->total_lines;
-    } else {
-        // v1.6.0 modulo wrapping fix
-        for (int i = top; i <= bottom - count; i++) {
-            int dst_pr = screen_phys_row(s, i);
-            int src_pr = screen_phys_row(s, i + count);
-            memcpy(&s->buffer[dst_pr * s->cols], &s->buffer[src_pr * s->cols], s->cols * sizeof(CHAR_INFO));
-            if (s->fg_rgb) {
-                memcpy(&s->fg_rgb[dst_pr * s->cols], &s->fg_rgb[src_pr * s->cols], s->cols * sizeof(WORD));
-                memcpy(&s->bg_rgb[dst_pr * s->cols], &s->bg_rgb[src_pr * s->cols], s->cols * sizeof(WORD));
-            }
-            if (s->rgb_valid) {
-                memcpy(&s->rgb_valid[dst_pr * s->cols], &s->rgb_valid[src_pr * s->cols], s->cols * sizeof(unsigned char));
-            }
-        }
-        for (int i = bottom - count + 1; i <= bottom; i++) {
-            int pr = screen_phys_row(s, i);
-            for (int j = 0; j < s->cols; j++) {
-                int idx = pr * s->cols + j;
-                s->buffer[idx].Char.UnicodeChar = L' ';
-                s->buffer[idx].Attributes = s->current_attr;
-                if (s->fg_rgb) { s->fg_rgb[idx] = RGB565_WHITE; s->bg_rgb[idx] = RGB565_BLACK; }
-                if (s->rgb_valid) s->rgb_valid[idx] = 0;
-            }
-        }
-    }
-}
+MuxState g_mux;
+SearchMatch g_search_matches[MAX_SEARCH_MATCHES];
+int g_search_match_count = 0;
+int g_search_match_cur = -1;
+int g_search_active = 0;
+"""
 
+DRIVER = r"""
 int main(void) {
+    memset(&g_mux, 0, sizeof(g_mux));
     ScreenBuffer s;
     memset(&s, 0, sizeof(s));
     s.rows = 30;
@@ -142,6 +181,8 @@ int main(void) {
     return 0;
 }
 """
+
+C_TEST_CODE = PRELUDE + "\n" + f_phys + "\n" + f_write + "\n" + f_up + "\n" + DRIVER
 
 def main():
     print("=== ASAN Ring Buffer Scrolling Test (verify_ringbuf_asan.py) ===")

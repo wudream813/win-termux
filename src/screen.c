@@ -163,6 +163,24 @@ void screen_scroll_up(ScreenBuffer *s, int top, int bottom, int count) {
                 if (g_mux.panes[pi].scroll_offset > s->hist_lines)
                     g_mux.panes[pi].scroll_offset = s->hist_lines;
             }
+            if (pi == g_mux.active_pane && g_search_active && g_search_match_count > 0) {
+                if (s->hist_lines == SCROLL_BUF_LINES) {
+                    int new_count = 0;
+                    int new_cur = -1;
+                    for (int m = 0; m < g_search_match_count; m++) {
+                        g_search_matches[m].abs_y -= count;
+                        if (g_search_matches[m].abs_y >= 0) {
+                            if (m == g_search_match_cur) new_cur = new_count;
+                            g_search_matches[new_count++] = g_search_matches[m];
+                        }
+                    }
+                    g_search_match_count = new_count;
+                    g_search_match_cur = (new_cur >= 0) ? new_cur : (new_count > 0 ? new_count - 1 : -1);
+                    if (g_search_match_count == 0) {
+                        g_search_active = 0;
+                    }
+                }
+            }
         }
 
         for (int c = 0; c < count; c++) {

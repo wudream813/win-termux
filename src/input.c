@@ -31,9 +31,13 @@ void execute_search(void) {
         return;
     }
 
+    EnterCriticalSection(&g_mux.cs);
     int total_lines = s->in_alt_screen ? s->rows : (s->hist_lines + s->rows);
     WCHAR *row_chars = (WCHAR *)malloc(s->cols * sizeof(WCHAR));
-    if (!row_chars) return;
+    if (!row_chars) {
+        LeaveCriticalSection(&g_mux.cs);
+        return;
+    }
 
     for (int abs_y = 0; abs_y < total_lines; abs_y++) {
         int rlen = s->cols;
@@ -82,6 +86,7 @@ void execute_search(void) {
     } else {
         g_search_active = 0;
     }
+    LeaveCriticalSection(&g_mux.cs);
 }
 
 void search_jump_next(void) {
@@ -90,14 +95,18 @@ void search_jump_next(void) {
     Pane *p = &g_mux.panes[g_mux.active_pane];
     ScreenBuffer *s = &p->screen;
 
-    g_search_match_cur = (g_search_match_cur - 1 + g_search_match_count) % g_search_match_count;
-    int target_abs_y = g_search_matches[g_search_match_cur].abs_y;
-    if (!s->in_alt_screen) {
-        int vo = s->hist_lines - (target_abs_y - s->rows / 2);
-        if (vo < 0) vo = 0;
-        if (vo > s->hist_lines) vo = s->hist_lines;
-        p->scroll_offset = vo;
+    EnterCriticalSection(&g_mux.cs);
+    if (g_search_match_count > 0 && g_search_active) {
+        g_search_match_cur = (g_search_match_cur - 1 + g_search_match_count) % g_search_match_count;
+        int target_abs_y = g_search_matches[g_search_match_cur].abs_y;
+        if (!s->in_alt_screen) {
+            int vo = s->hist_lines - (target_abs_y - s->rows / 2);
+            if (vo < 0) vo = 0;
+            if (vo > s->hist_lines) vo = s->hist_lines;
+            p->scroll_offset = vo;
+        }
     }
+    LeaveCriticalSection(&g_mux.cs);
     g_mux.needs_redraw = 1;
 }
 
@@ -107,14 +116,18 @@ void search_jump_prev(void) {
     Pane *p = &g_mux.panes[g_mux.active_pane];
     ScreenBuffer *s = &p->screen;
 
-    g_search_match_cur = (g_search_match_cur + 1) % g_search_match_count;
-    int target_abs_y = g_search_matches[g_search_match_cur].abs_y;
-    if (!s->in_alt_screen) {
-        int vo = s->hist_lines - (target_abs_y - s->rows / 2);
-        if (vo < 0) vo = 0;
-        if (vo > s->hist_lines) vo = s->hist_lines;
-        p->scroll_offset = vo;
+    EnterCriticalSection(&g_mux.cs);
+    if (g_search_match_count > 0 && g_search_active) {
+        g_search_match_cur = (g_search_match_cur + 1) % g_search_match_count;
+        int target_abs_y = g_search_matches[g_search_match_cur].abs_y;
+        if (!s->in_alt_screen) {
+            int vo = s->hist_lines - (target_abs_y - s->rows / 2);
+            if (vo < 0) vo = 0;
+            if (vo > s->hist_lines) vo = s->hist_lines;
+            p->scroll_offset = vo;
+        }
     }
+    LeaveCriticalSection(&g_mux.cs);
     g_mux.needs_redraw = 1;
 }
 
@@ -208,6 +221,7 @@ void copy_range_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs) {
     if (!wbuf) return;
     int wlen = 0;
 
+    EnterCriticalSection(&g_mux.cs);
     for (int abs_y = sy_abs; abs_y <= ey_abs; abs_y++) {
         int x_start = (abs_y == sy_abs) ? sx : 0;
         int x_end = (abs_y == ey_abs) ? ex : s->cols - 1;
@@ -243,6 +257,7 @@ void copy_range_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs) {
     }
     while (wlen > 0 && wbuf[wlen - 1] == L' ') wlen--;
     wbuf[wlen] = 0;
+    LeaveCriticalSection(&g_mux.cs);
 
     if (wlen > 0 && OpenClipboard(NULL)) {
         EmptyClipboard();

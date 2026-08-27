@@ -745,6 +745,23 @@ void render_screen(void) {
                 pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H", y + 2);
                 int ar = (vo > 0 && !s->in_alt_screen) ? screen_phys_row(s, y - vo) : -1;
                 int cur_cell_abs_y = screen_to_abs_row(s, y, vo);
+                int match_lo = 0, match_hi = 0;
+                if (g_search_active && g_search_match_count > 0) {
+                    int lo = 0, hi = g_search_match_count;
+                    while (lo < hi) {
+                        int mid = (lo + hi) / 2;
+                        if (g_search_matches[mid].abs_y < cur_cell_abs_y) lo = mid + 1;
+                        else hi = mid;
+                    }
+                    match_lo = lo;
+                    hi = g_search_match_count;
+                    while (lo < hi) {
+                        int mid = (lo + hi) / 2;
+                        if (g_search_matches[mid].abs_y <= cur_cell_abs_y) lo = mid + 1;
+                        else hi = mid;
+                    }
+                    match_hi = lo;
+                }
                 for (int x = 0; x < text_rc; x++) {
                     CHAR_INFO *cell = (ar >= 0) ? &s->buffer[ar * s->cols + x] : screen_cell(s, y, x);
                     WCHAR wc = L' '; WORD attr = 0x07;
@@ -765,10 +782,9 @@ void render_screen(void) {
                         }
                     }
 
-                    if (g_search_active && g_search_match_count > 0 && (!sel_active || !(brgb == rgb565(38, 75, 110)))) {
-                        for (int m = 0; m < g_search_match_count; m++) {
-                            if (g_search_matches[m].abs_y == cur_cell_abs_y &&
-                                x >= g_search_matches[m].start_x && x <= g_search_matches[m].end_x) {
+                    if (match_lo < match_hi && (!sel_active || !(brgb == rgb565(38, 75, 110)))) {
+                        for (int m = match_lo; m < match_hi; m++) {
+                            if (x >= g_search_matches[m].start_x && x <= g_search_matches[m].end_x) {
                                 if (m == g_search_match_cur) {
                                     brgb = rgb565(217, 119, 54); bgv = 1;
                                     frgb = rgb565(255, 255, 255); fgv = 1;
