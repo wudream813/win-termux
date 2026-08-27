@@ -12,11 +12,6 @@ CHECKS = (
     "verify_mouse53.py",
     "verify_color8.py",
     "verify_emoji.py",
-    "verify_v140.py",
-    "verify_v142.py",
-    "verify_v143.py",
-    "verify_v145.py",
-    "verify_v150.py",
 )
 
 

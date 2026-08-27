@@ -18,6 +18,9 @@
   - 新增 `#define TERMUX_VERSION "1.5.0"` 单一数据源，关于视图、帮助视图及标头版本号统一宏引用，消除跨文件硬编码与自锁风险。
 - **全面引入 GitHub Actions 自动化 CI 构建（P2）**：
   - 新增 `.github/workflows/build.yml` 工作流，覆盖 Ubuntu MinGW（C / C++ 双编译 + `verify_all.py`）与 Windows MSVC 自动化构建验证。
+- **全量测试套件精简与行为化重构（P2）**：
+  - 彻底清理淘汰所有历史版本字符串断言脚本（`verify_v129` ~ `verify_v150`），避免测试冗余与字符串修改自锁。
+  - 保留并集中运行 `verify_picker`（选色器几何/命中/hover）、`verify_flow`（端到端弹窗状态机）、`verify_mouse53`（鼠标优先级/按键回放）、`verify_color8`（调色板粉色渲染回归）及 `verify_emoji`（真实 C 编译 UTF-8/Emoji 解码）5 大核心行为级测试。
 - **字符串与内存安全加固（P3）**：
   - 将配置初始化、标题设定等路径中的 `strcpy` 全量替换为带边界截断保护的 `snprintf`。
 
