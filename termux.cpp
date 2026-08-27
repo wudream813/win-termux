@@ -1,4 +1,4 @@
-// termux.cpp - Windows Terminal Multiplexer v1.6.1
+// termux.cpp - Windows Terminal Multiplexer v1.6.2
 // ---------------------------------------------------------------------------
 // v8.3 changes:
 //  19. ConPTY line-width autodetect: legacy full-screen apps (edit.com...) can
@@ -116,7 +116,7 @@
 #endif
 
 #ifndef TERMUX_VERSION
-#define TERMUX_VERSION "1.6.1"
+#define TERMUX_VERSION "1.6.2"
 #endif
 
 #define MAX_PANES         16
