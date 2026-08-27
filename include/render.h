@@ -71,6 +71,8 @@ void draw_tab_bar(char *out, int bs, int *posp);
 void render_help_content(char *out, int bs, int *posp, int host_rows, int host_cols);
 void render_chooser(char *out, int bs, int *posp, int host_rows, int host_cols);
 void chooser_geom(int host_rows, int host_cols, int *top, int *left, int *w, int *h);
+/* Popup left edge in ANSI's 1-based column space.  Mouse anchors remain 0-based. */
+int popup_left_1based(int anchor0, int width, int host_cols);
 void render_custom_cmd_box(char *out, int bs, int *posp, int host_rows, int host_cols);
 void render_rename_box(char *out, int bs, int *posp, int host_rows, int host_cols);
 void render_ctx_menu(char *out, int bs, int *posp, int host_rows, int host_cols);

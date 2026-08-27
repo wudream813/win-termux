@@ -36,9 +36,11 @@ g_mouse_x, g_mouse_y = -1, -1
 
 def popup_left():
     a = m.pop_anchor_x if m.pop_anchor_x >= 0 else g_mouse_x
-    if a + CTX_W > HOST_COLS:
-        a = (m.pop_anchor_x if m.pop_anchor_x >= 0 else g_mouse_x) - CTX_W
-    return max(0, a)
+    width = CP_W if m.ctx_mode == 2 else CTX_W
+    left = a + 1 if a >= 0 else 1
+    if left + width - 1 > HOST_COLS:
+        left = left - width + 1
+    return max(1, left)
 
 def mbtn_of(btn_state):
     # v8.53: LEFT > RIGHT > MIDDLE
@@ -195,7 +197,7 @@ print("\n=== D) 完整流程回归（右键任意处 -> 菜单 -> 选色器 -> �
 r = handle_mouse(23, 0, R, PRESS)
 chk("tab 右键 -> 菜单", r, "tab-right-menu")
 left = popup_left()
-chk("anchor left=23", left, 23)
+chk("anchor left=24 (ANSI 1-based)", left, 24)
 # 点菜单 [1] 改颜色：菜单 1-based 行 top+1=3 -> 0-based my=2；列在 [left,left+CTX_W) 内
 r = handle_mouse(30, 2, L, PRESS)
 chk("菜单 [1] -> 选色器", r, "menu->picker")

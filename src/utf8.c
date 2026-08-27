@@ -443,9 +443,13 @@ void format_name15_display(char *dst, int dst_max, const char *src) {
 }
 
 int get_input_screen_offset(const char *buf, int len, int cursor_byte_pos, int vis_width) {
+    if (vis_width < 1) vis_width = 1;
     int cursor_col = utf8_cols(buf, cursor_byte_pos);
     int total_cols = utf8_cols(buf, len);
-    if (total_cols <= vis_width) return cursor_col;
+    /* At exactly vis_width columns the insertion point would otherwise land
+     * on the separator/right border.  Use the clipped view so the caret stays
+     * inside the input field. */
+    if (total_cols < vis_width) return cursor_col;
     int scroll_col = 0;
     if (cursor_col >= vis_width - 2) {
         scroll_col = cursor_col - (vis_width - 3);
@@ -466,11 +470,12 @@ void render_scrollable_input(char *out, int bs, int *posp,
                              const char *buf, int len, int cursor_byte_pos,
                              int vis_width, const char *bg_sgr, int *cursor_screen_offset) {
     int pos = *posp;
+    if (vis_width < 1) vis_width = 1;
     int cursor_col = utf8_cols(buf, cursor_byte_pos);
     int total_cols = utf8_cols(buf, len);
     const char *bg = (bg_sgr && bg_sgr[0]) ? bg_sgr : "";
 
-    if (total_cols <= vis_width) {
+    if (total_cols < vis_width) {
         pos += snprintf(out + pos, bs - pos, "%s\x1b[38;2;230;237;243m", bg);
         for (int p = 0; p < len && pos < bs - 8; p++) out[pos++] = buf[p];
         int used = total_cols;

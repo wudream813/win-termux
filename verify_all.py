@@ -14,6 +14,7 @@ CHECKS = (
     "verify_emoji.py",
     "verify_ringbuf_asan.py",
     "verify_search.py",
+    "verify_alignment.py",
 )
 
 

@@ -396,9 +396,16 @@ void execute_palette_command(int item_index) {
 }
 
 void open_command_palette(void) {
+    int settings_active = (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count &&
+                           g_mux.panes[g_mux.active_pane].active &&
+                           g_mux.panes[g_mux.active_pane].is_settings);
     g_mux.palette_mode = 1;
-    g_mux.palette_page = PALETTE_PAGE_ROOT;
+    /* Keep the palette in the same domain as the page it was opened from:
+     * Ctrl+B : on the graphical settings page goes straight to the settings
+     * command panel instead of making the user walk through the root page. */
+    g_mux.palette_page = settings_active ? PALETTE_PAGE_SETTINGS : PALETTE_PAGE_ROOT;
     g_mux.palette_stack_len = 0;
+    g_settings_show_presets = 0;
     g_mux.palette_field = 0;
     g_mux.palette_edit_idx = -1;
     g_mux.palette_edit_new = 0;
@@ -1318,14 +1325,21 @@ void handle_settings_key(KEY_EVENT_RECORD *ke) {
 void handle_settings_mouse(MOUSE_EVENT_RECORD *me) {
     int mx = me->dwMousePosition.X, my = me->dwMousePosition.Y;
     int press = (me->dwButtonState & (FROM_LEFT_1ST_BUTTON_PRESSED | FROM_LEFT_2ND_BUTTON_PRESSED | RIGHTMOST_BUTTON_PRESSED)) != 0;
-    if (!press) return;
+    if (!press || (me->dwEventFlags != 0 && me->dwEventFlags != DOUBLE_CLICK)) return;
 
     int host_rows = g_mux.host_rows;
     int host_cols = g_mux.host_cols;
     int sb_w = SETTINGS_SIDEBAR_W;
     if (sb_w > host_cols / 2) sb_w = host_cols / 2;
     if (sb_w < 15) sb_w = 15;
+    if (sb_w > host_cols) sb_w = host_cols;
+    if (sb_w < 1) sb_w = 1;
     int main_left = sb_w + 3;
+    int right_max_w = host_cols - main_left - 2;
+    if (right_max_w < 10) right_max_w = 10;
+    int input_w = right_max_w - 4;
+    if (input_w > 50) input_w = 50;
+    if (input_w < 20) input_w = 20;
     int r = my + 1, c = mx + 1;
 
     if (g_settings_show_presets) {
@@ -1364,7 +1378,9 @@ void handle_settings_mouse(MOUSE_EVENT_RECORD *me) {
         return;
     }
 
-    if (c < sb_w) {
+    /* The divider itself is ANSI column sb_w and is still part of the
+     * sidebar hit region rendered above. */
+    if (c <= sb_w) {
         if (r == 5) {
             g_settings_nav = 0;
             g_mux.needs_redraw = 1;
@@ -1397,7 +1413,7 @@ void handle_settings_mouse(MOUSE_EVENT_RECORD *me) {
             g_mux.needs_redraw = 1;
             return;
         }
-        if (r >= host_rows) {
+        if (r == host_rows) {
             if (g_settings_nav >= 1) {
                 save_editor_to_item(g_settings_nav - 1);
             } else {
@@ -1501,17 +1517,17 @@ void handle_settings_mouse(MOUSE_EVENT_RECORD *me) {
             }
         } else {
             int item_idx = g_settings_nav - 1;
-            if (r == 6) {
+            if (r == 6 && c >= main_left && c < main_left + input_w + 4) {
                 g_settings_field = 0;
                 g_mux.needs_redraw = 1;
                 return;
             }
-            if (r == 9) {
+            if (r == 9 && c >= main_left && c < main_left + input_w + 4) {
                 g_settings_field = 1;
                 g_mux.needs_redraw = 1;
                 return;
             }
-            if (r == 12) {
+            if (r == 12 && c >= main_left && c < main_left + input_w + 4) {
                 g_settings_field = 2;
                 g_mux.needs_redraw = 1;
                 return;
@@ -2378,9 +2394,10 @@ void handle_mouse(MOUSE_EVENT_RECORD *me) {
         int pbtn = (me->dwButtonState & (FROM_LEFT_1ST_BUTTON_PRESSED | FROM_LEFT_2ND_BUTTON_PRESSED | RIGHTMOST_BUTTON_PRESSED)) != 0;
         if (pbtn && (me->dwEventFlags == 0 || me->dwEventFlags == DOUBLE_CLICK)) {
             if (g_mux.ctx_mode) {
-                int top = 2, left = (g_pop_anchor_x >= 0) ? g_pop_anchor_x : g_mouse_x;
-                if (left + CTX_W > g_mux.host_cols) left = (g_pop_anchor_x >= 0 ? g_pop_anchor_x : g_mouse_x) - CTX_W;
-                if (left < 0) left = 0;
+                int top = 2;
+                int anchor0 = (g_pop_anchor_x >= 0) ? g_pop_anchor_x : g_mouse_x;
+                int popup_w = (g_mux.ctx_mode == 1) ? CTX_W : CP_W;
+                int left = popup_left_1based(anchor0, popup_w, g_mux.host_cols);
                 int r = my + 1, c = mx + 1;
                 if (g_mux.ctx_mode == 1) {
                     if (r == top + 1 && c >= left && c < left + CTX_W) {

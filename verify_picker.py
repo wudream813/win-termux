@@ -8,11 +8,12 @@ TOP = 2
 
 
 def popup_left(anchor, host_cols, W):
-    left = anchor
-    if left + W > host_cols:
-        left = anchor - W
-    if left < 0:
-        left = 0
+    """Mirror popup_left_1based(): anchor is 0-based, left is ANSI 1-based."""
+    left = anchor + 1 if anchor >= 0 else 1
+    if left + W - 1 > host_cols:
+        left = left - W + 1
+    if left < 1:
+        left = 1
     return left
 
 
@@ -106,7 +107,7 @@ for anchor in (0, 1, 27, 28, 50, 89, 90, 91, 118, 119):   # 真实鼠标坐标�
     # renderer 用 CP_W，ctx/color picker 都按 CTX_W 钳制（实际渲染都用同一公式）
     r_left = popup_left(anchor, host, CP_W)
     h_left = popup_left(anchor, host, CP_W)
-    if r_left != h_left or not (0 <= r_left and r_left + CP_W <= host):
+    if r_left != h_left or not (1 <= r_left and r_left + CP_W - 1 <= host):
         bad += 1
         print(f"  FAIL anchor={anchor} renderer={r_left} handler={h_left}")
 total_bad += bad

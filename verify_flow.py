@@ -22,10 +22,12 @@ class Mux:
 m = Mux()
 
 def popup_left():
-    left = m.pop_anchor_x if m.pop_anchor_x >= 0 else g_mouse_x
-    if left + CTX_W > HOST_COLS:
-        left = (m.pop_anchor_x if m.pop_anchor_x >= 0 else g_mouse_x) - CTX_W
-    return max(0, left)
+    anchor = m.pop_anchor_x if m.pop_anchor_x >= 0 else g_mouse_x
+    width = CP_W if m.ctx_mode == 2 else CTX_W
+    left = anchor + 1 if anchor >= 0 else 1
+    if left + width - 1 > HOST_COLS:
+        left = left - width + 1
+    return max(1, left)
 
 g_mouse_x, g_mouse_y = -1, -1
 
@@ -108,11 +110,13 @@ steps.append(("已设置", m.ctx_mode == 1 and m.ctx_pane == 0))
 # 2) 点击菜单 [1] 改颜色（菜单行 r=3, c=40+5）-> 应进入选色器
 steps.append((handle_mouse(44, 2, 1, 0) == "menu->picker", "菜单[1] -> 选色器"))
 steps.append((m.ctx_mode == 2, "ctx_mode==2"))
-# 3) 鼠标移到 8 号色块上方（8 号 = row1,col3, 1-based 起始 left+14, 0-based 色块列 53..56）
-hover = hover_swatch(54, 3)
+# 3) 鼠标移到 8 号色块上方（8 号 = row1,col3）。
+# left is ANSI 1-based, so choose the second screen column of its 4-column swatch.
+x8 = popup_left() + 14
+hover = hover_swatch(x8, 3)
 steps.append((hover == 8, f"hover 命中 8（got {hover}）"))
-# 4) 点击 8 号色块（鼠标 0-based (54,3) -> 1-based (4,55)，left=40 -> dc=13 -> which=3 -> base5+3=8）
-r = handle_mouse(54, 3, 1, 0)
+# 4) 点击 8 号色块；mx+1 is ANSI column and maps to dc=12..15.
+r = handle_mouse(x8, 3, 1, 0)
 steps.append((r == "picked#8", f"点击 8 号 -> picked#8（got {r}）"))
 # 5) 验证颜色已写入
 steps.append((m.panes[0]["color"] == 8, f"颜色写入 8（got {m.panes[0]['color']}）"))
@@ -127,7 +131,7 @@ r = handle_mouse(51, 2, 1, 0)
 steps.append((r == "new-cmd", f"chooser [1] -> new-cmd（got {r}）"))
 # 8) 弹窗打开时鼠标移动 -> 必须触发重绘（hover 的前提）
 m.ctx_mode = 2; m.pop_anchor_x = 40; m.needs_redraw = 0
-handle_mouse(54, 3, 0, 1)   # flags=MOUSE_MOVED, 无按钮
+handle_mouse(x8, 3, 0, 1)   # flags=MOUSE_MOVED, 无按钮
 steps.append((m.needs_redraw == 1, "弹窗内移动触发重绘（hover 更新）"))
 # 9) 弹窗打开时按住拖动（MOUSE_MOVED+按钮）不得取消弹窗
 m.ctx_mode = 2; m.needs_redraw = 0
