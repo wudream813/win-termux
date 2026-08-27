@@ -1,4 +1,4 @@
-// termux.cpp - Windows Terminal Multiplexer v1.5.0
+// termux.cpp - Windows Terminal Multiplexer v1.6.1
 // ---------------------------------------------------------------------------
 // v8.3 changes:
 //  19. ConPTY line-width autodetect: legacy full-screen apps (edit.com...) can
@@ -109,13 +109,14 @@
 #include <string.h>
 #include <stdarg.h>
 #include <process.h>
+#include <wctype.h>
 
 #ifdef _MSC_VER
 #pragma comment(lib, "user32.lib")
 #endif
 
 #ifndef TERMUX_VERSION
-#define TERMUX_VERSION "1.5.0"
+#define TERMUX_VERSION "1.6.1"
 #endif
 
 #define MAX_PANES         16
@@ -317,6 +318,21 @@ static int g_copy_anchor_x = 0, g_copy_anchor_abs_y = 0; // selection start anch
 static int g_mouse_selecting = 0;     // 1 = mouse drag selection active
 static int g_mouse_sel_sx = 0, g_mouse_sel_s_abs_y = 0;
 static int g_mouse_sel_ex = 0, g_mouse_sel_e_abs_y = 0;
+
+// v1.6.1: Scrollback History Search
+typedef struct {
+    int abs_y;
+    int start_x;
+    int end_x;
+} SearchMatch;
+#define MAX_SEARCH_MATCHES 2048
+static SearchMatch g_search_matches[MAX_SEARCH_MATCHES];
+static int g_search_match_count = 0;
+static int g_search_match_cur = -1;  // 0..count-1 currently focused match
+static int g_search_mode = 0;        // 1 = typing query in search input box
+static int g_search_active = 0;      // 1 = search results active & highlighted
+static char g_search_buf[64] = {0};
+static int g_search_len = 0, g_search_pos = 0;
 
 typedef struct {
     char name[32];
@@ -574,6 +590,7 @@ static void draw_tab_bar(char *out, int bs, int *posp);   // v8.18
 static void render_help_content(char *out, int bs, int *posp, int host_rows, int host_cols);   // v8.18
 static void render_ctx_menu(char *out, int bs, int *posp, int host_rows, int host_cols);   // v8.33
 static void render_color_picker(char *out, int bs, int *posp, int host_rows, int host_cols);   // v8.33
+static void render_search_box(char *out, int bs, int *posp, int host_rows, int host_cols);     // v1.6.1
 static void close_pane(int idx);
 static void switch_pane(int idx);
 static int create_pane(void);   // v8.17: used by open_help_pane
@@ -3279,6 +3296,22 @@ static void render_screen(void) {
                         }
                     }
 
+                    if (g_search_active && g_search_match_count > 0 && (!sel_active || !(brgb == rgb565(38, 75, 110)))) {
+                        for (int m = 0; m < g_search_match_count; m++) {
+                            if (g_search_matches[m].abs_y == cur_cell_abs_y &&
+                                x >= g_search_matches[m].start_x && x <= g_search_matches[m].end_x) {
+                                if (m == g_search_match_cur) {
+                                    brgb = rgb565(217, 119, 54); bgv = 1;
+                                    frgb = rgb565(255, 255, 255); fgv = 1;
+                                } else {
+                                    brgb = rgb565(210, 153, 34); bgv = 1;
+                                    frgb = rgb565(13, 17, 23); fgv = 1;
+                                }
+                                break;
+                            }
+                        }
+                    }
+
                     if (attr != la_attr || frgb != la_fr || brgb != la_br || fgv != la_fv || bgv != la_bv) {
                         const char *ul = (attr & COMMON_LVB_UNDERSCORE) ? ";4" : "";
                         if (fgv || bgv) {
@@ -3348,6 +3381,10 @@ static void render_screen(void) {
                 int badge_x = (g_mux.host_cols > 65) ? (g_mux.host_cols - 60) : 1;
                 pos += snprintf(out + pos, bs - pos, "\x1b[2;%dH\x1b[48;2;210;153;34m\x1b[38;2;13;17;23;1m [复制模式] \x1b[0m\x1b[48;2;33;38;45m\x1b[38;2;230;237;243m %s | Enter/y 复制, Space/v 选区, Esc 退出 \x1b[0m",
                                 badge_x, g_copy_sel_active ? "已开启选区" : "移动光标");
+            } else if (g_search_active && g_search_match_count > 0) {
+                int badge_x = (g_mux.host_cols > 65) ? (g_mux.host_cols - 60) : 1;
+                pos += snprintf(out + pos, bs - pos, "\x1b[2;%dH\x1b[48;2;210;153;34m\x1b[38;2;13;17;23;1m [搜索: \"%s\" (%d/%d)] \x1b[0m\x1b[48;2;33;38;45m\x1b[38;2;230;237;243m n 下一个, N 上一个, Esc 退出 \x1b[0m",
+                                badge_x, g_search_buf, g_search_match_cur + 1, g_search_match_count);
             }
 
             // clear leftover rows below pane
@@ -3362,7 +3399,9 @@ static void render_screen(void) {
     }
 
     // 2. Overlay popups (so popups cleanly replace each other without leftover rows)
-    if (g_mux.chooser_mode) {
+    if (g_search_mode) {
+        render_search_box(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
+    } else if (g_mux.chooser_mode) {
         render_chooser(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
     } else if (g_mux.ctx_mode == 1) {
         render_ctx_menu(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
@@ -3407,7 +3446,12 @@ static void render_screen(void) {
     }
 
     // 4. Position and set cursor visibility as the FINAL step (must be after draw_tab_bar)
-    if (g_copy_mode) {
+    if (g_search_mode) {
+        int box_w = g_mux.host_cols - 45;
+        if (box_w < 10) box_w = 10;
+        int scr_off = get_input_screen_offset(g_search_buf, g_search_len, g_search_pos, box_w);
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", g_mux.host_rows + 1, 19 + scr_off);
+    } else if (g_copy_mode) {
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", g_copy_cy + 2, g_copy_cx + 1);
     } else if (g_mux.rename_mode) {
         int r_top = 2, r_left = (g_pop_anchor_x >= 0) ? g_pop_anchor_x : g_mouse_x;
@@ -3551,6 +3595,7 @@ static const char *const g_help_lines[] = {
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mc\x1b[0m         新建默认 pane",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243m+\x1b[0m         新建 pane 菜单 (选择/自定义命令行)",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243m[\x1b[0m         进入复制模式 (方向键/Space选择/Enter复制)",
+    "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243m/\x1b[0m         搜索滚动历史 (n/N 跳转匹配, Esc 退出)",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mn / p\x1b[0m     下一个 / 上一个 pane",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mx\x1b[0m         关闭当前 pane",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243ms\x1b[0m         打开图形化设置 (termux.ini)",
@@ -4640,6 +4685,199 @@ static void handle_settings_mouse(MOUSE_EVENT_RECORD *me) {
     }
 }
 
+static void execute_search(void) {
+    g_search_match_count = 0;
+    g_search_match_cur = -1;
+    if (g_search_len <= 0) {
+        g_search_active = 0;
+        return;
+    }
+    if (g_mux.active_pane < 0 || g_mux.active_pane >= g_mux.pane_count) return;
+    Pane *p = &g_mux.panes[g_mux.active_pane];
+    if (!p->active) return;
+    ScreenBuffer *s = &p->screen;
+
+    WCHAR wquery[64] = {0};
+    int wq_len = MultiByteToWideChar(CP_UTF8, 0, g_search_buf, g_search_len, wquery, 63);
+    if (wq_len <= 0) {
+        g_search_active = 0;
+        return;
+    }
+
+    int total_lines = s->in_alt_screen ? s->rows : (s->hist_lines + s->rows);
+    WCHAR *row_chars = (WCHAR *)malloc(s->cols * sizeof(WCHAR));
+    if (!row_chars) return;
+
+    for (int abs_y = 0; abs_y < total_lines; abs_y++) {
+        int rlen = s->cols;
+        for (int x = 0; x < s->cols; x++) {
+            CHAR_INFO *cell = NULL;
+            if (s->in_alt_screen) {
+                cell = &s->alt_buffer[abs_y * s->cols + x];
+            } else {
+                int ar = abs_y;
+                int pr = (s->scroll_top - s->hist_lines + ar + s->total_lines * 2) % s->total_lines;
+                cell = &s->buffer[pr * s->cols + x];
+            }
+            row_chars[x] = cell ? cell->Char.UnicodeChar : L' ';
+        }
+
+        // Case-insensitive substring search in row_chars
+        for (int x = 0; x <= rlen - wq_len; x++) {
+            int match = 1;
+            for (int k = 0; k < wq_len; k++) {
+                WCHAR c1 = towlower(row_chars[x + k]);
+                WCHAR c2 = towlower(wquery[k]);
+                if (c1 != c2) {
+                    match = 0;
+                    break;
+                }
+            }
+            if (match && g_search_match_count < MAX_SEARCH_MATCHES) {
+                g_search_matches[g_search_match_count].abs_y = abs_y;
+                g_search_matches[g_search_match_count].start_x = x;
+                g_search_matches[g_search_match_count].end_x = x + wq_len - 1;
+                g_search_match_count++;
+            }
+        }
+    }
+    free(row_chars);
+
+    if (g_search_match_count > 0) {
+        g_search_active = 1;
+        g_search_match_cur = g_search_match_count - 1;
+        int target_abs_y = g_search_matches[g_search_match_cur].abs_y;
+        if (!s->in_alt_screen) {
+            int vo = s->hist_lines - (target_abs_y - s->rows / 2);
+            if (vo < 0) vo = 0;
+            if (vo > s->hist_lines) vo = s->hist_lines;
+            p->scroll_offset = vo;
+        }
+    } else {
+        g_search_active = 0;
+    }
+}
+
+static void search_jump_next(void) {
+    if (g_search_match_count <= 0 || !g_search_active) return;
+    if (g_mux.active_pane < 0 || g_mux.active_pane >= g_mux.pane_count) return;
+    Pane *p = &g_mux.panes[g_mux.active_pane];
+    ScreenBuffer *s = &p->screen;
+
+    g_search_match_cur = (g_search_match_cur - 1 + g_search_match_count) % g_search_match_count;
+    int target_abs_y = g_search_matches[g_search_match_cur].abs_y;
+    if (!s->in_alt_screen) {
+        int vo = s->hist_lines - (target_abs_y - s->rows / 2);
+        if (vo < 0) vo = 0;
+        if (vo > s->hist_lines) vo = s->hist_lines;
+        p->scroll_offset = vo;
+    }
+    g_mux.needs_redraw = 1;
+}
+
+static void search_jump_prev(void) {
+    if (g_search_match_count <= 0 || !g_search_active) return;
+    if (g_mux.active_pane < 0 || g_mux.active_pane >= g_mux.pane_count) return;
+    Pane *p = &g_mux.panes[g_mux.active_pane];
+    ScreenBuffer *s = &p->screen;
+
+    g_search_match_cur = (g_search_match_cur + 1) % g_search_match_count;
+    int target_abs_y = g_search_matches[g_search_match_cur].abs_y;
+    if (!s->in_alt_screen) {
+        int vo = s->hist_lines - (target_abs_y - s->rows / 2);
+        if (vo < 0) vo = 0;
+        if (vo > s->hist_lines) vo = s->hist_lines;
+        p->scroll_offset = vo;
+    }
+    g_mux.needs_redraw = 1;
+}
+
+static void handle_search_key(KEY_EVENT_RECORD *ke) {
+    WORD vk = ke->wVirtualKeyCode; WCHAR uc = ke->uChar.UnicodeChar;
+
+    if (vk == VK_ESCAPE) {
+        g_search_mode = 0;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+
+    if (vk == VK_RETURN) {
+        g_search_mode = 0;
+        execute_search();
+        g_mux.needs_redraw = 1;
+        return;
+    }
+
+    if (vk == VK_LEFT) {
+        g_search_pos = utf8_prev_grapheme(g_search_buf, g_search_pos);
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_RIGHT) {
+        g_search_pos = utf8_next_grapheme(g_search_buf, g_search_len, g_search_pos);
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_HOME) {
+        g_search_pos = 0;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_END) {
+        g_search_pos = g_search_len;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_BACK) {
+        buf_backspace(g_search_buf, &g_search_len, &g_search_pos);
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_DELETE) {
+        buf_delete(g_search_buf, &g_search_len, &g_search_pos);
+        g_mux.needs_redraw = 1;
+        return;
+    }
+
+    if (uc >= 0xD800 && uc <= 0xDBFF) {
+        g_high_surrogate = uc;
+        return;
+    }
+    if (uc) {
+        char u8[8] = {0}; int u8_count = 0;
+        if (uc >= 0xDC00 && uc <= 0xDFFF && g_high_surrogate) {
+            unsigned int cp = 0x10000 + (((unsigned int)(g_high_surrogate & 0x3FF)) << 10) + (uc & 0x3FF);
+            g_high_surrogate = 0;
+            u8[0] = (char)(0xF0 | (cp >> 18));
+            u8[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+            u8[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+            u8[3] = (char)(0x80 | (cp & 0x3F));
+            u8_count = 4;
+        } else if (uc >= 0x20 || uc == 0x200D || (uc >= 0xFE00 && uc <= 0xFE0F)) {
+            g_high_surrogate = 0;
+            if (uc < 0x80) { u8[0] = (char)uc; u8_count = 1; }
+            else if (uc < 0x800) { u8[0] = (char)(0xC0 | (uc >> 6)); u8[1] = (char)(0x80 | (uc & 0x3F)); u8_count = 2; }
+            else { u8[0] = (char)(0xE0 | (uc >> 12)); u8[1] = (char)(0x80 | ((uc >> 6) & 0x3F)); u8[2] = (char)(0x80 | (uc & 0x3F)); u8_count = 3; }
+        }
+        if (u8_count > 0 && g_search_len + u8_count < (int)sizeof(g_search_buf) - 1) {
+            buf_insert_utf8(g_search_buf, &g_search_len, &g_search_pos, sizeof(g_search_buf) - 1, u8, u8_count);
+            g_mux.needs_redraw = 1;
+            return;
+        }
+    }
+}
+
+static void render_search_box(char *out, int bs, int *posp, int host_rows, int host_cols) {
+    int pos = *posp;
+    int r = host_rows + 1; // bottom row
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[48;2;33;38;45m\x1b[38;2;121;192;255;1m [搜索 / Search] \x1b[0m\x1b[48;2;22;27;34m\x1b[38;2;255;255;255m ", r);
+    int box_w = host_cols - 45;
+    if (box_w < 10) box_w = 10;
+    render_scrollable_input(out, bs, &pos, g_search_buf, g_search_len, g_search_pos, box_w, "\x1b[48;2;22;27;34m", NULL);
+    pos += snprintf(out + pos, bs - pos, " \x1b[0m\x1b[48;2;33;38;45m\x1b[38;2;139;148;158m [Enter 确认跳转, Esc 取消] \x1b[0m\x1b[K");
+    *posp = pos;
+}
+
 static void copy_range_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs) {
     if (!p) return;
     ScreenBuffer *s = &p->screen;
@@ -4721,6 +4959,15 @@ static void handle_copy_mode_key(KEY_EVENT_RECORD *ke) {
         g_copy_mode = 0;
         g_copy_sel_active = 0;
         p->scroll_offset = 0;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+
+    if (uc == '/' || vk == VK_OEM_2) {
+        g_search_mode = 1;
+        g_search_len = 0;
+        g_search_pos = 0;
+        g_search_buf[0] = 0;
         g_mux.needs_redraw = 1;
         return;
     }
@@ -4856,6 +5103,16 @@ static void handle_prefix(WORD vk, DWORD ctrl, WCHAR uc) {
         return;
     }
 
+    // v1.6.1: Ctrl+B / (open scrollback search)
+    if (uc == '/' || (vk == VK_OEM_2 && !(ctrl & SHIFT_PRESSED))) {
+        g_search_mode = 1;
+        g_search_len = 0;
+        g_search_pos = 0;
+        g_search_buf[0] = 0;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+
     switch (vk) {
         case 'C': { int i = create_pane(); if (i >= 0) switch_pane(i); break; }
         case 'N': { int n = find_next_active_pane(g_mux.active_pane); if (n >= 0) switch_pane(n); break; }
@@ -4941,6 +5198,27 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
         }
         g_mux.needs_redraw = 1;
         return;
+    }
+
+    if (g_search_mode) {
+        handle_search_key(ke);
+        return;
+    }
+
+    if (g_search_active && !g_mux.prefix_mode && !g_copy_mode) {
+        if (vk == VK_ESCAPE) {
+            g_search_active = 0;
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (uc == 'n' && !is_ctrl && !is_alt) {
+            search_jump_next();
+            return;
+        }
+        if ((uc == 'N' || (vk == 'N' && is_shift)) && !is_ctrl && !is_alt) {
+            search_jump_prev();
+            return;
+        }
     }
 
     if (g_mux.prefix_mode) {
