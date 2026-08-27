@@ -559,7 +559,7 @@ void render_search_box(char *out, int bs, int *posp, int host_rows, int host_col
         out[pos++] = ' ';
         used_cols++;
     }
-    pos += snprintf(out + pos, bs - pos, "\x1b[0m");
+    pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[K");
     *posp = pos;
 }
 

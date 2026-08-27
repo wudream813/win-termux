@@ -27,6 +27,7 @@ Windows 终端复用器（Terminal Multiplexer）—— 模块化 C 架构，基
 | `Ctrl+B c` | 新建默认 pane |
 | `Ctrl+B +` | 新建 pane 菜单（选已配置项目 / 自定义命令行） |
 | `Ctrl+B [` | 进入复制模式（方向键/hjkl移动、Space/v选区、Enter/y复制、Esc退出） |
+| `Ctrl+B /` | 搜索滚动历史（n/N 跳转匹配，Esc 退出） |
 | `Ctrl+B s` | 打开图形化设置页面 (`termux.ini`) |
 | `Ctrl+B r` | 热重载配置文件 (`termux.ini`) |
 | `Ctrl+B ?` / `h` | 打开 / 关闭帮助 |

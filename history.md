@@ -6,6 +6,12 @@
 
 ## 版本更新记录
 
+### v1.8.1
+- **修复搜索高亮与结果行上移 1 行 Bug**：
+  - 精确计算 `screen_scroll_up()` 缓冲区丢弃行数 `dropped = (old_hist + count) - s->hist_lines`，仅在发生历史丢弃（`dropped > 0`）时对搜索匹配项执行绝对行号偏移修正，彻底消除未满历史或边界增长时搜索高亮异常上移 1 行的缺陷。
+  - 增强 `render_search_box` 底栏行清除序列（`\x1b[0m\x1b[K`），消除底行残余字符。
+  - 在 `README.md` 快捷键列表中补齐 `Ctrl+B /`（搜索滚动历史）。
+
 ### v1.8.0
 - **滚动缓冲按行懒分配架构（Lazy Line Allocation）**：
   - 将 10000 行环形缓冲区从一次性连续大内存申请重构为按行动态懒分配结构（`ScreenLine *lines`）。
