@@ -3445,10 +3445,12 @@ static void render_screen(void) {
 
     // 4. Position and set cursor visibility as the FINAL step (must be after draw_tab_bar)
     if (g_search_mode) {
-        int box_w = g_mux.host_cols - 45;
+        int prefix_cols = 9;
+        int suffix_cols = 23;
+        int box_w = g_mux.host_cols - prefix_cols - suffix_cols - 4;
         if (box_w < 10) box_w = 10;
         int scr_off = get_input_screen_offset(g_search_buf, g_search_len, g_search_pos, box_w);
-        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", g_mux.host_rows + 1, 19 + scr_off);
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", g_mux.host_rows + 1, 10 + scr_off);
     } else if (g_copy_mode) {
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", g_copy_cy + 2, g_copy_cx + 1);
     } else if (g_mux.rename_mode) {
@@ -4863,11 +4865,19 @@ static void handle_search_key(KEY_EVENT_RECORD *ke) {
 static void render_search_box(char *out, int bs, int *posp, int host_rows, int host_cols) {
     int pos = *posp;
     int r = host_rows + 1; // bottom row
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[48;2;33;38;45m\x1b[38;2;121;192;255;1m [搜索 / Search] \x1b[0m\x1b[48;2;22;27;34m\x1b[38;2;255;255;255m ", r);
-    int box_w = host_cols - 45;
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[48;2;33;38;45m\x1b[38;2;121;192;255;1m [搜索] \x1b[0m\x1b[48;2;22;27;34m\x1b[38;2;255;255;255m ", r);
+    int prefix_cols = 9; // " [搜索] " (8) + " " (1)
+    int suffix_cols = 23; // " " (1) + " [Enter 查找, Esc 退出] " (22)
+    int box_w = host_cols - prefix_cols - suffix_cols - 4;
     if (box_w < 10) box_w = 10;
     render_scrollable_input(out, bs, &pos, g_search_buf, g_search_len, g_search_pos, box_w, "\x1b[48;2;22;27;34m", NULL);
-    pos += snprintf(out + pos, bs - pos, " \x1b[0m\x1b[48;2;33;38;45m\x1b[38;2;139;148;158m [Enter 确认跳转, Esc 取消] \x1b[0m\x1b[K");
+    pos += snprintf(out + pos, bs - pos, " \x1b[0m\x1b[48;2;33;38;45m\x1b[38;2;139;148;158m [Enter 查找, Esc 退出] \x1b[0m");
+    int used_cols = prefix_cols + box_w + suffix_cols;
+    while (used_cols < host_cols - 1 && pos < bs - 8) {
+        out[pos++] = ' ';
+        used_cols++;
+    }
+    pos += snprintf(out + pos, bs - pos, "\x1b[0m");
     *posp = pos;
 }
 
@@ -5045,8 +5055,8 @@ static void handle_prefix(WORD vk, DWORD ctrl, WCHAR uc) {
     if (vk == 'B' && (ctrl & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED))) { char c = 2; write_to_pane(&c, 1); return; }
 
     // v1.4.4 / v1.4.5: Ctrl+B + (open [+] chooser submenu)
-    // Matches uc == '+' or '=' (with or without Shift) or VK_OEM_PLUS or VK_ADD
-    if (uc == '+' || uc == '=' || vk == VK_OEM_PLUS || vk == VK_ADD) {
+    // Only '+' triggers [+] (removed Ctrl+B =)
+    if (uc == '+' || vk == VK_ADD || (vk == VK_OEM_PLUS && (ctrl & SHIFT_PRESSED))) {
         g_mux.ctx_mode = 0;
         g_mux.rename_mode = 0;
         g_mux.custom_cmd_mode = 0;
@@ -5063,9 +5073,19 @@ static void handle_prefix(WORD vk, DWORD ctrl, WCHAR uc) {
         return;
     }
 
+    // v1.6.1: Ctrl+B / (open scrollback search) - BEFORE help check, matches '/' without Shift
+    if (uc == '/' || (vk == VK_OEM_2 && !(ctrl & SHIFT_PRESSED))) {
+        g_search_mode = 1;
+        g_search_len = 0;
+        g_search_pos = 0;
+        g_search_buf[0] = 0;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+
     // v1.4.4 / v1.4.5: Ctrl+B ? or Ctrl+B h (open/close help view)
-    // Matches uc == '?' or '/' or 'h' or 'H' or VK_OEM_2
-    if (uc == '?' || uc == '/' || uc == 'h' || uc == 'H' || vk == VK_OEM_2) {
+    // Matches '?' (with Shift) or 'h' / 'H'
+    if (uc == '?' || uc == 'h' || uc == 'H' || (vk == VK_OEM_2 && (ctrl & SHIFT_PRESSED))) {
         g_mux.help_mode = !g_mux.help_mode;
         if (!g_mux.help_mode) g_mux.help_scroll = 0;
         g_mux.chooser_mode = 0;
