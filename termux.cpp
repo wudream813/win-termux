@@ -3390,8 +3390,6 @@ static void render_screen(void) {
             // clear leftover rows below pane
             for (int y = rr; y < g_mux.host_rows && pos < bs - 64; y++)
                 pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[0m\x1b[K", y + 2);
-
-            if (vo > 0 && !s->in_alt_screen) { int pct = s->hist_lines > 0 ? (vo * 100 / s->hist_lines) : 0; pos += snprintf(out + pos, bs - pos, "\x1b[2;%dH\x1b[0;30;43m[%d%%]\x1b[0m", g_mux.host_cols - 10, pct); }
         }
     } else {
         for (int y = 0; y < g_mux.host_rows && pos < bs - 64; y++)
@@ -3637,11 +3635,6 @@ static void render_help_content(char *out, int bs, int *posp, int host_rows, int
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[K", r + 2);   // v8.22
         if (li < g_help_line_count)
             pos += snprintf(out + pos, bs - pos, "%s", g_help_lines[li]);
-    }
-    // scroll position indicator (only when the content overflows)
-    if (max_sc > 0) {
-        int pct = (g_mux.help_scroll * 100) / (max_sc + 1);
-        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[30;43m[%d%%]\x1b[0m", g_mux.total_host_rows, host_cols - 8, pct);   // v8.22: bottom row
     }
     *posp = pos;
 }
