@@ -135,6 +135,12 @@ typedef struct {
     char settings_edit_cmd[256];
     int settings_edit_cmd_len;
     int settings_edit_cmd_pos;
+    int palette_mode;
+    int palette_sel;
+    char palette_query[64];
+    int palette_query_len;
+    int palette_query_pos;
+    int palette_scroll;
     DWORD orig_in_mode, orig_out_mode;
     UINT orig_cp, orig_input_cp;
     PaneTabInfo tab_info[MAX_PANES + 3];

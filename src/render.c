@@ -546,7 +546,7 @@ void render_settings_panel(char *out, int bs, int *posp, int host_rows, int host
 
 void render_search_box(char *out, int bs, int *posp, int host_rows, int host_cols) {
     int pos = *posp;
-    int r = host_rows + 1;
+    int r = g_mux.total_host_rows > 0 ? g_mux.total_host_rows : (host_rows + 1);
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[48;2;33;38;45m\x1b[38;2;121;192;255;1m [搜索] \x1b[0m\x1b[48;2;22;27;34m\x1b[38;2;255;255;255m ", r);
     int prefix_cols = 9;
     int suffix_cols = 23;
@@ -563,11 +563,182 @@ void render_search_box(char *out, int bs, int *posp, int host_rows, int host_col
     *posp = pos;
 }
 
+#define PALETTE_MAX_VISIBLE 8
+#define PALETTE_W 58
+
+typedef struct {
+    const char *id;
+    const char *title;
+    const char *desc;
+    const char *shortcut;
+} PaletteCmdItem;
+
+static const PaletteCmdItem g_palette_cmd_items[] = {
+    { "new_cmd",       "新建终端 (cmd.exe)",        "创建新的 cmd.exe 会话",            "Ctrl+B c" },
+    { "new_ps",        "新建 PowerShell 终端",     "创建新的 PowerShell 会话",         "" },
+    { "chooser",       "新建终端选择菜单",          "打开已配置终端列表及自定义启动",    "Ctrl+B +" },
+    { "custom_cmd",    "自定义命令行启动",          "输入自定义命令启动新 pane",        "" },
+    { "search",        "搜索滚动历史 (Search)",     "跨 10000 行历史搜索关键词",        "Ctrl+B /" },
+    { "copy_mode",     "进入复制模式 (Copy Mode)",  "方向键漫游、选区并复制终端文本",    "Ctrl+B [" },
+    { "settings",      "图形化设置 (Settings)",     "打开 termux.ini 设置面板",         "Ctrl+B s" },
+    { "presets",       "常用预设库 (Presets)",      "从快速预设库选择并导入配置",       "Ctrl+B P" },
+    { "next_pane",     "切换到下一个标签",          "跳转到右侧下一个活动 pane",        "Ctrl+B n" },
+    { "prev_pane",     "切换到上一个标签",          "跳转到左侧上一个活动 pane",        "Ctrl+B p" },
+    { "cycle_color",   "轮换标签颜色 (Color)",      "循环切换 8 色主题标签样式",        "Ctrl+B t" },
+    { "rename_tab",    "重命名当前标签",            "修改当前标签页显示标题",           "" },
+    { "reload_config", "热重载配置文件",            "重新加载 termux.ini 配置",         "Ctrl+B r" },
+    { "about",         "关于 win-termux",           "查看版本、系统与内核信息",          "" },
+    { "help",          "帮助文档 (Help)",           "查看快捷键与完整使用说明",          "Ctrl+B ?" },
+    { "close_pane",    "关闭当前标签 (Close)",      "终止当前会话并关闭标签",           "Ctrl+B x" },
+    { "quit",          "退出 termux (Quit)",        "关闭所有会话并退出程序",           "Ctrl+B d" },
+};
+static const int g_palette_cmd_count = (int)(sizeof(g_palette_cmd_items) / sizeof(g_palette_cmd_items[0]));
+
+static inline int palette_strcasestr(const char *haystack, const char *needle) {
+    if (!needle || !*needle) return 1;
+    if (!haystack || !*haystack) return 0;
+    int nlen = (int)strlen(needle);
+    int hlen = (int)strlen(haystack);
+    for (int i = 0; i <= hlen - nlen; i++) {
+        int match = 1;
+        for (int k = 0; k < nlen; k++) {
+            char ch1 = haystack[i + k];
+            char ch2 = needle[k];
+            if (ch1 >= 'A' && ch1 <= 'Z') ch1 = (char)(ch1 + ('a' - 'A'));
+            if (ch2 >= 'A' && ch2 <= 'Z') ch2 = (char)(ch2 + ('a' - 'A'));
+            if (ch1 != ch2) { match = 0; break; }
+        }
+        if (match) return 1;
+    }
+    return 0;
+}
+
+int palette_filter_cmds(int *out_indices, int max_out, const char *query) {
+    int count = 0;
+    for (int i = 0; i < g_palette_cmd_count && count < max_out; i++) {
+        if (!query || !*query ||
+            palette_strcasestr(g_palette_cmd_items[i].title, query) ||
+            palette_strcasestr(g_palette_cmd_items[i].desc, query) ||
+            palette_strcasestr(g_palette_cmd_items[i].shortcut, query) ||
+            palette_strcasestr(g_palette_cmd_items[i].id, query)) {
+            out_indices[count++] = i;
+        }
+    }
+    return count;
+}
+
+void palette_geom(int host_rows, int host_cols, int *top, int *left, int *w, int *h) {
+    (void)host_rows;
+    int pw = PALETTE_W;
+    if (pw > host_cols - 2) pw = host_cols - 2;
+    if (pw < 35) pw = 35;
+    *top = 2;
+    *left = (host_cols - pw) / 2;
+    if (*left < 0) *left = 0;
+    if (w) *w = pw;
+    if (h) *h = PALETTE_MAX_VISIBLE + 4;
+}
+
+void render_command_palette(char *out, int bs, int *posp, int host_rows, int host_cols) {
+    int top, left, pw, ph;
+    palette_geom(host_rows, host_cols, &top, &left, &pw, &ph);
+    int pos = *posp;
+
+    int filtered[32];
+    int filtered_count = palette_filter_cmds(filtered, 32, g_mux.palette_query);
+    if (g_mux.palette_sel >= filtered_count) g_mux.palette_sel = filtered_count > 0 ? filtered_count - 1 : 0;
+    if (g_mux.palette_sel < 0) g_mux.palette_sel = 0;
+
+    if (g_mux.palette_sel < g_mux.palette_scroll) g_mux.palette_scroll = g_mux.palette_sel;
+    if (g_mux.palette_sel >= g_mux.palette_scroll + PALETTE_MAX_VISIBLE)
+        g_mux.palette_scroll = g_mux.palette_sel - PALETTE_MAX_VISIBLE + 1;
+    if (g_mux.palette_scroll < 0) g_mux.palette_scroll = 0;
+
+    const char *hdr_title = "┌─ 命令面板 (Command Palette) ";
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[38;2;255;255;255m\x1b[48;2;137;87;229;1m%s", top, left, hdr_title);
+    int cols = utf8_cols(hdr_title, (int)strlen(hdr_title));
+    while (cols < pw - 1 && pos < bs - 8) {
+        out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
+        cols++;
+    }
+    pos += snprintf(out + pos, bs - pos, "┐\x1b[0m");
+
+    int input_w = pw - 6;
+    if (input_w < 10) input_w = 10;
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m\x1b[48;2;22;27;34m \x1b[38;2;121;192;255;1m>\x1b[0m\x1b[48;2;22;27;34m ", top + 1, left);
+    render_scrollable_input(out, bs, &pos, g_mux.palette_query, g_mux.palette_query_len, g_mux.palette_query_pos, input_w, "\x1b[48;2;22;27;34m", NULL);
+    pos += snprintf(out + pos, bs - pos, " \x1b[0m\x1b[48;2;33;38;45m│\x1b[0m");
+
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m├", top + 2, left);
+    cols = 1;
+    while (cols < pw - 1 && pos < bs - 8) {
+        out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
+        cols++;
+    }
+    pos += snprintf(out + pos, bs - pos, "┤\x1b[0m");
+
+    int vis_lines = PALETTE_MAX_VISIBLE;
+    for (int vi = 0; vi < vis_lines; vi++) {
+        int r = top + 3 + vi;
+        int fi = g_mux.palette_scroll + vi;
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m", r, left);
+        if (fi < filtered_count) {
+            int cmd_idx = filtered[fi];
+            const PaletteCmdItem *cmd = &g_palette_cmd_items[cmd_idx];
+            int is_sel = (fi == g_mux.palette_sel);
+            int is_hover = (g_mouse_y == r - 1 && g_mouse_x >= left - 1 && g_mouse_x < left - 1 + pw);
+            const char *bg = (is_sel || is_hover) ? "\x1b[48;2;38;60;88m" : "\x1b[48;2;22;27;34m";
+            const char *pointer = is_sel ? "\x1b[38;2;121;192;255;1m▶\x1b[0m" : " ";
+            pos += snprintf(out + pos, bs - pos, "%s %s ", bg, pointer);
+            cols = 1 + 1 + 1;
+
+            int avail_title_w = pw - 20;
+            if (avail_title_w < 15) avail_title_w = 15;
+            pos += snprintf(out + pos, bs - pos, "\x1b[38;2;230;237;243;1m");
+            append_padded_utf8(out, bs, &pos, &cols, cmd->title, avail_title_w);
+            pos += snprintf(out + pos, bs - pos, "\x1b[0m%s ", bg);
+            cols += 1;
+
+            int sc_w = utf8_cols(cmd->shortcut, (int)strlen(cmd->shortcut));
+            int remain = pw - 2 - cols - sc_w;
+            while (remain > 0 && pos < bs - 8) { out[pos++] = ' '; cols++; remain--; }
+            if (cmd->shortcut[0]) {
+                pos += snprintf(out + pos, bs - pos, "\x1b[38;2;210;153;34m%s\x1b[0m%s ", cmd->shortcut, bg);
+                cols += sc_w + 1;
+            } else {
+                out[pos++] = ' '; cols++;
+            }
+            while (cols < pw - 1 && pos < bs - 8) { out[pos++] = ' '; cols++; }
+            pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[48;2;33;38;45m│\x1b[0m");
+        } else {
+            pos += snprintf(out + pos, bs - pos, "\x1b[48;2;22;27;34m");
+            cols = 1;
+            if (filtered_count == 0 && vi == 0) {
+                const char *no_match = "  (无匹配命令，按 Esc 退出)";
+                pos += snprintf(out + pos, bs - pos, "\x1b[38;2;139;148;158m%s", no_match);
+                cols += utf8_cols(no_match, (int)strlen(no_match));
+            }
+            while (cols < pw - 1 && pos < bs - 8) { out[pos++] = ' '; cols++; }
+            pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[48;2;33;38;45m│\x1b[0m");
+        }
+    }
+
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m└", top + 3 + vis_lines, left);
+    cols = 1;
+    while (cols < pw - 1 && pos < bs - 8) {
+        out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80';
+        cols++;
+    }
+    pos += snprintf(out + pos, bs - pos, "┘\x1b[0m");
+    *posp = pos;
+}
+
 static const char *const g_help_lines[] = {
     "\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m termux - 帮助",
     "\x1b[38;2;139;148;158m  版本 v" TERMUX_VERSION " | Windows Terminal Multiplexer (Win10 1809+)\x1b[0m",
     "",
     "\x1b[38;2;121;192;255;1m  键盘快捷键\x1b[0m",
+    "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243m:\x1b[0m / \x1b[38;2;230;237;243mP\x1b[0m     打开命令面板 (Command Palette)",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mc\x1b[0m         新建默认 pane",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243m+\x1b[0m         新建 pane 菜单 (选择/自定义命令行)",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243m[\x1b[0m         进入复制模式 (方向键/Space选择/Enter复制)",
@@ -866,10 +1037,10 @@ void render_screen(void) {
                 int badge_x = (g_mux.host_cols > 65) ? (g_mux.host_cols - 60) : 1;
                 pos += snprintf(out + pos, bs - pos, "\x1b[2;%dH\x1b[48;2;210;153;34m\x1b[38;2;13;17;23;1m [复制模式] \x1b[0m\x1b[48;2;33;38;45m\x1b[38;2;230;237;243m %s | Enter/y 复制, Space/v 选区, Esc 退出 \x1b[0m",
                                 badge_x, g_copy_sel_active ? "已开启选区" : "移动光标");
-            } else if (g_search_active && g_search_match_count > 0) {
-                int badge_x = (g_mux.host_cols > 65) ? (g_mux.host_cols - 60) : 1;
-                pos += snprintf(out + pos, bs - pos, "\x1b[2;%dH\x1b[48;2;210;153;34m\x1b[38;2;13;17;23;1m [搜索: \"%s\" (%d/%d)] \x1b[0m\x1b[48;2;33;38;45m\x1b[38;2;230;237;243m n 下一个, N 上一个, Esc 退出 \x1b[0m",
-                                badge_x, g_search_buf, g_search_match_cur + 1, g_search_match_count);
+            } else if (g_search_active && g_search_match_count > 0 && !g_search_mode) {
+                int bot_r = g_mux.total_host_rows > 0 ? g_mux.total_host_rows : (g_mux.host_rows + 1);
+                pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[48;2;33;38;45m\x1b[38;2;210;153;34;1m [搜索: \"%s\" (%d/%d)] \x1b[0m\x1b[48;2;22;27;34m\x1b[38;2;230;237;243m n 下一个, N 上一个, Esc 退出 \x1b[0m\x1b[K",
+                                bot_r, g_search_buf, g_search_match_cur + 1, g_search_match_count);
             }
 
             for (int y = rr; y < g_mux.host_rows && pos < bs - 64; y++)
@@ -882,6 +1053,8 @@ void render_screen(void) {
 
     if (g_search_mode) {
         render_search_box(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
+    } else if (g_mux.palette_mode) {
+        render_command_palette(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
     } else if (g_mux.chooser_mode) {
         render_chooser(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
     } else if (g_mux.ctx_mode == 1) {
@@ -899,7 +1072,7 @@ void render_screen(void) {
 
     if (g_hover_preview_pane >= 0 && g_hover_preview_active &&
         !g_mux.chooser_mode && !g_mux.ctx_mode && !g_mux.rename_mode &&
-        !g_mux.custom_cmd_mode && !g_mux.help_mode) {
+        !g_mux.custom_cmd_mode && !g_mux.palette_mode && !g_mux.help_mode) {
         if (g_hover_preview_pane >= 0 && g_hover_preview_pane < g_mux.pane_count &&
             g_mux.panes[g_hover_preview_pane].active) {
             Pane *hp = &g_mux.panes[g_hover_preview_pane];
@@ -930,7 +1103,14 @@ void render_screen(void) {
         int box_w = g_mux.host_cols - prefix_cols - suffix_cols - 4;
         if (box_w < 10) box_w = 10;
         int scr_off = get_input_screen_offset(g_search_buf, g_search_len, g_search_pos, box_w);
-        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", g_mux.host_rows + 1, 10 + scr_off);
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", g_mux.total_host_rows > 0 ? g_mux.total_host_rows : (g_mux.host_rows + 1), 10 + scr_off);
+    } else if (g_mux.palette_mode) {
+        int top, left, pw, ph;
+        palette_geom(g_mux.host_rows, g_mux.host_cols, &top, &left, &pw, &ph);
+        int input_w = pw - 6;
+        if (input_w < 10) input_w = 10;
+        int scr_off = get_input_screen_offset(g_mux.palette_query, g_mux.palette_query_len, g_mux.palette_query_pos, input_w);
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", top + 1, left + 4 + scr_off);
     } else if (g_copy_mode) {
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", g_copy_cy + 2, g_copy_cx + 1);
     } else if (g_mux.rename_mode) {

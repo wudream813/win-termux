@@ -133,6 +133,299 @@ void search_jump_prev(void) {
     g_mux.needs_redraw = 1;
 }
 
+extern int palette_filter_cmds(int *out_indices, int max_out, const char *query);
+
+void execute_palette_command(int cmd_idx) {
+    g_mux.palette_mode = 0;
+    switch (cmd_idx) {
+        case 0: { // new_cmd
+            int i = create_pane();
+            if (i >= 0) switch_pane(i);
+            break;
+        }
+        case 1: { // new_ps
+            int i = create_pane_shell(L"powershell.exe");
+            if (i >= 0) switch_pane(i);
+            break;
+        }
+        case 2: { // chooser
+            g_mux.ctx_mode = 0;
+            g_mux.rename_mode = 0;
+            g_mux.custom_cmd_mode = 0;
+            g_mux.help_mode = 0;
+            g_mux.chooser_mode = 1;
+            g_pop_anchor_x = g_mux.host_cols / 2 - 10;
+            if (g_pop_anchor_x < 0) g_pop_anchor_x = 0;
+            break;
+        }
+        case 3: { // custom_cmd
+            g_mux.ctx_mode = 0;
+            g_mux.rename_mode = 0;
+            g_mux.chooser_mode = 0;
+            g_mux.help_mode = 0;
+            g_mux.custom_cmd_mode = 1;
+            g_mux.custom_cmd_len = 0;
+            g_mux.custom_cmd_pos = 0;
+            g_mux.custom_cmd_buf[0] = 0;
+            g_pop_anchor_x = g_mux.host_cols / 2 - 19;
+            if (g_pop_anchor_x < 0) g_pop_anchor_x = 0;
+            break;
+        }
+        case 4: { // search
+            g_search_mode = 1;
+            g_search_len = 0;
+            g_search_pos = 0;
+            g_search_buf[0] = 0;
+            break;
+        }
+        case 5: { // copy_mode
+            if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
+                Pane *p = &g_mux.panes[g_mux.active_pane];
+                g_copy_mode = 1;
+                g_copy_sel_active = 0;
+                g_copy_cx = p->screen.cursor_x;
+                g_copy_cy = p->screen.cursor_y;
+            }
+            break;
+        }
+        case 6: { // settings
+            open_settings_pane();
+            break;
+        }
+        case 7: { // presets
+            open_settings_pane();
+            g_settings_show_presets = 1;
+            g_preset_sel = 0;
+            break;
+        }
+        case 8: { // next_pane
+            int n = find_next_active_pane(g_mux.active_pane);
+            if (n >= 0) switch_pane(n);
+            break;
+        }
+        case 9: { // prev_pane
+            for (int i = 1; i <= g_mux.pane_count; i++) {
+                int n = (g_mux.active_pane - i + g_mux.pane_count) % g_mux.pane_count;
+                if (g_mux.panes[n].active) { switch_pane(n); break; }
+            }
+            break;
+        }
+        case 10: { // cycle_color
+            if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
+                if (!g_mux.panes[g_mux.active_pane].is_about && !g_mux.panes[g_mux.active_pane].is_settings) {
+                    int c = g_mux.panes[g_mux.active_pane].color + 1;
+                    if (c > 8) c = 1;
+                    g_mux.panes[g_mux.active_pane].color = c;
+                }
+            }
+            break;
+        }
+        case 11: { // rename_tab
+            if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
+                g_mux.rename_mode = 1;
+                g_mux.rename_len = 0;
+                g_mux.rename_pos = 0;
+                g_mux.rename_buf[0] = 0;
+                g_pop_anchor_x = g_mux.host_cols / 2 - 15;
+                if (g_pop_anchor_x < 0) g_pop_anchor_x = 0;
+            }
+            break;
+        }
+        case 12: { // reload_config
+            load_config();
+            break;
+        }
+        case 13: { // about
+            create_about_pane();
+            break;
+        }
+        case 14: { // help
+            g_mux.help_mode = !g_mux.help_mode;
+            if (!g_mux.help_mode) g_mux.help_scroll = 0;
+            break;
+        }
+        case 15: { // close_pane
+            int c = g_mux.active_pane, n = find_next_active_pane(c);
+            close_pane(c);
+            if (n >= 0 && g_mux.panes[n].active) switch_pane(n);
+            else {
+                int f = -1;
+                for (int i = 0; i < g_mux.pane_count; i++) if (g_mux.panes[i].active) { f = i; break; }
+                if (f >= 0) switch_pane(f); else g_mux.running = 0;
+            }
+            break;
+        }
+        case 16: { // quit
+            g_mux.running = 0;
+            break;
+        }
+        default: break;
+    }
+    g_mux.needs_redraw = 1;
+}
+
+void open_command_palette(void) {
+    g_mux.palette_mode = 1;
+    g_mux.palette_sel = 0;
+    g_mux.palette_scroll = 0;
+    g_mux.palette_query_len = 0;
+    g_mux.palette_query_pos = 0;
+    g_mux.palette_query[0] = 0;
+    g_mux.needs_redraw = 1;
+}
+
+void handle_palette_key(KEY_EVENT_RECORD *ke) {
+    WORD vk = ke->wVirtualKeyCode; WCHAR uc = ke->uChar.UnicodeChar;
+    int filtered[32];
+    int count = palette_filter_cmds(filtered, 32, g_mux.palette_query);
+
+    if (vk == VK_ESCAPE) {
+        g_mux.palette_mode = 0;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+
+    if (vk == VK_RETURN) {
+        if (count > 0 && g_mux.palette_sel >= 0 && g_mux.palette_sel < count) {
+            execute_palette_command(filtered[g_mux.palette_sel]);
+        } else {
+            g_mux.palette_mode = 0;
+        }
+        g_mux.needs_redraw = 1;
+        return;
+    }
+
+    if (vk == VK_UP || (vk == 'P' && (ke->dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)))) {
+        if (g_mux.palette_sel > 0) g_mux.palette_sel--;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_DOWN || (vk == 'N' && (ke->dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)))) {
+        if (g_mux.palette_sel < count - 1) g_mux.palette_sel++;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_PRIOR) {
+        g_mux.palette_sel -= 5;
+        if (g_mux.palette_sel < 0) g_mux.palette_sel = 0;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_NEXT) {
+        g_mux.palette_sel += 5;
+        if (g_mux.palette_sel >= count) g_mux.palette_sel = count > 0 ? count - 1 : 0;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+
+    if (vk == VK_LEFT) {
+        g_mux.palette_query_pos = utf8_prev_grapheme(g_mux.palette_query, g_mux.palette_query_pos);
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_RIGHT) {
+        g_mux.palette_query_pos = utf8_next_grapheme(g_mux.palette_query, g_mux.palette_query_len, g_mux.palette_query_pos);
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_HOME) {
+        g_mux.palette_query_pos = 0;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_END) {
+        g_mux.palette_query_pos = g_mux.palette_query_len;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_BACK) {
+        buf_backspace(g_mux.palette_query, &g_mux.palette_query_len, &g_mux.palette_query_pos);
+        g_mux.palette_sel = 0;
+        g_mux.palette_scroll = 0;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_DELETE) {
+        buf_delete(g_mux.palette_query, &g_mux.palette_query_len, &g_mux.palette_query_pos);
+        g_mux.palette_sel = 0;
+        g_mux.palette_scroll = 0;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+
+    if (uc >= 0xD800 && uc <= 0xDBFF) {
+        g_high_surrogate = uc;
+        return;
+    }
+    if (uc) {
+        char u8[8] = {0}; int u8_count = 0;
+        if (uc >= 0xDC00 && uc <= 0xDFFF && g_high_surrogate) {
+            unsigned int cp = 0x10000 + (((unsigned int)(g_high_surrogate & 0x3FF)) << 10) + (uc & 0x3FF);
+            g_high_surrogate = 0;
+            u8[0] = (char)(0xF0 | (cp >> 18));
+            u8[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+            u8[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+            u8[3] = (char)(0x80 | (cp & 0x3F));
+            u8_count = 4;
+        } else if (uc >= 0x20 || uc == 0x200D || (uc >= 0xFE00 && uc <= 0xFE0F)) {
+            g_high_surrogate = 0;
+            if (uc < 0x80) { u8[0] = (char)uc; u8_count = 1; }
+            else if (uc < 0x800) { u8[0] = (char)(0xC0 | (uc >> 6)); u8[1] = (char)(0x80 | (uc & 0x3F)); u8_count = 2; }
+            else { u8[0] = (char)(0xE0 | (uc >> 12)); u8[1] = (char)(0x80 | ((uc >> 6) & 0x3F)); u8[2] = (char)(0x80 | (uc & 0x3F)); u8_count = 3; }
+        }
+        if (u8_count > 0 && g_mux.palette_query_len + u8_count < (int)sizeof(g_mux.palette_query) - 1) {
+            buf_insert_utf8(g_mux.palette_query, &g_mux.palette_query_len, &g_mux.palette_query_pos, sizeof(g_mux.palette_query) - 1, u8, u8_count);
+            g_mux.palette_sel = 0;
+            g_mux.palette_scroll = 0;
+            g_mux.needs_redraw = 1;
+            return;
+        }
+    }
+}
+
+void handle_palette_mouse(MOUSE_EVENT_RECORD *me) {
+    int mx = me->dwMousePosition.X, my = me->dwMousePosition.Y;
+    int top, left, pw, ph;
+    palette_geom(g_mux.host_rows, g_mux.host_cols, &top, &left, &pw, &ph);
+
+    if (me->dwEventFlags == MOUSE_WHEELED) {
+        int d = (short)HIWORD(me->dwButtonState);
+        if (d > 0) {
+            if (g_mux.palette_sel > 0) g_mux.palette_sel--;
+        } else {
+            int filtered[32];
+            int count = palette_filter_cmds(filtered, 32, g_mux.palette_query);
+            if (g_mux.palette_sel < count - 1) g_mux.palette_sel++;
+        }
+        g_mux.needs_redraw = 1;
+        return;
+    }
+
+    int press = (me->dwButtonState & (FROM_LEFT_1ST_BUTTON_PRESSED | FROM_LEFT_2ND_BUTTON_PRESSED | RIGHTMOST_BUTTON_PRESSED)) != 0;
+    if (!press) return;
+
+    int r = my + 1, c = mx + 1;
+    int in_box = (r >= top && r <= top + ph && c >= left && c < left + pw);
+    if (!in_box) {
+        g_mux.palette_mode = 0;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+
+    int filtered[32];
+    int count = palette_filter_cmds(filtered, 32, g_mux.palette_query);
+    for (int vi = 0; vi < 8; vi++) {
+        int item_r = top + 3 + vi;
+        if (r == item_r) {
+            int fi = g_mux.palette_scroll + vi;
+            if (fi < count) {
+                execute_palette_command(filtered[fi]);
+                return;
+            }
+        }
+    }
+}
+
 void handle_search_key(KEY_EVENT_RECORD *ke) {
     WORD vk = ke->wVirtualKeyCode; WCHAR uc = ke->uChar.UnicodeChar;
 
@@ -967,6 +1260,7 @@ void handle_prefix(WORD vk, DWORD ctrl, WCHAR uc) {
         g_mux.rename_mode = 0;
         g_mux.custom_cmd_mode = 0;
         g_mux.help_mode = 0;
+        g_mux.palette_mode = 0;
         g_mux.chooser_mode = 1;
         g_pop_anchor_x = 20;
         for (int k = 0; k < g_mux.tab_count; k++) {
@@ -979,7 +1273,19 @@ void handle_prefix(WORD vk, DWORD ctrl, WCHAR uc) {
         return;
     }
 
+    // Ctrl+B : or Ctrl+B Space or Ctrl+B P (open Command Palette)
+    if (uc == ':' || (vk == VK_OEM_1 && (ctrl & SHIFT_PRESSED)) || uc == 'P' || (vk == 'P' && (ctrl & SHIFT_PRESSED)) || vk == VK_SPACE) {
+        g_mux.ctx_mode = 0;
+        g_mux.rename_mode = 0;
+        g_mux.custom_cmd_mode = 0;
+        g_mux.help_mode = 0;
+        g_mux.chooser_mode = 0;
+        open_command_palette();
+        return;
+    }
+
     if (uc == '/' || (vk == VK_OEM_2 && !(ctrl & SHIFT_PRESSED))) {
+        g_mux.palette_mode = 0;
         g_search_mode = 1;
         g_search_len = 0;
         g_search_pos = 0;
@@ -995,6 +1301,7 @@ void handle_prefix(WORD vk, DWORD ctrl, WCHAR uc) {
         g_mux.ctx_mode = 0;
         g_mux.rename_mode = 0;
         g_mux.custom_cmd_mode = 0;
+        g_mux.palette_mode = 0;
         g_mux.needs_redraw = 1;
         return;
     }
@@ -1105,8 +1412,23 @@ void handle_key(KEY_EVENT_RECORD *ke) {
         return;
     }
 
+    if (g_mux.palette_mode) {
+        handle_palette_key(ke);
+        return;
+    }
+
     if (g_search_mode) {
         handle_search_key(ke);
+        return;
+    }
+
+    if (is_ctrl && is_shift && (vk == 'P' || uc == 'P')) {
+        g_mux.ctx_mode = 0;
+        g_mux.rename_mode = 0;
+        g_mux.custom_cmd_mode = 0;
+        g_mux.help_mode = 0;
+        g_mux.chooser_mode = 0;
+        open_command_palette();
         return;
     }
 
@@ -1587,7 +1909,7 @@ void handle_mouse(MOUSE_EVENT_RECORD *me) {
     if (mx != g_mouse_x || my != g_mouse_y) {
         int prev_in = g_mouse_prev_in_tabbar;
         g_mouse_x = mx; g_mouse_y = my;
-        int popup_open = (g_mux.settings_mode || g_mux.chooser_mode || g_mux.ctx_mode || g_mux.rename_mode || g_mux.custom_cmd_mode || g_search_mode);
+        int popup_open = (g_mux.settings_mode || g_mux.chooser_mode || g_mux.ctx_mode || g_mux.rename_mode || g_mux.custom_cmd_mode || g_search_mode || g_mux.palette_mode);
         int now_in = (!popup_open && my == 0);
 
         int hover_pane = -1;
@@ -1628,7 +1950,7 @@ void handle_mouse(MOUSE_EVENT_RECORD *me) {
         }
         if (now_in || (prev_in && !now_in) || sb_fade_active || g_sb_dragging ||
             in_settings_pane || g_mouse_selecting || g_copy_mode ||
-            g_mux.chooser_mode || g_mux.ctx_mode || g_mux.rename_mode || g_mux.custom_cmd_mode || g_search_mode)
+            g_mux.chooser_mode || g_mux.ctx_mode || g_mux.rename_mode || g_mux.custom_cmd_mode || g_search_mode || g_mux.palette_mode)
             g_mux.needs_redraw = 1;
         g_mouse_prev_in_tabbar = now_in;
 
@@ -1652,6 +1974,11 @@ void handle_mouse(MOUSE_EVENT_RECORD *me) {
         }
     }
 
+    if (g_mux.palette_mode) {
+        handle_palette_mouse(me);
+        return;
+    }
+
     if (my == 0) {
         int mbtn = -1;
         if (me->dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED) mbtn = 0;
@@ -1659,12 +1986,13 @@ void handle_mouse(MOUSE_EVENT_RECORD *me) {
         else if (me->dwButtonState & FROM_LEFT_2ND_BUTTON_PRESSED) mbtn = 1;
 
         if (mbtn >= 0 && (me->dwEventFlags == 0 || me->dwEventFlags == DOUBLE_CLICK)) {
-            if ((g_mux.chooser_mode || g_mux.ctx_mode || g_mux.rename_mode || g_mux.custom_cmd_mode || g_search_mode)) {
+            if ((g_mux.chooser_mode || g_mux.ctx_mode || g_mux.rename_mode || g_mux.custom_cmd_mode || g_search_mode || g_mux.palette_mode)) {
                 g_mux.chooser_mode = 0;
                 g_mux.ctx_mode = 0;
                 g_mux.rename_mode = 0;
                 g_mux.custom_cmd_mode = 0;
                 g_search_mode = 0;
+                g_mux.palette_mode = 0;
                 g_mux.needs_redraw = 1;
                 return;
             }

@@ -17,6 +17,7 @@ Windows 终端复用器（Terminal Multiplexer）—— 模块化 C 架构，基
 - **鼠标支持**：点击/中键/右键标签操作、滚轮滚动、hover 高亮
 - **滚动历史**：10000 行环形滚动缓冲，PgUp/PgDn/滚轮查看
 - **Alt 屏幕支持**：nano / vim 等全屏编辑器正常使用，退出后历史完整保留
+- **命令面板**：`Ctrl+B :` / `Ctrl+B P` 或 `Ctrl+Shift+P` 实时模糊搜索并执行所有内置命令
 - **内置帮助**：点击左上角 `termux` 徽标查看
 - **诊断日志**：`TERMUX_DUMP=1` 时输出原始 ConPTY 流 / 渲染输出 / 鼠标事件
 
@@ -24,6 +25,7 @@ Windows 终端复用器（Terminal Multiplexer）—— 模块化 C 架构，基
 
 | 快捷键 | 功能 |
 |---|---|
+| `Ctrl+B :` / `P` / `Ctrl+Shift+P` | 打开命令面板 (Command Palette) |
 | `Ctrl+B c` | 新建默认 pane |
 | `Ctrl+B +` | 新建 pane 菜单（选已配置项目 / 自定义命令行） |
 | `Ctrl+B [` | 进入复制模式（方向键/hjkl移动、Space/v选区、Enter/y复制、Esc退出） |

@@ -31,6 +31,8 @@ void render_settings_presets(char *out, int bs, int *posp, int host_rows, int ho
 void presets_geom(int host_rows, int host_cols, int *top, int *left, int *w, int *h, int *max_nw, int *max_cw);
 void render_settings_panel(char *out, int bs, int *posp, int host_rows, int host_cols);
 void render_search_box(char *out, int bs, int *posp, int host_rows, int host_cols);
+void render_command_palette(char *out, int bs, int *posp, int host_rows, int host_cols);
+void palette_geom(int host_rows, int host_cols, int *top, int *left, int *w, int *h);
 void render_cleanup(void);
 
 #endif // WIN_TERMUX_RENDER_H
