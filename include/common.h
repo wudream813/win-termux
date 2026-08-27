@@ -11,6 +11,7 @@
 #define _UNICODE
 
 #include <windows.h>
+#include <shellapi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,10 +21,11 @@
 
 #ifdef _MSC_VER
 #pragma comment(lib, "user32.lib")
+#pragma comment(lib, "shell32.lib")
 #endif
 
 #ifndef TERMUX_VERSION
-#define TERMUX_VERSION "1.8.2"
+#define TERMUX_VERSION "1.8.3"
 #endif
 
 #define MAX_PANES         16
@@ -31,6 +33,7 @@
 #define READ_BUF_SIZE     32768
 #define MAX_CHOOSER_ITEMS 9
 #define MAX_SEARCH_MATCHES 2048
+#define PALETTE_STACK_MAX 8
 
 #define RGB565_WHITE 0xFFFF
 #define RGB565_BLACK 0x0000

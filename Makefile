@@ -2,7 +2,7 @@ CC = x86_64-w64-mingw32-gcc
 CXX = x86_64-w64-mingw32-g++
 CFLAGS = -O2 -s -Wall -Wextra -Iinclude
 CXXFLAGS = -O2 -s -Wall -Wextra -Iinclude
-LDFLAGS = -luser32
+LDFLAGS = -luser32 -lshell32
 
 SRC = src/config.c src/input.c src/main.c src/pane.c src/render.c src/screen.c src/utf8.c src/vt.c
 TARGET = termux.exe

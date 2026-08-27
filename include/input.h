@@ -19,7 +19,7 @@ void handle_search_key(KEY_EVENT_RECORD *ke);
 void handle_palette_key(KEY_EVENT_RECORD *ke);
 void handle_palette_mouse(MOUSE_EVENT_RECORD *me);
 void open_command_palette(void);
-void execute_palette_command(int cmd_idx);
+void execute_palette_command(int item_index);
 void copy_range_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs);
 void execute_search(void);
 void search_jump_next(void);

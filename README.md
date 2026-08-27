@@ -5,6 +5,8 @@
 Windows 终端复用器（Terminal Multiplexer）—— 模块化 C 架构，基于 Windows ConPTY。
 在 Windows 控制台里管理多个 cmd / PowerShell 会话，像 tmux 一样分标签页。
 
+当前版本：**v1.8.3**
+
 > ⚠️ **警告 / 注意事项**：
 > 控制台终端**必须配置使用等宽字体**（Monospace Font，例如 *Cascadia Code*、*Consolas*、*JetBrains Mono*、*Fira Code* 等）。
 > 使用非等宽字体会导致字符宽度计算偏差、边框排版错位及界面渲染故障。
@@ -17,15 +19,15 @@ Windows 终端复用器（Terminal Multiplexer）—— 模块化 C 架构，基
 - **鼠标支持**：点击/中键/右键标签操作、滚轮滚动、hover 高亮
 - **滚动历史**：10000 行环形滚动缓冲，PgUp/PgDn/滚轮查看
 - **Alt 屏幕支持**：nano / vim 等全屏编辑器正常使用，退出后历史完整保留
-- **命令面板**：`Ctrl+B :` / `Ctrl+B P` 或 `Ctrl+Shift+P` 实时模糊搜索并执行所有内置命令
 - **内置帮助**：点击左上角 `termux` 徽标查看
+- **分层命令面板**：仅通过 `Ctrl+B :` 打开，先选择“操作命令面板”或“设置命令面板”。操作面板支持新建终端（子面板内可搜索）、自定义命令行、标题/颜色、历史搜索、panel 切换（按编号或标题并显示颜色）、复制模式、热重载、图形化设置、关闭当前标签和退出；设置面板支持默认启动项、打开 `.ini`、添加 panel 条目（预设/自定义后继续编辑）及菜单项设置。
 - **诊断日志**：`TERMUX_DUMP=1` 时输出原始 ConPTY 流 / 渲染输出 / 鼠标事件
 
 ## 快捷键
 
 | 快捷键 | 功能 |
 |---|---|
-| `Ctrl+B :` / `P` / `Ctrl+Shift+P` | 打开命令面板 (Command Palette) |
+| `Ctrl+B :` | 打开命令面板 (Command Palette) |
 | `Ctrl+B c` | 新建默认 pane |
 | `Ctrl+B +` | 新建 pane 菜单（选已配置项目 / 自定义命令行） |
 | `Ctrl+B [` | 进入复制模式（方向键/hjkl移动、Space/v选区、Enter/y复制、Esc退出） |
@@ -57,12 +59,12 @@ Windows 终端复用器（Terminal Multiplexer）—— 模块化 C 架构，基
 
 ```bat
 :: MSVC
-cl /O2 /Iinclude src\*.c /Fe:termux.exe /link user32.lib
+cl /O2 /Iinclude src\*.c /Fe:termux.exe /link user32.lib shell32.lib
 
 :: MinGW-w64 (GCC / Make)
 make
 :: 或手动执行
-x86_64-w64-mingw32-gcc -O2 -s -Wall -Wextra -Iinclude src/*.c -o termux.exe -luser32
+x86_64-w64-mingw32-gcc -O2 -s -Wall -Wextra -Iinclude src/*.c -o termux.exe -luser32 -lshell32
 ```
 
 ## 运行

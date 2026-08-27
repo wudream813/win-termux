@@ -188,6 +188,34 @@ void save_config(void) {
     fclose(f);
 }
 
+void open_config_file(void) {
+    WCHAR ini_path[MAX_PATH] = {0};
+    WCHAR exe_path[MAX_PATH] = {0};
+    GetModuleFileNameW(NULL, exe_path, MAX_PATH);
+    WCHAR *last_bs = wcsrchr(exe_path, L'\\');
+    if (last_bs) {
+        *last_bs = 0;
+        _snwprintf(ini_path, MAX_PATH - 1, L"%s\\termux.ini", exe_path);
+    } else {
+        wcscpy(ini_path, L"termux.ini");
+    }
+
+    /* load_config() creates the executable-side file when possible.  If the
+     * installation directory is read-only, follow the same USERPROFILE
+     * fallback used by save_config(). */
+    if (GetFileAttributesW(ini_path) == INVALID_FILE_ATTRIBUTES) {
+        const WCHAR *prof = _wgetenv(L"USERPROFILE");
+        if (prof) {
+            WCHAR user_ini[MAX_PATH] = {0};
+            _snwprintf(user_ini, MAX_PATH - 1, L"%s\\.termux.ini", prof);
+            if (GetFileAttributesW(user_ini) != INVALID_FILE_ATTRIBUTES)
+                wcsncpy(ini_path, user_ini, MAX_PATH - 1);
+        }
+    }
+
+    ShellExecuteW(NULL, L"open", ini_path, NULL, NULL, SW_SHOWNORMAL);
+}
+
 void load_item_to_editor(int idx) {
     if (idx < 0 || idx >= g_chooser_item_count) return;
     snprintf(g_edit_name, sizeof(g_edit_name), "%s", g_chooser_items[idx].name);

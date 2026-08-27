@@ -27,6 +27,7 @@ extern const int g_preset_count;
 void init_default_config(void);
 void load_config(void);
 void save_config(void);
+void open_config_file(void);
 void load_item_to_editor(int idx);
 void save_editor_to_item(int idx);
 

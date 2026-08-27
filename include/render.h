@@ -17,6 +17,54 @@
 #define CP_W 30
 #define CP_H 4
 
+/* Command palette pages.  palette_mode remains a boolean so the rest of the
+ * input/render pipeline can keep treating the palette as a modal overlay. */
+enum {
+    PALETTE_PAGE_ROOT = 0,
+    PALETTE_PAGE_OPERATIONS,
+    PALETTE_PAGE_SETTINGS,
+    PALETTE_PAGE_NEW_TERMINAL,
+    PALETTE_PAGE_SWITCH_PANEL,
+    PALETTE_PAGE_DEFAULT_STARTUP,
+    PALETTE_PAGE_ADD_PANEL,
+    PALETTE_PAGE_PANEL_EDITOR
+};
+
+typedef enum {
+    PALETTE_ACTION_NONE = 0,
+    PALETTE_ACTION_OPEN_OPERATIONS,
+    PALETTE_ACTION_OPEN_SETTINGS,
+    PALETTE_ACTION_OPEN_NEW_TERMINAL,
+    PALETTE_ACTION_START_CUSTOM,
+    PALETTE_ACTION_RENAME,
+    PALETTE_ACTION_COLOR,
+    PALETTE_ACTION_SEARCH,
+    PALETTE_ACTION_SWITCH_PANEL,
+    PALETTE_ACTION_COPY_MODE,
+    PALETTE_ACTION_RELOAD,
+    PALETTE_ACTION_GRAPHICAL_SETTINGS,
+    PALETTE_ACTION_CLOSE_PANEL,
+    PALETTE_ACTION_QUIT,
+    PALETTE_ACTION_DEFAULT_STARTUP,
+    PALETTE_ACTION_OPEN_INI,
+    PALETTE_ACTION_ADD_PANEL,
+    PALETTE_ACTION_MENU_SETTINGS,
+    PALETTE_ACTION_SELECT_TERMINAL,
+    PALETTE_ACTION_SELECT_PANEL,
+    PALETTE_ACTION_SELECT_DEFAULT
+} PaletteAction;
+
+typedef struct {
+    const char *id;
+    const char *title;
+    const char *desc;
+    const char *shortcut;
+    PaletteAction action;
+    int value;
+    int number;
+    int color;
+} PaletteItemInfo;
+
 void update_host_title(void);
 void render_screen(void);
 void draw_tab_bar(char *out, int bs, int *posp);
@@ -33,6 +81,11 @@ void render_settings_panel(char *out, int bs, int *posp, int host_rows, int host
 void render_search_box(char *out, int bs, int *posp, int host_rows, int host_cols);
 void render_command_palette(char *out, int bs, int *posp, int host_rows, int host_cols);
 void palette_geom(int host_rows, int host_cols, int *top, int *left, int *w, int *h);
+int palette_visible_rows(int host_rows);
+int palette_item_count(int page);
+int palette_filter_cmds(int page, int *out_indices, int max_out, const char *query);
+int palette_item_info(int page, int item_index, PaletteItemInfo *out);
+void palette_editor_geom(int host_rows, int host_cols, int *top, int *left, int *w, int *h, int *input_w);
 void render_cleanup(void);
 
 #endif // WIN_TERMUX_RENDER_H
