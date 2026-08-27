@@ -1,5 +1,12 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 import subprocess
+import tempfile
 import os
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
 
 test_c = """
 #include <stdio.h>
@@ -10,7 +17,7 @@ test_c = """
 typedef unsigned short WCHAR;
 """
 
-with open("/home/user/win-termux/termux.cpp", "r", encoding="utf-8") as f:
+with open(ROOT / "termux.cpp", "r", encoding="utf-8") as f:
     src = f.read()
 
 # Extract functions from termux.cpp
@@ -76,11 +83,21 @@ int main() {
 """
 
 full_c = test_c + extracted + driver
-with open("/tmp/test_emoji_runner.c", "w", encoding="utf-8") as f:
-    f.write(full_c)
 
-ret = subprocess.run(["gcc", "-O2", "/tmp/test_emoji_runner.c", "-o", "/tmp/test_emoji_runner"])
-assert ret.returncode == 0
-ret = subprocess.run(["/tmp/test_emoji_runner"])
-assert ret.returncode == 0
-print("verify_emoji.py: SUCCESS")
+with tempfile.TemporaryDirectory() as tmpdir:
+    c_path = os.path.join(tmpdir, "test_emoji_runner.c")
+    exe_path = os.path.join(tmpdir, "test_emoji_runner")
+    with open(c_path, "w", encoding="utf-8") as f:
+        f.write(full_c)
+
+    ret = subprocess.run(["gcc", "-O2", c_path, "-o", exe_path], capture_output=True, text=True)
+    if ret.returncode != 0:
+        print("Compilation failed:\n", ret.stderr, file=sys.stderr)
+        sys.exit(1)
+
+    ret = subprocess.run([exe_path], capture_output=True, text=True)
+    if ret.returncode != 0:
+        print("Execution failed:\n", ret.stderr, file=sys.stderr)
+        sys.exit(1)
+    print(ret.stdout.strip())
+    print("verify_emoji.py: SUCCESS")
