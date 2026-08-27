@@ -26,13 +26,15 @@ Windows 终端复用器（Terminal Multiplexer）—— 单文件 C 实现，基
 |---|---|
 | `Ctrl+B c` | 新建默认 pane |
 | `Ctrl+B +` | 新建 pane 菜单（选已配置项目 / 自定义命令行） |
+| `Ctrl+B [` | 进入复制模式（方向键/hjkl移动、Space/v选区、Enter/y复制、Esc退出） |
 | `Ctrl+B s` | 打开图形化设置页面 (`termux.ini`) |
+| `Ctrl+B r` | 热重载配置文件 (`termux.ini`) |
 | `Ctrl+B ?` / `h` | 打开 / 关闭帮助 |
 | `Ctrl+B n / p` | 下一个 / 上一个 pane |
 | `Ctrl+B x` | 关闭当前 pane |
 | `Ctrl+B d` | 退出 termux |
 | `Ctrl+B t` / `Shift+t` | 轮换标签颜色 |
-| `Ctrl+B 0-9` | 跳转到 pane |
+| `Ctrl+B 0-9` | 跳转到 pane（支持主键盘与小键盘数字） |
 
 ## 鼠标操作
 
@@ -42,6 +44,7 @@ Windows 终端复用器（Terminal Multiplexer）—— 单文件 C 实现，基
 | 左键点击 `×` | 关闭该 pane |
 | 右键点击标签 | 改颜色 / 改标题 |
 | 中键点击标签 | 关闭该 pane |
+| 鼠标左键拖拽 | 框选终端文字，松开自动复制到剪贴板 |
 | 点击 `[+]` | 新建 pane（选已配置项目 / 自定义命令行） |
 | 点击 `[*]` | 打开图形化设置页面 |
 | 点击 `termux` | 打开 / 关闭帮助 |

@@ -6,6 +6,22 @@
 
 ## 版本更新记录
 
+### v1.6.0
+- **修复环形缓冲区局部滚动堆溢出 Bug（BUG-1）**：
+  - 修复了 `screen_scroll_up()` 局部滚动区分支未使用 `screen_phys_row()` 取模而直接进行裸加法导致的堆越界读写与内存破坏缺陷。
+  - 补齐了局部滚动时对 `rgb_valid` 属性数组的完整同步复制，并通过 AddressSanitizer 1200+ 极端环形绕回用例验证（0 溢出，0 泄漏）。
+- **修复关闭 UI 标签页时对 NULL 句柄调用 Win32 API（BUG-2）**：
+  - 在 `close_pane()` 中为 `hpc`、`pipe_in`、`pipe_out`、`process`、`thread` 等内核句柄增加显式 NULL 守卫，避免对纯 UI 标签（设置、关于）执行无效句柄清理引发异常。
+- **修复 `handle_resize` 数据竞争与全局尺寸同步（BUG-3）**：
+  - 将全局尺寸更新与屏幕缓冲区尺寸调整统一收敛至临界区原子执行，彻底消除多线程并发重绘时读取到不一致尺寸的竞态隐患。
+- **新增原生复制模式与鼠标拖拽框选复制（Copy Mode）**：
+  - 新增快捷键 `Ctrl+B [` 进入复制模式：支持方向键 / `hjkl` 自由漫游光标，`Space` / `v` 开启选区，`Enter` / `y` 复制到 Windows 剪贴板并退出，`Esc` / `q` 取消。
+  - 增强鼠标框选支持：在终端内容区域直接左键拖拽高亮文字，松开即刻自动复制到剪贴板，智能处理宽字符与行尾空格修剪。
+- **新增配置文件热重载（Hot-Reload）**：
+  - 新增 `Ctrl+B r` 快捷键，随时热重载 `termux.ini` 配置文件并在界面生效。
+- **集成 ASAN 自动化内存安全测试**：
+  - 新增 `verify_ringbuf_asan.py` 纳入 `verify_all.py` 与 GitHub Actions CI，全天候守护环形缓冲算术与内存安全。
+
 ### v1.5.0
 - **修复 MSVC / C++ 模式下编译失败 Bug（P0）**：
   - 修复了 `create_pane_shell_with_dir()` 中 `goto` 跳转跨越带初始化的变量声明（`exp_dir`、`cur_dir`）导致 MSVC `cl` 及 C++ 编译器报错的缺陷。

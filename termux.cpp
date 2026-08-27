@@ -309,6 +309,15 @@ static int g_hover_settings_cmd_active = 0;
 static int g_sb_dragging = 0;
 static int g_sb_grab_offset = 0;
 
+// v1.6.0: Copy Mode & Text Selection
+static int g_copy_mode = 0;           // 1 = in copy mode
+static int g_copy_sel_active = 0;     // 1 = text selection active
+static int g_copy_cx = 0, g_copy_cy = 0; // copy cursor on visible grid (0..cols-1, 0..rows-1)
+static int g_copy_anchor_x = 0, g_copy_anchor_abs_y = 0; // selection start anchor
+static int g_mouse_selecting = 0;     // 1 = mouse drag selection active
+static int g_mouse_sel_sx = 0, g_mouse_sel_s_abs_y = 0;
+static int g_mouse_sel_ex = 0, g_mouse_sel_e_abs_y = 0;
+
 typedef struct {
     char name[32];
     char cmd[256];
@@ -1315,6 +1324,11 @@ static inline int screen_phys_row(ScreenBuffer *s, int rel_row) {
     return r;
 }
 
+static inline int screen_to_abs_row(ScreenBuffer *s, int cy, int vo) {
+    if (s->in_alt_screen) return cy;
+    return s->hist_lines - vo + cy;
+}
+
 static CHAR_INFO *screen_cell(ScreenBuffer *s, int row, int col) {
     if (row < 0 || col < 0 || col >= s->cols) return NULL;
     if (s->in_alt_screen) {
@@ -1363,6 +1377,9 @@ static void screen_scroll_up(ScreenBuffer *s, int top, int bottom, int count) {
                 memcpy(&s->alt_fg_rgb[i * s->cols], &s->alt_fg_rgb[(i + count) * s->cols], s->cols * sizeof(WORD));
                 memcpy(&s->alt_bg_rgb[i * s->cols], &s->alt_bg_rgb[(i + count) * s->cols], s->cols * sizeof(WORD));
             }
+            if (s->alt_rgb_valid) {
+                memcpy(&s->alt_rgb_valid[i * s->cols], &s->alt_rgb_valid[(i + count) * s->cols], s->cols * sizeof(unsigned char));
+            }
         }
         for (int i = bottom - count + 1; i <= bottom; i++)
             for (int j = 0; j < s->cols; j++)
@@ -1398,20 +1415,30 @@ static void screen_scroll_up(ScreenBuffer *s, int top, int bottom, int count) {
         }
         s->scroll_top = (s->scroll_top + count) % s->total_lines;
     } else {
-        int abs_top = s->scroll_top + top, abs_bottom = s->scroll_top + bottom;
-        for (int i = abs_top; i <= abs_bottom - count; i++) {
-            memcpy(&s->buffer[i * s->cols], &s->buffer[(i + count) * s->cols], s->cols * sizeof(CHAR_INFO));
+        // v1.6.0: Fix BUG-1 (heap buffer overflow in ring buffer partial scroll region).
+        // Must use screen_phys_row(s, i) for destination and source lines.
+        for (int i = top; i <= bottom - count; i++) {
+            int dst_pr = screen_phys_row(s, i);
+            int src_pr = screen_phys_row(s, i + count);
+            memcpy(&s->buffer[dst_pr * s->cols], &s->buffer[src_pr * s->cols], s->cols * sizeof(CHAR_INFO));
             if (s->fg_rgb) {
-                memcpy(&s->fg_rgb[i * s->cols], &s->fg_rgb[(i + count) * s->cols], s->cols * sizeof(WORD));
-                memcpy(&s->bg_rgb[i * s->cols], &s->bg_rgb[(i + count) * s->cols], s->cols * sizeof(WORD));
+                memcpy(&s->fg_rgb[dst_pr * s->cols], &s->fg_rgb[src_pr * s->cols], s->cols * sizeof(WORD));
+                memcpy(&s->bg_rgb[dst_pr * s->cols], &s->bg_rgb[src_pr * s->cols], s->cols * sizeof(WORD));
+            }
+            if (s->rgb_valid) {
+                memcpy(&s->rgb_valid[dst_pr * s->cols], &s->rgb_valid[src_pr * s->cols], s->cols * sizeof(unsigned char));
             }
         }
-        for (int i = abs_bottom - count + 1; i <= abs_bottom; i++)
+        for (int i = bottom - count + 1; i <= bottom; i++) {
+            int pr = screen_phys_row(s, i);
             for (int j = 0; j < s->cols; j++) {
-                s->buffer[i * s->cols + j].Char.UnicodeChar = L' ';
-                s->buffer[i * s->cols + j].Attributes = s->current_attr;
-                if (s->fg_rgb) { s->fg_rgb[i * s->cols + j] = RGB565_WHITE; s->bg_rgb[i * s->cols + j] = RGB565_BLACK; s->rgb_valid[i * s->cols + j] = 0; }
+                int idx = pr * s->cols + j;
+                s->buffer[idx].Char.UnicodeChar = L' ';
+                s->buffer[idx].Attributes = s->current_attr;
+                if (s->fg_rgb) { s->fg_rgb[idx] = RGB565_WHITE; s->bg_rgb[idx] = RGB565_BLACK; }
+                if (s->rgb_valid) s->rgb_valid[idx] = 0;
             }
+        }
     }
 }
 
@@ -3200,9 +3227,38 @@ static void render_screen(void) {
                 }
             }
 
+            int sel_active = 0, sel_min_abs_y = 0, sel_max_abs_y = 0, sel_min_x = 0, sel_max_x = 0;
+            if (g_copy_mode && g_copy_sel_active) {
+                int cur_abs_y = screen_to_abs_row(s, g_copy_cy, vo);
+                sel_min_abs_y = g_copy_anchor_abs_y < cur_abs_y ? g_copy_anchor_abs_y : cur_abs_y;
+                sel_max_abs_y = g_copy_anchor_abs_y > cur_abs_y ? g_copy_anchor_abs_y : cur_abs_y;
+                if (g_copy_anchor_abs_y == cur_abs_y) {
+                    sel_min_x = g_copy_anchor_x < g_copy_cx ? g_copy_anchor_x : g_copy_cx;
+                    sel_max_x = g_copy_anchor_x > g_copy_cx ? g_copy_anchor_x : g_copy_cx;
+                } else if (g_copy_anchor_abs_y < cur_abs_y) {
+                    sel_min_x = g_copy_anchor_x; sel_max_x = g_copy_cx;
+                } else {
+                    sel_min_x = g_copy_cx; sel_max_x = g_copy_anchor_x;
+                }
+                sel_active = 1;
+            } else if (g_mouse_selecting) {
+                sel_min_abs_y = g_mouse_sel_s_abs_y < g_mouse_sel_e_abs_y ? g_mouse_sel_s_abs_y : g_mouse_sel_e_abs_y;
+                sel_max_abs_y = g_mouse_sel_s_abs_y > g_mouse_sel_e_abs_y ? g_mouse_sel_s_abs_y : g_mouse_sel_e_abs_y;
+                if (g_mouse_sel_s_abs_y == g_mouse_sel_e_abs_y) {
+                    sel_min_x = g_mouse_sel_sx < g_mouse_sel_ex ? g_mouse_sel_sx : g_mouse_sel_ex;
+                    sel_max_x = g_mouse_sel_sx > g_mouse_sel_ex ? g_mouse_sel_sx : g_mouse_sel_ex;
+                } else if (g_mouse_sel_s_abs_y < g_mouse_sel_e_abs_y) {
+                    sel_min_x = g_mouse_sel_sx; sel_max_x = g_mouse_sel_ex;
+                } else {
+                    sel_min_x = g_mouse_sel_ex; sel_max_x = g_mouse_sel_sx;
+                }
+                sel_active = 1;
+            }
+
             for (int y = 0; y < rr; y++) {
                 pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H", y + 2);   // v8.22: tab bar is on row 1
                 int ar = (vo > 0 && !s->in_alt_screen) ? screen_phys_row(s, y - vo) : -1;
+                int cur_cell_abs_y = screen_to_abs_row(s, y, vo);
                 for (int x = 0; x < text_rc; x++) {
                     CHAR_INFO *cell = (ar >= 0) ? &s->buffer[ar * s->cols + x] : screen_cell(s, y, x);
                     WCHAR wc = L' '; WORD attr = 0x07;
@@ -3210,6 +3266,19 @@ static void render_screen(void) {
                     if (wc == 0) continue;   // v8.2: right half of a wide char
                     WORD frgb, brgb; int fgv, bgv;
                     cell_truecolor(s, y, x, ar, &frgb, &brgb, &fgv, &bgv);
+
+                    if (sel_active) {
+                        int in_sel = 0;
+                        if (cur_cell_abs_y > sel_min_abs_y && cur_cell_abs_y < sel_max_abs_y) in_sel = 1;
+                        else if (sel_min_abs_y == sel_max_abs_y && cur_cell_abs_y == sel_min_abs_y) in_sel = (x >= sel_min_x && x <= sel_max_x);
+                        else if (cur_cell_abs_y == sel_min_abs_y) in_sel = (x >= sel_min_x);
+                        else if (cur_cell_abs_y == sel_max_abs_y) in_sel = (x <= sel_max_x);
+                        if (in_sel) {
+                            brgb = rgb565(38, 75, 110); bgv = 1;
+                            frgb = rgb565(255, 255, 255); fgv = 1;
+                        }
+                    }
+
                     if (attr != la_attr || frgb != la_fr || brgb != la_br || fgv != la_fv || bgv != la_bv) {
                         const char *ul = (attr & COMMON_LVB_UNDERSCORE) ? ";4" : "";
                         if (fgv || bgv) {
@@ -3275,6 +3344,12 @@ static void render_screen(void) {
                 if (pos > bs - 256) break;
             }
 
+            if (g_copy_mode) {
+                int badge_x = (g_mux.host_cols > 65) ? (g_mux.host_cols - 60) : 1;
+                pos += snprintf(out + pos, bs - pos, "\x1b[2;%dH\x1b[48;2;210;153;34m\x1b[38;2;13;17;23;1m [复制模式] \x1b[0m\x1b[48;2;33;38;45m\x1b[38;2;230;237;243m %s | Enter/y 复制, Space/v 选区, Esc 退出 \x1b[0m",
+                                badge_x, g_copy_sel_active ? "已开启选区" : "移动光标");
+            }
+
             // clear leftover rows below pane
             for (int y = rr; y < g_mux.host_rows && pos < bs - 64; y++)
                 pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[0m\x1b[K", y + 2);
@@ -3332,7 +3407,9 @@ static void render_screen(void) {
     }
 
     // 4. Position and set cursor visibility as the FINAL step (must be after draw_tab_bar)
-    if (g_mux.rename_mode) {
+    if (g_copy_mode) {
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", g_copy_cy + 2, g_copy_cx + 1);
+    } else if (g_mux.rename_mode) {
         int r_top = 2, r_left = (g_pop_anchor_x >= 0) ? g_pop_anchor_x : g_mouse_x;
         if (r_left + RENAME_W > g_mux.host_cols) r_left = (g_pop_anchor_x >= 0 ? g_pop_anchor_x : g_mouse_x) - RENAME_W;
         if (r_left < 0) r_left = 0;
@@ -3473,13 +3550,15 @@ static const char *const g_help_lines[] = {
     "\x1b[38;2;121;192;255;1m  键盘快捷键\x1b[0m",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mc\x1b[0m         新建默认 pane",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243m+\x1b[0m         新建 pane 菜单 (选择/自定义命令行)",
+    "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243m[\x1b[0m         进入复制模式 (方向键/Space选择/Enter复制)",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mn / p\x1b[0m     下一个 / 上一个 pane",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mx\x1b[0m         关闭当前 pane",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243ms\x1b[0m         打开图形化设置 (termux.ini)",
+    "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mr\x1b[0m         热重载配置文件 (termux.ini)",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243m? / h\x1b[0m     打开 / 关闭本帮助",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243md\x1b[0m         退出 termux",
     "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243mt\x1b[0m         轮换标签颜色 (Shift+t 反向)",
-    "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243m0-9\x1b[0m       跳转到 pane",
+    "  \x1b[38;2;210;153;34mCtrl+B\x1b[0m + \x1b[38;2;230;237;243m0-9\x1b[0m       跳转到 pane (支持主键盘与小键盘)",
     "",
     "\x1b[38;2;121;192;255;1m  鼠标操作\x1b[0m",
     "  \x1b[38;2;230;237;243m点击 tab\x1b[0m           切换 pane",
@@ -3488,12 +3567,13 @@ static const char *const g_help_lines[] = {
     "  \x1b[38;2;230;237;243m点击 [+]\x1b[0m           新建 pane (支持选择/自定义命令行)",
     "  \x1b[38;2;230;237;243m点击 [*]\x1b[0m           打开图形化设置页面",
     "  \x1b[38;2;230;237;243m点击 termux\x1b[0m        打开 / 关闭本帮助",
+    "  \x1b[38;2;230;237;243m鼠标左键拖选\x1b[0m       框选终端文字，松开自动复制到剪贴板",
     "",
     "\x1b[38;2;121;192;255;1m  提示与警告\x1b[0m",
     "  - \x1b[38;2;248;81;73m警告: 终端必须使用等宽字体，否则会渲染故障\x1b[0m",
     "  - 每个 tab 带 \x1b[38;2;248;81;73m红 x\x1b[0m 关闭按钮（悬停红底）",
     "  - 编辑器 (nano/vim) 用 alt screen，退出后历史完整保留",
-    "  - PgUp / PgDn / 滚轮可滚动本帮助",
+    "  - PgUp / PgDn / 滚轮可滚动本帮助与终端历史",
     "  - 按任意其它键返回",
 };
 static const int g_help_line_count = (int)(sizeof(g_help_lines) / sizeof(g_help_lines[0]));
@@ -3851,18 +3931,34 @@ static void close_pane(int idx) {
     pane->active = 0;
     LeaveCriticalSection(&g_mux.cs);
 
-    ClosePseudoConsole(pane->hpc);
-    CloseHandle(pane->pipe_in);
-    CloseHandle(pane->pipe_out);   // aborts any pending ReadFile in the read thread
+    // v1.6.0: Pure UI panes (Settings / About) have no child process or pipes (BUG-2 fix)
+    if (pane->hpc) {
+        ClosePseudoConsole(pane->hpc);
+        pane->hpc = NULL;
+    }
+    if (pane->pipe_in) {
+        CloseHandle(pane->pipe_in);
+        pane->pipe_in = NULL;
+    }
+    if (pane->pipe_out) {
+        CloseHandle(pane->pipe_out);   // aborts any pending ReadFile in the read thread
+        pane->pipe_out = NULL;
+    }
     if (pane->read_thread) {
         WaitForSingleObject(pane->read_thread, 2000);   // v7: a bit more patience
         CloseHandle(pane->read_thread);
         pane->read_thread = NULL;
     }
-    TerminateProcess(pane->process, 0);   // no-op if the child already exited
-    WaitForSingleObject(pane->process, 500);
-    CloseHandle(pane->process);
-    CloseHandle(pane->thread);
+    if (pane->process) {
+        TerminateProcess(pane->process, 0);   // no-op if the child already exited
+        WaitForSingleObject(pane->process, 500);
+        CloseHandle(pane->process);
+        pane->process = NULL;
+    }
+    if (pane->thread) {
+        CloseHandle(pane->thread);
+        pane->thread = NULL;
+    }
 
     // v8: free the buffers only after the reader is done with them.
     EnterCriticalSection(&g_mux.cs);
@@ -4544,6 +4640,166 @@ static void handle_settings_mouse(MOUSE_EVENT_RECORD *me) {
     }
 }
 
+static void copy_range_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs) {
+    if (!p) return;
+    ScreenBuffer *s = &p->screen;
+    if (sy_abs > ey_abs || (sy_abs == ey_abs && sx > ex)) {
+        int tx = sx; sx = ex; ex = tx;
+        int ty = sy_abs; sy_abs = ey_abs; ey_abs = ty;
+    }
+    int total_lines = ey_abs - sy_abs + 1;
+    if (total_lines <= 0 || total_lines > SCROLL_BUF_LINES + s->rows) return;
+
+    int max_chars = total_lines * (s->cols + 2) + 64;
+    WCHAR *wbuf = (WCHAR *)malloc(max_chars * sizeof(WCHAR));
+    if (!wbuf) return;
+    int wlen = 0;
+
+    for (int abs_y = sy_abs; abs_y <= ey_abs; abs_y++) {
+        int x_start = (abs_y == sy_abs) ? sx : 0;
+        int x_end = (abs_y == ey_abs) ? ex : s->cols - 1;
+        if (x_start < 0) x_start = 0;
+        if (x_end >= s->cols) x_end = s->cols - 1;
+
+        int row_wlen_start = wlen;
+        for (int x = x_start; x <= x_end; x++) {
+            CHAR_INFO *cell = NULL;
+            if (s->in_alt_screen) {
+                if (abs_y >= 0 && abs_y < s->rows) cell = &s->alt_buffer[abs_y * s->cols + x];
+            } else {
+                int ar = abs_y;
+                if (ar >= 0 && ar < s->total_lines && s->buffer) {
+                    int pr = (s->scroll_top - s->hist_lines + ar + s->total_lines * 2) % s->total_lines;
+                    cell = &s->buffer[pr * s->cols + x];
+                }
+            }
+            if (cell) {
+                WCHAR ch = cell->Char.UnicodeChar;
+                if (ch != 0) {
+                    wbuf[wlen++] = ch;
+                }
+            } else {
+                wbuf[wlen++] = L' ';
+            }
+        }
+        if (abs_y < ey_abs) {
+            while (wlen > row_wlen_start && wbuf[wlen - 1] == L' ') wlen--;
+            wbuf[wlen++] = L'\r';
+            wbuf[wlen++] = L'\n';
+        }
+    }
+    while (wlen > 0 && wbuf[wlen - 1] == L' ') wlen--;
+    wbuf[wlen] = 0;
+
+    if (wlen > 0 && OpenClipboard(NULL)) {
+        EmptyClipboard();
+        HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, (wlen + 1) * sizeof(WCHAR));
+        if (hMem) {
+            WCHAR *pMem = (WCHAR *)GlobalLock(hMem);
+            if (pMem) {
+                memcpy(pMem, wbuf, (wlen + 1) * sizeof(WCHAR));
+                GlobalUnlock(hMem);
+                SetClipboardData(CF_UNICODETEXT, hMem);
+            }
+        }
+        CloseClipboard();
+    }
+    free(wbuf);
+}
+
+static void handle_copy_mode_key(KEY_EVENT_RECORD *ke) {
+    WORD vk = ke->wVirtualKeyCode; DWORD ctrl = ke->dwControlKeyState; WCHAR uc = ke->uChar.UnicodeChar;
+    (void)ctrl;
+
+    if (g_mux.active_pane < 0 || g_mux.active_pane >= g_mux.pane_count) {
+        g_copy_mode = 0; g_copy_sel_active = 0; g_mux.needs_redraw = 1; return;
+    }
+    Pane *p = &g_mux.panes[g_mux.active_pane];
+    ScreenBuffer *s = &p->screen;
+
+    if (vk == VK_ESCAPE || uc == 'q' || uc == 'Q') {
+        g_copy_mode = 0;
+        g_copy_sel_active = 0;
+        p->scroll_offset = 0;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+
+    if (vk == VK_SPACE || uc == 'v' || uc == 'V') {
+        g_copy_sel_active = !g_copy_sel_active;
+        if (g_copy_sel_active) {
+            g_copy_anchor_x = g_copy_cx;
+            g_copy_anchor_abs_y = screen_to_abs_row(s, g_copy_cy, p->scroll_offset);
+        }
+        g_mux.needs_redraw = 1;
+        return;
+    }
+
+    if (vk == VK_RETURN || uc == 'y' || uc == 'Y') {
+        if (g_copy_sel_active) {
+            int cur_abs_y = screen_to_abs_row(s, g_copy_cy, p->scroll_offset);
+            copy_range_to_clipboard(p, g_copy_anchor_x, g_copy_anchor_abs_y, g_copy_cx, cur_abs_y);
+        }
+        g_copy_mode = 0;
+        g_copy_sel_active = 0;
+        p->scroll_offset = 0;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+
+    // Navigation in Copy Mode
+    if (vk == VK_LEFT || uc == 'h' || uc == 'H') {
+        if (g_copy_cx > 0) g_copy_cx--;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_RIGHT || uc == 'l' || uc == 'L') {
+        if (g_copy_cx < s->cols - 1) g_copy_cx++;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_UP || uc == 'k' || uc == 'K') {
+        if (g_copy_cy > 0) {
+            g_copy_cy--;
+        } else if (p->scroll_offset < s->hist_lines) {
+            p->scroll_offset++;
+        }
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_DOWN || uc == 'j' || uc == 'J') {
+        if (g_copy_cy < s->rows - 1) {
+            g_copy_cy++;
+        } else if (p->scroll_offset > 0) {
+            p->scroll_offset--;
+        }
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_PRIOR) { // PgUp
+        p->scroll_offset += s->rows / 2;
+        if (p->scroll_offset > s->hist_lines) p->scroll_offset = s->hist_lines;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_NEXT) { // PgDn
+        p->scroll_offset -= s->rows / 2;
+        if (p->scroll_offset < 0) p->scroll_offset = 0;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_HOME || uc == '0' || uc == '^') {
+        g_copy_cx = 0;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_END || uc == '$') {
+        g_copy_cx = s->cols - 1;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+}
+
 static void handle_prefix(WORD vk, DWORD ctrl, WCHAR uc) {
     g_mux.prefix_mode = 0;
     if (vk == 'B' && (ctrl & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED))) { char c = 2; write_to_pane(&c, 1); return; }
@@ -4576,6 +4832,26 @@ static void handle_prefix(WORD vk, DWORD ctrl, WCHAR uc) {
         g_mux.ctx_mode = 0;
         g_mux.rename_mode = 0;
         g_mux.custom_cmd_mode = 0;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+
+    // v1.6.0: Ctrl+B [ enters Copy Mode
+    if (uc == '[' || vk == VK_OEM_4 || vk == '[') {
+        if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
+            Pane *p = &g_mux.panes[g_mux.active_pane];
+            g_copy_mode = 1;
+            g_copy_sel_active = 0;
+            g_copy_cx = p->screen.cursor_x;
+            g_copy_cy = p->screen.cursor_y;
+            g_mux.needs_redraw = 1;
+            return;
+        }
+    }
+
+    // v1.6.0: Ctrl+B r (hot reload config)
+    if (vk == 'R' || uc == 'r' || uc == 'R') {
+        load_config();
         g_mux.needs_redraw = 1;
         return;
     }
@@ -4677,6 +4953,11 @@ static void handle_key(KEY_EVENT_RECORD *ke) {
         handle_prefix(vk, ctrl, uc);
         return;
     }
+    if (g_copy_mode && !g_mux.prefix_mode) {
+        handle_copy_mode_key(ke);
+        return;
+    }
+
     if ((uc == 0x02) || (vk == 'B' && is_ctrl && !is_alt && !is_shift)) { g_mux.prefix_mode = 1; return; }
 
     // Settings panel active
@@ -5248,7 +5529,7 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
             in_settings_pane = 1;
         }
         if (now_in || (prev_in && !now_in) || sb_fade_active || g_sb_dragging ||
-            in_settings_pane ||
+            in_settings_pane || g_mouse_selecting || g_copy_mode ||
             g_mux.chooser_mode || g_mux.ctx_mode || g_mux.rename_mode || g_mux.custom_cmd_mode)
             g_mux.needs_redraw = 1;
         g_mouse_prev_in_tabbar = now_in;
@@ -5610,6 +5891,35 @@ static void handle_mouse(MOUSE_EVENT_RECORD *me) {
         g_sb_grab_offset = 0;
     }
 
+    // v1.6.0: Mouse drag text selection & clipboard copy
+    if (!s->mouse_tracking && !p->is_settings && my >= 1 && !g_sb_dragging) {
+        if (me->dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED) {
+            int abs_y = screen_to_abs_row(s, my - 1, p->scroll_offset);
+            int cur_x = mx < s->cols ? mx : s->cols - 1;
+            if (cur_x < 0) cur_x = 0;
+            if (!g_mouse_selecting) {
+                g_mouse_selecting = 1;
+                g_mouse_sel_sx = cur_x;
+                g_mouse_sel_s_abs_y = abs_y;
+                g_mouse_sel_ex = cur_x;
+                g_mouse_sel_e_abs_y = abs_y;
+                g_mux.needs_redraw = 1;
+            } else {
+                g_mouse_sel_ex = cur_x;
+                g_mouse_sel_e_abs_y = abs_y;
+                g_mux.needs_redraw = 1;
+            }
+        } else {
+            if (g_mouse_selecting) {
+                if (g_mouse_sel_sx != g_mouse_sel_ex || g_mouse_sel_s_abs_y != g_mouse_sel_e_abs_y) {
+                    copy_range_to_clipboard(p, g_mouse_sel_sx, g_mouse_sel_s_abs_y, g_mouse_sel_ex, g_mouse_sel_e_abs_y);
+                }
+                g_mouse_selecting = 0;
+                g_mux.needs_redraw = 1;
+            }
+        }
+    }
+
     if (me->dwEventFlags == MOUSE_WHEELED) {
         int d = (short)HIWORD(me->dwButtonState);
         if (s->mouse_tracking) {
@@ -5716,20 +6026,24 @@ static void handle_resize(void) {
     if (nt < 2) nt = 2;          //     crash rendering or ConPTY resize
     int nr = nt - 1;
     if (nc == g_mux.host_cols && nt == g_mux.total_host_rows) return;
+
+    // v1.6.0: update dimensions and resize screen buffers atomically under critical section (BUG-3 fix)
+    EnterCriticalSection(&g_mux.cs);
     g_mux.host_cols = nc; g_mux.total_host_rows = nt; g_mux.host_rows = nr;
     int pane_cols = nc;
     for (int i = 0; i < g_mux.pane_count; i++) if (g_mux.panes[i].active) {
-        EnterCriticalSection(&g_mux.cs);
         screen_resize(&g_mux.panes[i].screen, pane_cols, nr);
         g_mux.panes[i].screen.detect_count = 0;   // v8.3: host resized - allow re-adapt
-        // v7: clamp scroll offset to the (possibly shorter) new scrollback;
-        // v8.14: use hist_lines (real depth) - screen_resize resets it to 0,
-        // so any stale offset is cleared instead of scrolling into empty space.
         if (g_mux.panes[i].scroll_offset > g_mux.panes[i].screen.hist_lines)
             g_mux.panes[i].scroll_offset = g_mux.panes[i].screen.hist_lines;
-        LeaveCriticalSection(&g_mux.cs);
-        COORD sz = {(SHORT)pane_cols, (SHORT)nr};
-        ResizePseudoConsole(g_mux.panes[i].hpc, sz);
+    }
+    LeaveCriticalSection(&g_mux.cs);
+
+    for (int i = 0; i < g_mux.pane_count; i++) if (g_mux.panes[i].active) {
+        if (g_mux.panes[i].hpc) {
+            COORD sz = {(SHORT)pane_cols, (SHORT)nr};
+            ResizePseudoConsole(g_mux.panes[i].hpc, sz);
+        }
     }
     g_mux.needs_redraw = 1;
 }
