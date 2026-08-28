@@ -395,6 +395,10 @@ void execute_palette_command(int item_index) {
             load_config();
             g_mux.needs_redraw = 1;
             break;
+        case PALETTE_ACTION_NEXT_THEME:
+            palette_close();
+            action_execute(ACT_NEXT_THEME, 0, 0);
+            break;
         case PALETTE_ACTION_GRAPHICAL_SETTINGS:
             palette_close();
             open_settings_pane();
@@ -964,7 +968,7 @@ void copy_range_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs) {
         int ty = sy_abs; sy_abs = ey_abs; ey_abs = ty;
     }
     int total_lines = ey_abs - sy_abs + 1;
-    if (total_lines <= 0 || total_lines > SCROLL_BUF_LINES + s->rows) return;
+    if (total_lines <= 0 || total_lines > s->total_lines) return;
 
     int max_chars = total_lines * (s->cols + 2) + 64;
     WCHAR *wbuf = (WCHAR *)malloc(max_chars * sizeof(WCHAR));
@@ -1704,120 +1708,162 @@ void handle_settings_mouse(MOUSE_EVENT_RECORD *me) {
     }
 }
 
-void handle_prefix(WORD vk, DWORD ctrl, WCHAR uc) {
-    g_mux.prefix_mode = 0;
-    if (vk == 'B' && (ctrl & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED))) { char c = 2; write_to_pane(&c, 1); return; }
+/* 关闭所有模态弹窗，动作执行前统一调用。 */
+static void dismiss_overlays(void) {
+    g_mux.ctx_mode = 0;
+    g_mux.rename_mode = 0;
+    g_mux.custom_cmd_mode = 0;
+    g_mux.chooser_mode = 0;
+    g_mux.palette_mode = 0;
+}
 
-    if (uc == '+' || vk == VK_ADD || (vk == VK_OEM_PLUS && (ctrl & SHIFT_PRESSED))) {
-        g_mux.ctx_mode = 0;
-        g_mux.rename_mode = 0;
-        g_mux.custom_cmd_mode = 0;
-        g_mux.help_mode = 0;
-        g_mux.palette_mode = 0;
-        g_mux.chooser_mode = 1;
-        g_pop_anchor_x = 20;
-        for (int k = 0; k < g_mux.tab_count; k++) {
-            if (g_mux.tab_info[k].pane_idx == -1) {
-                g_pop_anchor_x = g_mux.tab_info[k].start_col;
-                break;
-            }
-        }
-        g_mux.needs_redraw = 1;
-        return;
-    }
-
-    /* The command palette has one deliberate entry point: Ctrl+B :.  Keep
-     * Ctrl+B p available for previous-panel navigation instead of treating
-     * P/Space/another global shortcut as a palette alias. */
-    /* Chinese keyboard layouts often deliver Shift+; as fullwidth U+FF1A
-     * instead of ASCII ':'.  Accept both forms for Ctrl+B :. */
-    if (uc == ':' || uc == 0xFF1A || (vk == VK_OEM_1 && (ctrl & SHIFT_PRESSED))) {
-        g_mux.ctx_mode = 0;
-        g_mux.rename_mode = 0;
-        g_mux.custom_cmd_mode = 0;
-        g_mux.help_mode = 0;
-        g_mux.chooser_mode = 0;
-        open_command_palette();
-        return;
-    }
-
-    if (uc == '/' || (vk == VK_OEM_2 && !(ctrl & SHIFT_PRESSED))) {
-        g_mux.palette_mode = 0;
-        g_search_mode = 1;
-        g_search_len = 0;
-        g_search_pos = 0;
-        g_search_buf[0] = 0;
-        g_mux.needs_redraw = 1;
-        return;
-    }
-
-    if (uc == '?' || uc == 'h' || uc == 'H' || (vk == VK_OEM_2 && (ctrl & SHIFT_PRESSED))) {
-        g_mux.help_mode = !g_mux.help_mode;
-        if (!g_mux.help_mode) g_mux.help_scroll = 0;
-        g_mux.chooser_mode = 0;
-        g_mux.ctx_mode = 0;
-        g_mux.rename_mode = 0;
-        g_mux.custom_cmd_mode = 0;
-        g_mux.palette_mode = 0;
-        g_mux.needs_redraw = 1;
-        return;
-    }
-
-    if (uc == '[' || vk == VK_OEM_4 || vk == '[') {
-        if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
-            Pane *p = &g_mux.panes[g_mux.active_pane];
-            g_copy_mode = 1;
-            g_copy_sel_active = 0;
-            g_copy_cx = p->screen.cursor_x;
-            g_copy_cy = p->screen.cursor_y;
-            g_mux.needs_redraw = 1;
-            return;
-        }
-    }
-
-    if (vk == 'R' || uc == 'r' || uc == 'R') {
-        load_config();
-        g_mux.needs_redraw = 1;
-        return;
-    }
-
-    switch (vk) {
-        case 'C': { int i = create_pane(); if (i >= 0) switch_pane(i); break; }
-        case 'N': { int n = find_next_active_pane(g_mux.active_pane); if (n >= 0) switch_pane(n); break; }
-        case 'P': { for (int i = 1; i <= g_mux.pane_count; i++) { int n = (g_mux.active_pane - i + g_mux.pane_count) % g_mux.pane_count; if (g_mux.panes[n].active) { switch_pane(n); break; } } break; }
-        case 'X': { int c = g_mux.active_pane, n = find_next_active_pane(c); close_pane(c); if (n >= 0 && g_mux.panes[n].active) switch_pane(n); else { int f = 0; for (int i = 0; i < g_mux.pane_count; i++) if (g_mux.panes[i].active) { switch_pane(i); f = 1; break; } if (!f) g_mux.running = 0; } break; }
-        case 'D': {
-            g_mux.running = 0;
+void action_execute(int action, int arg, DWORD ctrl) {
+    switch (action) {
+        case ACT_SEND_PREFIX: {
+            char c = keymap_prefix_char();
+            if (c) write_to_pane(&c, 1);
             break;
         }
-        case 'T': {
+        case ACT_NEW_PANE_MENU: {
+            dismiss_overlays();
+            g_mux.help_mode = 0;
+            g_mux.chooser_mode = 1;
+            g_pop_anchor_x = 20;
+            for (int k = 0; k < g_mux.tab_count; k++) {
+                if (g_mux.tab_info[k].pane_idx == -1) {
+                    g_pop_anchor_x = g_mux.tab_info[k].start_col;
+                    break;
+                }
+            }
+            g_mux.needs_redraw = 1;
+            break;
+        }
+        case ACT_COMMAND_PALETTE: {
+            dismiss_overlays();
+            g_mux.help_mode = 0;
+            open_command_palette();
+            break;
+        }
+        case ACT_SEARCH: {
+            g_mux.palette_mode = 0;
+            g_search_mode = 1;
+            g_search_len = 0;
+            g_search_pos = 0;
+            g_search_buf[0] = 0;
+            g_mux.needs_redraw = 1;
+            break;
+        }
+        case ACT_HELP: {
+            g_mux.help_mode = !g_mux.help_mode;
+            if (!g_mux.help_mode) g_mux.help_scroll = 0;
+            dismiss_overlays();
+            g_mux.needs_redraw = 1;
+            break;
+        }
+        case ACT_COPY_MODE: {
             if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
-                if (!g_mux.panes[g_mux.active_pane].is_about && !g_mux.panes[g_mux.active_pane].is_settings) {
-                    int c = g_mux.panes[g_mux.active_pane].color;
-                    c += (ctrl & SHIFT_PRESSED) ? -1 : 1;
+                Pane *p = &g_mux.panes[g_mux.active_pane];
+                g_copy_mode = 1;
+                g_copy_sel_active = 0;
+                g_copy_cx = p->screen.cursor_x;
+                g_copy_cy = p->screen.cursor_y;
+                g_mux.needs_redraw = 1;
+            }
+            break;
+        }
+        case ACT_RELOAD_CONFIG: {
+            load_config();
+            g_mux.needs_redraw = 1;
+            break;
+        }
+        case ACT_NEXT_THEME: {
+            int next = (theme_index() + 1) % theme_count();
+            theme_set_by_name(theme_name_at(next));
+            theme_apply();
+            save_config();
+            g_mux.needs_redraw = 1;
+            break;
+        }
+        case ACT_NEW_PANE: {
+            int i = create_pane();
+            if (i >= 0) switch_pane(i);
+            break;
+        }
+        case ACT_NEXT_PANE: {
+            int n = find_next_active_pane(g_mux.active_pane);
+            if (n >= 0) switch_pane(n);
+            break;
+        }
+        case ACT_PREV_PANE: {
+            for (int i = 1; i <= g_mux.pane_count; i++) {
+                int n = (g_mux.active_pane - i + g_mux.pane_count) % g_mux.pane_count;
+                if (g_mux.panes[n].active) { switch_pane(n); break; }
+            }
+            break;
+        }
+        case ACT_CLOSE_PANE: {
+            int c = g_mux.active_pane, n = find_next_active_pane(c);
+            close_pane(c);
+            if (n >= 0 && g_mux.panes[n].active) switch_pane(n);
+            else {
+                int f = 0;
+                for (int i = 0; i < g_mux.pane_count; i++)
+                    if (g_mux.panes[i].active) { switch_pane(i); f = 1; break; }
+                if (!f) g_mux.running = 0;
+            }
+            break;
+        }
+        case ACT_QUIT: {
+            if (g_confirm_on_exit) {
+                dismiss_overlays();
+                g_mux.confirm_exit_mode = 1;
+                g_mux.needs_redraw = 1;
+            } else {
+                g_mux.running = 0;
+            }
+            break;
+        }
+        case ACT_TAB_COLOR_NEXT:
+        case ACT_TAB_COLOR_PREV: {
+            (void)ctrl;
+            if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
+                Pane *p = &g_mux.panes[g_mux.active_pane];
+                if (!p->is_about && !p->is_settings) {
+                    int c = p->color + (action == ACT_TAB_COLOR_PREV ? -1 : 1);
                     if (c > 8) c = 1;
                     if (c < 1) c = 8;
-                    g_mux.panes[g_mux.active_pane].color = c;
+                    p->color = c;
                     g_mux.needs_redraw = 1;
                 }
             }
             break;
         }
-        case 'S': {
-            g_mux.chooser_mode = 0;
-            g_mux.ctx_mode = 0;
-            g_mux.rename_mode = 0;
-            g_mux.custom_cmd_mode = 0;
+        case ACT_SETTINGS: {
+            dismiss_overlays();
             g_mux.help_mode = 0;
             open_settings_pane();
             g_mux.needs_redraw = 1;
             break;
         }
+        case ACT_SELECT_PANE: {
+            if (arg >= 0 && arg < g_mux.pane_count && g_mux.panes[arg].active) switch_pane(arg);
+            break;
+        }
         default:
-            if (vk >= '0' && vk <= '9') { int i = vk - '0'; if (i < g_mux.pane_count && g_mux.panes[i].active) switch_pane(i); }
-            else if (vk >= VK_NUMPAD0 && vk <= VK_NUMPAD9) { int i = vk - VK_NUMPAD0; if (i < g_mux.pane_count && g_mux.panes[i].active) switch_pane(i); }
             break;
     }
+}
+
+void handle_prefix(WORD vk, DWORD ctrl, WCHAR uc) {
+    g_mux.prefix_mode = 0;
+    /* 连按两次前缀键 = 把前缀键本身发给当前 pane */
+    if (keymap_is_prefix(vk, ctrl, uc)) {
+        action_execute(ACT_SEND_PREFIX, 0, ctrl);
+        return;
+    }
+    int arg = 0;
+    int action = keymap_lookup(vk, ctrl, uc, &arg);
+    if (action != ACT_NONE) action_execute(action, arg, ctrl);
 }
 
 static int key_input_modal_active(void) {
@@ -1879,6 +1925,17 @@ void handle_key(KEY_EVENT_RECORD *ke) {
         return;
     }
 
+    if (g_mux.confirm_exit_mode) {
+        if (uc == 'y' || uc == 'Y' || vk == VK_RETURN) {
+            g_mux.confirm_exit_mode = 0;
+            g_mux.running = 0;
+        } else if (uc == 'n' || uc == 'N' || vk == VK_ESCAPE) {
+            g_mux.confirm_exit_mode = 0;
+            g_mux.needs_redraw = 1;
+        }
+        return;
+    }
+
     if (g_mux.palette_mode) {
         handle_palette_key(ke);
         return;
@@ -1927,8 +1984,7 @@ void handle_key(KEY_EVENT_RECORD *ke) {
         return;
     }
 
-    if (!key_input_modal_active() &&
-        ((uc == 0x02) || (vk == 'B' && is_ctrl && !is_alt && !is_shift))) {
+    if (!key_input_modal_active() && keymap_is_prefix(vk, ctrl, uc)) {
         g_mux.prefix_mode = 1;
         return;
     }
@@ -2371,6 +2427,7 @@ void handle_key(KEY_EVENT_RECORD *ke) {
 }
 
 void handle_mouse(MOUSE_EVENT_RECORD *me) {
+    if (!g_mouse_enabled || g_mux.confirm_exit_mode) return;
     int mx = me->dwMousePosition.X, my = me->dwMousePosition.Y;
     log_mouse_event("ev", me);
 
@@ -2749,7 +2806,8 @@ void handle_mouse(MOUSE_EVENT_RECORD *me) {
             }
         } else {
             if (g_mouse_selecting) {
-                if (g_mouse_sel_sx != g_mouse_sel_ex || g_mouse_sel_s_abs_y != g_mouse_sel_e_abs_y) {
+                if (g_copy_on_select &&
+                    (g_mouse_sel_sx != g_mouse_sel_ex || g_mouse_sel_s_abs_y != g_mouse_sel_e_abs_y)) {
                     copy_range_to_clipboard(p, g_mouse_sel_sx, g_mouse_sel_s_abs_y, g_mouse_sel_ex, g_mouse_sel_e_abs_y);
                 }
                 g_mouse_selecting = 0;

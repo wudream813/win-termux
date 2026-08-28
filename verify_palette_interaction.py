@@ -66,11 +66,12 @@ def parse_row(line: str):
                 if body == "0":
                     bg = None
                     fg = None
-                elif body.startswith("48;2;"):
-                    values = [int(v) for v in body[5:].split(";")]
+                elif body.startswith(("48;2;", "048;2;")):
+                    # 界面配色使用零填充写法（主题重映射的判定依据），这里统一按十进制解析
+                    values = [int(v) for v in body.split(";")[2:]]
                     bg = tuple(values[:3])
-                elif body.startswith("38;2;"):
-                    values = [int(v) for v in body[5:].split(";")]
+                elif body.startswith(("38;2;", "038;2;")):
+                    values = [int(v) for v in body.split(";")[2:]]
                     fg = tuple(values[:3])
             i = match.end()
             continue

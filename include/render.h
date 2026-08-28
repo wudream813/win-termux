@@ -6,6 +6,8 @@
 #include "screen.h"
 #include "utf8.h"
 #include "config.h"
+#include "theme.h"
+#include "keymap.h"
 
 #define SETTINGS_SIDEBAR_W 22
 #define RENAME_W 30
@@ -59,7 +61,8 @@ typedef enum {
     PALETTE_ACTION_EDIT_PANEL,
     PALETTE_ACTION_SELECT_TERMINAL,
     PALETTE_ACTION_SELECT_PANEL,
-    PALETTE_ACTION_SELECT_DEFAULT
+    PALETTE_ACTION_SELECT_DEFAULT,
+    PALETTE_ACTION_NEXT_THEME
 } PaletteAction;
 
 typedef struct {
@@ -89,6 +92,8 @@ void render_settings_presets(char *out, int bs, int *posp, int host_rows, int ho
 void presets_geom(int host_rows, int host_cols, int *top, int *left, int *w, int *h, int *max_nw, int *max_cw);
 void render_settings_panel(char *out, int bs, int *posp, int host_rows, int host_cols);
 void render_search_box(char *out, int bs, int *posp, int host_rows, int host_cols);
+void render_confirm_exit(char *out, int bs, int *posp, int host_rows, int host_cols);
+void confirm_exit_geom(int host_rows, int host_cols, int *top, int *left, int *w, int *h);
 void render_command_palette(char *out, int bs, int *posp, int host_rows, int host_cols);
 void palette_geom(int host_rows, int host_cols, int *top, int *left, int *w, int *h);
 int palette_visible_rows(int host_rows);

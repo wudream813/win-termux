@@ -11,6 +11,7 @@
 
 void handle_key(KEY_EVENT_RECORD *ke);
 void handle_mouse(MOUSE_EVENT_RECORD *me);
+void action_execute(int action, int arg, DWORD ctrl);
 void handle_prefix(WORD vk, DWORD ctrl, WCHAR uc);
 void handle_settings_key(KEY_EVENT_RECORD *ke);
 void handle_settings_mouse(MOUSE_EVENT_RECORD *me);

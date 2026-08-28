@@ -7,3 +7,6 @@ mouse_dump.log
 *.exe
 __pycache__/
 *.py[cod]
+
+# 单元测试产物
+.test_config.bin

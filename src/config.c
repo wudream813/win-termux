@@ -7,6 +7,10 @@ int g_settings_nav = 0;
 int g_settings_field = 0;
 int g_settings_table_sel = 0;
 int g_default_startup = 0;
+int g_scrollback_lines = SCROLL_BUF_LINES;
+int g_mouse_enabled = 1;
+int g_copy_on_select = 1;
+int g_confirm_on_exit = 0;
 int g_settings_show_presets = 0;
 int g_preset_sel = 0;
 
@@ -31,6 +35,12 @@ const int g_preset_count = (int)(sizeof(g_presets) / sizeof(g_presets[0]));
 
 void init_default_config(void) {
     g_default_startup = 0;
+    g_scrollback_lines = SCROLL_BUF_LINES;
+    g_mouse_enabled = 1;
+    g_copy_on_select = 1;
+    g_confirm_on_exit = 0;
+    theme_init();
+    keymap_init();
     g_chooser_item_count = 3;
     snprintf(g_chooser_items[0].name, sizeof(g_chooser_items[0].name), "cmd");
     snprintf(g_chooser_items[0].cmd, sizeof(g_chooser_items[0].cmd), "cmd.exe");
@@ -45,56 +55,121 @@ void init_default_config(void) {
     g_chooser_items[2].workdir[0] = 0;
 }
 
-void load_config(void) {
-    init_default_config();
+enum { SEC_COMPAT = 0, SEC_GENERAL, SEC_MENU, SEC_THEME, SEC_KEYS, SEC_IGNORE };
 
+int config_parse_bool(const char *val, int fallback) {
+    if (!val) return fallback;
+    while (*val == ' ' || *val == '\t') val++;
+    if (_strnicmp(val, "true", 4) == 0 || _strnicmp(val, "yes", 3) == 0 ||
+        _strnicmp(val, "on", 2) == 0 || *val == '1') return 1;
+    if (_strnicmp(val, "false", 5) == 0 || _strnicmp(val, "no", 2) == 0 ||
+        _strnicmp(val, "off", 3) == 0 || *val == '0') return 0;
+    return fallback;
+}
+
+/* [general] 段的键；返回 1 表示这一行已被消费。 */
+static int apply_general_key(const char *key, const char *val) {
+    if (_stricmp(key, "default_startup") == 0) { g_default_startup = atoi(val); return 1; }
+    if (_stricmp(key, "theme") == 0)           { theme_set_by_name(val); return 1; }
+    if (_stricmp(key, "prefix") == 0)          { keymap_set_prefix(val); return 1; }
+    if (_stricmp(key, "scrollback") == 0) {
+        int n = atoi(val);
+        if (n < 200) n = 200;
+        if (n > 500000) n = 500000;
+        g_scrollback_lines = n;
+        return 1;
+    }
+    if (_stricmp(key, "mouse") == 0)           { g_mouse_enabled = config_parse_bool(val, 1); return 1; }
+    if (_stricmp(key, "copy_on_select") == 0)  { g_copy_on_select = config_parse_bool(val, 1); return 1; }
+    if (_stricmp(key, "confirm_on_exit") == 0) { g_confirm_on_exit = config_parse_bool(val, 0); return 1; }
+    return 0;
+}
+
+static void resolve_ini_path(WCHAR *out, int out_len, int for_write) {
     WCHAR exe_path[MAX_PATH] = {0};
     GetModuleFileNameW(NULL, exe_path, MAX_PATH);
     WCHAR *last_bs = wcsrchr(exe_path, L'\\');
-    WCHAR ini_path[MAX_PATH] = {0};
     if (last_bs) {
         *last_bs = 0;
-        _snwprintf(ini_path, MAX_PATH - 1, L"%s\\termux.ini", exe_path);
+        _snwprintf(out, out_len - 1, L"%s\\termux.ini", exe_path);
     } else {
-        wcscpy(ini_path, L"termux.ini");
+        wcsncpy(out, L"termux.ini", out_len - 1);
     }
+    if (for_write) return;
+    if (GetFileAttributesW(out) != INVALID_FILE_ATTRIBUTES) return;
+    const WCHAR *prof = _wgetenv(L"USERPROFILE");
+    if (prof) {
+        WCHAR user_ini[MAX_PATH] = {0};
+        _snwprintf(user_ini, MAX_PATH - 1, L"%s\\.termux.ini", prof);
+        if (GetFileAttributesW(user_ini) != INVALID_FILE_ATTRIBUTES)
+            wcsncpy(out, user_ini, out_len - 1);
+    }
+}
+
+static void trim_tail(char *s) {
+    int n = (int)strlen(s);
+    while (n > 0 && ((unsigned char)s[n - 1] <= ' ')) s[--n] = 0;
+}
+
+void load_config(void) {
+    init_default_config();
+
+    WCHAR ini_path[MAX_PATH] = {0};
+    resolve_ini_path(ini_path, MAX_PATH, 0);
 
     FILE *f = _wfopen(ini_path, L"rb");
     if (!f) {
-        const WCHAR *prof = _wgetenv(L"USERPROFILE");
-        if (prof) {
-            WCHAR user_ini[MAX_PATH] = {0};
-            _snwprintf(user_ini, MAX_PATH - 1, L"%s\\.termux.ini", prof);
-            f = _wfopen(user_ini, L"rb");
-        }
-    }
-
-    if (!f) {
         save_config();
+        theme_apply();
         return;
     }
 
     char line[512];
     int parsed_count = 0;
+    int section = SEC_COMPAT;
     while (fgets(line, sizeof(line), f)) {
         char *p = line;
         while (*p == ' ' || *p == '\t') p++;
-        if (!*p || *p == '#' || *p == ';' || *p == '\r' || *p == '\n' || *p == '[') continue;
+        if (!*p || *p == '#' || *p == ';' || *p == '\r' || *p == '\n') continue;
+
+        if (*p == '[') {
+            char name[32] = {0};
+            char *close = strchr(p, ']');
+            if (close) {
+                int len = (int)(close - p - 1);
+                if (len > (int)sizeof(name) - 1) len = (int)sizeof(name) - 1;
+                if (len > 0) memcpy(name, p + 1, len);
+            }
+            if (_stricmp(name, "general") == 0 || _stricmp(name, "settings") == 0) section = SEC_GENERAL;
+            else if (_stricmp(name, "menu") == 0) section = SEC_MENU;
+            else if (_stricmp(name, "theme") == 0) section = SEC_THEME;
+            else if (_stricmp(name, "keys") == 0) section = SEC_KEYS;
+            else section = SEC_IGNORE;
+            continue;
+        }
+
         char *eq = strchr(p, '=');
         if (!eq) continue;
         *eq = 0;
         char *key = p;
         while (*key == ' ' || *key == '\t') key++;
-        int klen = (int)strlen(key);
-        while (klen > 0 && ((unsigned char)key[klen - 1] <= ' ')) key[--klen] = 0;
+        trim_tail(key);
 
         char *val = eq + 1;
         while (*val == ' ' || *val == '\t') val++;
+        trim_tail(val);
 
-        if (_stricmp(key, "default_startup") == 0) {
-            g_default_startup = atoi(val);
+        if (section == SEC_IGNORE) continue;
+        if (section == SEC_THEME) { theme_set_role_hex(key, val); continue; }
+        if (section == SEC_KEYS) {
+            if (_stricmp(key, "prefix") == 0) keymap_set_prefix(val);
+            else keymap_bind(key, val);
             continue;
         }
+        if (section == SEC_GENERAL) { apply_general_key(key, val); continue; }
+        /* SEC_MENU 与无段落的老配置：先认 general 键，再按菜单项解析 */
+        if (section == SEC_COMPAT && apply_general_key(key, val)) continue;
+        if (section == SEC_MENU && _stricmp(key, "default_startup") == 0) { g_default_startup = atoi(val); continue; }
 
         char *comma1 = strchr(val, ',');
         if (!comma1) continue;
@@ -110,47 +185,26 @@ void load_config(void) {
             workdir = comma2 + 1;
             while (*workdir == ' ' || *workdir == '\t') workdir++;
         }
+        trim_tail(name);
+        trim_tail(cmd);
+        trim_tail(workdir);
 
-        int nlen = (int)strlen(name);
-        while (nlen > 0 && ((unsigned char)name[nlen - 1] <= ' ' || name[nlen - 1] == '\r' || name[nlen - 1] == '\n')) name[--nlen] = 0;
-
-        int clen = (int)strlen(cmd);
-        while (clen > 0 && ((unsigned char)cmd[clen - 1] <= ' ' || cmd[clen - 1] == '\r' || cmd[clen - 1] == '\n')) cmd[--clen] = 0;
-
-        int wlen = (int)strlen(workdir);
-        while (wlen > 0 && ((unsigned char)workdir[wlen - 1] <= ' ' || workdir[wlen - 1] == '\r' || workdir[wlen - 1] == '\n')) workdir[--wlen] = 0;
-
-        if (nlen > 0 && clen > 0 && parsed_count < MAX_CHOOSER_ITEMS) {
-            strncpy(g_chooser_items[parsed_count].name, name, sizeof(g_chooser_items[0].name) - 1);
-            g_chooser_items[parsed_count].name[sizeof(g_chooser_items[0].name) - 1] = 0;
-
-            strncpy(g_chooser_items[parsed_count].cmd, cmd, sizeof(g_chooser_items[0].cmd) - 1);
-            g_chooser_items[parsed_count].cmd[sizeof(g_chooser_items[0].cmd) - 1] = 0;
-
-            strncpy(g_chooser_items[parsed_count].workdir, workdir, sizeof(g_chooser_items[0].workdir) - 1);
-            g_chooser_items[parsed_count].workdir[sizeof(g_chooser_items[0].workdir) - 1] = 0;
-
+        if (name[0] && cmd[0] && parsed_count < MAX_CHOOSER_ITEMS) {
+            snprintf(g_chooser_items[parsed_count].name, sizeof(g_chooser_items[0].name), "%s", name);
+            snprintf(g_chooser_items[parsed_count].cmd, sizeof(g_chooser_items[0].cmd), "%s", cmd);
+            snprintf(g_chooser_items[parsed_count].workdir, sizeof(g_chooser_items[0].workdir), "%s", workdir);
             parsed_count++;
         }
     }
     fclose(f);
 
-    if (parsed_count > 0) {
-        g_chooser_item_count = parsed_count;
-    }
+    if (parsed_count > 0) g_chooser_item_count = parsed_count;
+    theme_apply();
 }
 
 void save_config(void) {
-    WCHAR exe_path[MAX_PATH] = {0};
-    GetModuleFileNameW(NULL, exe_path, MAX_PATH);
-    WCHAR *last_bs = wcsrchr(exe_path, L'\\');
     WCHAR ini_path[MAX_PATH] = {0};
-    if (last_bs) {
-        *last_bs = 0;
-        _snwprintf(ini_path, MAX_PATH - 1, L"%s\\termux.ini", exe_path);
-    } else {
-        wcscpy(ini_path, L"termux.ini");
-    }
+    resolve_ini_path(ini_path, MAX_PATH, 1);
 
     FILE *f = _wfopen(ini_path, L"wb");
     if (!f) {
@@ -163,56 +217,94 @@ void save_config(void) {
     }
     if (!f) return;
 
+    char buf[1024];
+    int len;
+
     const char *header =
         "# win-termux 配置文件 (UTF-8)\r\n"
-        "# 格式: 序号 = 菜单显示名称, 启动命令行, 启动目录(可选)\r\n"
-        "# 特殊命令 \":custom\" 表示打开自定义命令行输入框\r\n"
+        "# [general] 全局行为 / [theme] 配色 / [keys] 键位 / [menu] 新建菜单\r\n"
         "\r\n"
-        "[settings]\r\n";
+        "[general]\r\n"
+        "# theme: github-dark | one-dark | nord | gruvbox-dark | dracula\r\n"
+        "# prefix: 前缀键，C- = Ctrl，M- = Alt，S- = Shift，例如 C-a\r\n";
     fwrite(header, 1, strlen(header), f);
 
-    char sline[128];
-    int slen = snprintf(sline, sizeof(sline), "default_startup = %d\r\n\r\n[menu]\r\n", g_default_startup);
-    if (slen > 0) fwrite(sline, 1, slen, f);
+    len = snprintf(buf, sizeof(buf),
+        "theme = %s\r\n"
+        "prefix = %s\r\n"
+        "scrollback = %d\r\n"
+        "mouse = %s\r\n"
+        "copy_on_select = %s\r\n"
+        "confirm_on_exit = %s\r\n"
+        "default_startup = %d\r\n\r\n",
+        theme_name(), keymap_prefix_text(), g_scrollback_lines,
+        g_mouse_enabled ? "true" : "false",
+        g_copy_on_select ? "true" : "false",
+        g_confirm_on_exit ? "true" : "false",
+        g_default_startup);
+    if (len > 0) fwrite(buf, 1, len, f);
 
-    for (int i = 0; i < g_chooser_item_count; i++) {
-        char line[512];
-        int len;
-        if (g_chooser_items[i].workdir[0]) {
-            len = snprintf(line, sizeof(line), "%d = %s, %s, %s\r\n", i + 1, g_chooser_items[i].name, g_chooser_items[i].cmd, g_chooser_items[i].workdir);
-        } else {
-            len = snprintf(line, sizeof(line), "%d = %s, %s\r\n", i + 1, g_chooser_items[i].name, g_chooser_items[i].cmd);
+    const char *theme_hdr =
+        "[theme]\r\n"
+        "# 覆盖单个语义色，取消注释即可生效（16 个角色见 README）\r\n";
+    fwrite(theme_hdr, 1, strlen(theme_hdr), f);
+    if (theme_has_overrides()) {
+        for (int i = 0; i < TH_ROLE_COUNT; i++) {
+            char hex[16];
+            theme_get_override(i, hex, sizeof(hex));
+            if (!hex[0]) continue;
+            len = snprintf(buf, sizeof(buf), "%s = %s\r\n", theme_role_name(i), hex);
+            if (len > 0) fwrite(buf, 1, len, f);
         }
-        if (len > 0) fwrite(line, 1, len, f);
+    } else {
+        const char *sample = "# accent = #58a6ff\r\n# background = #0d1117\r\n";
+        fwrite(sample, 1, strlen(sample), f);
+    }
+    fwrite("\r\n", 1, 2, f);
+
+    const char *keys_hdr =
+        "[keys]\r\n"
+        "# 动作名 = 前缀之后要按的键，例如: new-pane = c\r\n";
+    fwrite(keys_hdr, 1, strlen(keys_hdr), f);
+    if (keymap_has_user_bindings()) {
+        for (int i = 0; i < keymap_user_binding_count(); i++) {
+            len = snprintf(buf, sizeof(buf), "%s = %s\r\n",
+                           keymap_user_binding_action(i), keymap_user_binding_key(i));
+            if (len > 0) fwrite(buf, 1, len, f);
+        }
+    } else {
+        const char *sample =
+            "# command-palette = :\r\n"
+            "# new-pane = c\r\n"
+            "# close-pane = x\r\n"
+            "# next-theme = T\r\n";
+        fwrite(sample, 1, strlen(sample), f);
+    }
+    fwrite("\r\n", 1, 2, f);
+
+    const char *menu_hdr =
+        "[menu]\r\n"
+        "# 序号 = 菜单显示名称, 启动命令行, 启动目录(可选)\r\n"
+        "# 特殊命令 \":custom\" 表示打开自定义命令行输入框\r\n";
+    fwrite(menu_hdr, 1, strlen(menu_hdr), f);
+    for (int i = 0; i < g_chooser_item_count; i++) {
+        if (g_chooser_items[i].workdir[0]) {
+            len = snprintf(buf, sizeof(buf), "%d = %s, %s, %s\r\n", i + 1,
+                           g_chooser_items[i].name, g_chooser_items[i].cmd, g_chooser_items[i].workdir);
+        } else {
+            len = snprintf(buf, sizeof(buf), "%d = %s, %s\r\n", i + 1,
+                           g_chooser_items[i].name, g_chooser_items[i].cmd);
+        }
+        if (len > 0) fwrite(buf, 1, len, f);
     }
     fclose(f);
 }
 
 void open_config_file(void) {
     WCHAR ini_path[MAX_PATH] = {0};
-    WCHAR exe_path[MAX_PATH] = {0};
-    GetModuleFileNameW(NULL, exe_path, MAX_PATH);
-    WCHAR *last_bs = wcsrchr(exe_path, L'\\');
-    if (last_bs) {
-        *last_bs = 0;
-        _snwprintf(ini_path, MAX_PATH - 1, L"%s\\termux.ini", exe_path);
-    } else {
-        wcscpy(ini_path, L"termux.ini");
-    }
-
-    /* load_config() creates the executable-side file when possible.  If the
-     * installation directory is read-only, follow the same USERPROFILE
-     * fallback used by save_config(). */
-    if (GetFileAttributesW(ini_path) == INVALID_FILE_ATTRIBUTES) {
-        const WCHAR *prof = _wgetenv(L"USERPROFILE");
-        if (prof) {
-            WCHAR user_ini[MAX_PATH] = {0};
-            _snwprintf(user_ini, MAX_PATH - 1, L"%s\\.termux.ini", prof);
-            if (GetFileAttributesW(user_ini) != INVALID_FILE_ATTRIBUTES)
-                wcsncpy(ini_path, user_ini, MAX_PATH - 1);
-        }
-    }
-
+    /* load_config() 会在可写时于 exe 同目录生成配置；只读安装目录时回退到
+     * USERPROFILE，这里沿用同一套查找顺序。 */
+    resolve_ini_path(ini_path, MAX_PATH, 0);
     ShellExecuteW(NULL, L"open", ini_path, NULL, NULL, SW_SHOWNORMAL);
 }
 

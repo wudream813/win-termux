@@ -131,7 +131,7 @@ void pad_to_right_border(char *out, int bs, int *posp, int *colsp, int target_w)
         out[pos++] = ' ';
         cols++;
     }
-    pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[48;2;33;38;45m│\x1b[0m");
+    pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[048;2;033;038;045m│\x1b[0m");
     cols++;
     *posp = pos;
     *colsp = cols;
@@ -482,7 +482,7 @@ void render_scrollable_input(char *out, int bs, int *posp,
     const char *bg = (bg_sgr && bg_sgr[0]) ? bg_sgr : "";
 
     if (total_cols <= vis_width) {
-        pos += snprintf(out + pos, bs - pos, "%s\x1b[38;2;230;237;243m", bg);
+        pos += snprintf(out + pos, bs - pos, "%s\x1b[038;2;230;237;243m", bg);
         for (int p = 0; p < len && pos < bs - 8; p++) out[pos++] = buf[p];
         int used = total_cols;
         while (used < vis_width && pos < bs - 8) { out[pos++] = ' '; used++; }
@@ -508,7 +508,7 @@ void render_scrollable_input(char *out, int bs, int *posp,
 
     int text_slots = vis_width;
     if (has_left) {
-        pos += snprintf(out + pos, bs - pos, "%s\x1b[38;2;210;153;34;1m<\x1b[22m", bg);
+        pos += snprintf(out + pos, bs - pos, "%s\x1b[038;2;210;153;034;1m<\x1b[22m", bg);
         text_slots--;
     }
     if (has_right) {
@@ -539,7 +539,7 @@ void render_scrollable_input(char *out, int bs, int *posp,
 
     int rendered_cols = 0;
     p = start_byte;
-    pos += snprintf(out + pos, bs - pos, "%s\x1b[38;2;230;237;243m", bg);
+    pos += snprintf(out + pos, bs - pos, "%s\x1b[038;2;230;237;243m", bg);
     while (p < end_byte && pos < bs - 16) {
         int adv = 0;
         unsigned int cp = utf8_decode_cp(buf + p, end_byte - p, &adv);
@@ -555,7 +555,7 @@ void render_scrollable_input(char *out, int bs, int *posp,
     }
 
     if (has_right) {
-        pos += snprintf(out + pos, bs - pos, "%s\x1b[38;2;210;153;34;1m>\x1b[22m", bg);
+        pos += snprintf(out + pos, bs - pos, "%s\x1b[038;2;210;153;034;1m>\x1b[22m", bg);
     }
     pos += snprintf(out + pos, bs - pos, "\x1b[0m");
 

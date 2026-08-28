@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parent
 RENDER = (ROOT / "src/render.c").read_text(encoding="utf-8")
 INPUT = (ROOT / "src/input.c").read_text(encoding="utf-8")
 UTF8 = (ROOT / "src/utf8.c").read_text(encoding="utf-8")
+KEYMAP = (ROOT / "src/keymap.c").read_text(encoding="utf-8")
 
 errors = []
 
@@ -193,7 +194,7 @@ check("palette_push_page" not in domain_switch and "g_mux.palette_page = page;" 
       "两类命令面板互跳错误地增长弹窗栈或没有切换页面")
 check("g_mux.palette_page = settings_active ? PALETTE_PAGE_SETTINGS : PALETTE_PAGE_OPERATIONS;" in INPUT,
       "普通页面没有直接打开操作命令面板")
-check("uc == 0xFF1A" in INPUT,
+check("CHR(0xFF1A)" in KEYMAP,
       "命令面板快捷键没有兼容中文全角冒号 U+FF1A")
 check("out->color = (g_mux.panes[i].color >= 0 && g_mux.panes[i].color <= 8)" in RENDER and
       "item->color >= 0 && item->color <= 8" in RENDER,
@@ -208,7 +209,7 @@ check("int interior_cols = 2 + 4 * 4;" in RENDER and
 check("const char *swatch_bg = TAB_COLOR_BG[color];" in RENDER and
       "render_color_picker_cell(out, bs, &pos, swatch_bg" in RENDER,
       "颜色选择器色块背景没有逐单元格绑定到对应颜色")
-check('"\\x1b[0m\\x1b[48;2;33;38;45m "' not in RENDER,
+check('"\\x1b[0m\\x1b[048;2;033;038;045m "' not in RENDER,
       "颜色选择器仍使用旧的额外背景空格切换")
 check("palette_push_page(PALETTE_PAGE_MENU_SETTINGS);" in INPUT,
       "菜单项设置没有进入子面板")
@@ -268,8 +269,8 @@ check("render_scrollable_input(out, bs, &pos, g_mux.custom_cmd_buf" in RENDER an
 check("render_scrollable_input(out, bs, &pos, g_mux.rename_buf" in RENDER and
       "RENAME_W - 3, TB_BG, NULL" in RENDER,
       "重命名输入框没有使用连续背景渲染")
-check("%s \\x1b[0m\\x1b[48;2;33;38;45m│\\x1b[0m\", f0_bg" in RENDER and
-      "%s \\x1b[0m\\x1b[48;2;33;38;45m│\\x1b[0m\", field_bg" in RENDER,
+check("%s \\x1b[0m\\x1b[048;2;033;038;045m│\\x1b[0m\", f0_bg" in RENDER and
+      "%s \\x1b[0m\\x1b[048;2;033;038;045m│\\x1b[0m\", field_bg" in RENDER,
       "输入框末尾空白单元格没有继承字段背景")
 
 if errors:

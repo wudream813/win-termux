@@ -1,4 +1,5 @@
 #include "screen.h"
+#include "config.h"
 
 int screen_ensure_line(ScreenBuffer *s, int pr) {
     if (!s->lines || pr < 0 || pr >= s->total_lines) return 0;
@@ -36,7 +37,7 @@ int screen_init(ScreenBuffer *s, int cols, int rows) {
     if (rows < 1) rows = 1;
     s->cols = cols;
     s->rows = rows;
-    s->total_lines = rows + SCROLL_BUF_LINES;
+    s->total_lines = rows + g_scrollback_lines;
     s->current_attr = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
     s->fg_color = 7;
     s->bg_color = 0;
@@ -182,7 +183,8 @@ void screen_scroll_up(ScreenBuffer *s, int top, int bottom, int count) {
     if (top == 0 && bottom == s->rows - 1) {
         int old_hist = s->hist_lines;
         s->hist_lines += count;
-        if (s->hist_lines > SCROLL_BUF_LINES) s->hist_lines = SCROLL_BUF_LINES;
+        int hist_cap = s->total_lines - s->rows;
+        if (s->hist_lines > hist_cap) s->hist_lines = hist_cap;
         int dropped = (old_hist + count) - s->hist_lines;
 
         int pi = s->pane_index;
@@ -383,7 +385,7 @@ int screen_resize(ScreenBuffer *s, int nc, int nr) {
     if (nc == s->cols && nr == s->rows) return 1;
     if (nc < 1) nc = 1;
     if (nr < 1) nr = 1;
-    int nt = nr + SCROLL_BUF_LINES;
+    int nt = nr + g_scrollback_lines;
 
     ScreenLine *nl = (ScreenLine *)calloc(nt, sizeof(ScreenLine));
     CHAR_INFO *na = (CHAR_INFO *)calloc(nr * nc, sizeof(CHAR_INFO));
@@ -405,7 +407,9 @@ int screen_resize(ScreenBuffer *s, int nc, int nr) {
     int nst = 0;
 
     int old_hist = s->hist_lines;
-    if (old_hist > SCROLL_BUF_LINES) old_hist = SCROLL_BUF_LINES;
+    int old_cap = s->total_lines - s->rows;
+    if (old_hist > old_cap) old_hist = old_cap;
+    if (old_hist > nt - nr) old_hist = nt - nr;
 
     // Migrate history lines that were allocated
     for (int h = 1; h <= old_hist; h++) {
@@ -500,7 +504,7 @@ int screen_resize(ScreenBuffer *s, int nc, int nr) {
     s->total_lines = nt;
     s->scroll_top = nst;
     s->hist_lines = old_hist;
-    if (s->alt_hist_lines > SCROLL_BUF_LINES) s->alt_hist_lines = SCROLL_BUF_LINES;
+    if (s->alt_hist_lines > nt - nr) s->alt_hist_lines = nt - nr;
     if (s->cursor_x >= nc) s->cursor_x = nc - 1;
     if (s->cursor_y >= nr) s->cursor_y = nr - 1;
     s->scroll_region_top = 0; s->scroll_region_bottom = nr - 1;

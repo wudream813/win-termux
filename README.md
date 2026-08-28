@@ -5,7 +5,7 @@
 Windows 终端复用器（Terminal Multiplexer）—— 模块化 C 架构，基于 Windows ConPTY。
 在 Windows 控制台里管理多个 cmd / PowerShell 会话，像 tmux 一样分标签页。
 
-当前版本：**v1.8.3**
+当前版本：**v1.9.0**
 
 > ⚠️ **警告 / 注意事项**：
 > 控制台终端**必须配置使用等宽字体**（Monospace Font，例如 *Cascadia Code*、*Consolas*、*JetBrains Mono*、*Fira Code* 等）。
@@ -21,6 +21,9 @@ Windows 终端复用器（Terminal Multiplexer）—— 模块化 C 架构，基
 - **Alt 屏幕支持**：nano / vim 等全屏编辑器正常使用，退出后历史完整保留
 - **内置帮助**：点击左上角 `termux` 徽标查看
 - **分层命令面板**：仅通过 `Ctrl+B :` 打开（同时兼容中文全角冒号 `：`）；普通终端直接进入“操作命令面板”，设置页直接进入“设置命令面板”。每次最多显示 9 个结果，当前窗口始终重新编号为 `1`～`9`；Tab 在搜索输入框与结果选择框之间切换，输入焦点下数字会继续搜索，结果焦点下数字选择当前可见项。操作面板支持新建终端（子面板内可按名称/命令搜索）、自定义命令行、标题/颜色、历史搜索、panel 切换（按编号或标题并显示颜色）、复制模式、热重载、打开图形化设置、独立 About panel、关闭当前 panel、退出整个 termux，并可切换到设置命令面板；设置面板包含打开操作命令面板、默认启动项、打开 `.ini`、添加 panel 条目（预设/自定义后继续编辑）与菜单项设置。菜单项设置子面板只管理已有条目：Enter 编辑、`Ctrl+↑/↓` 调整位置（搜索期间禁用）、无查询时结果焦点下 `X` 删除；搜索输入焦点下 `U/D` 仍是普通查询字符，有查询时使用 `Ctrl+X` 删除；添加 panel 仍从设置面板的独立入口执行。Esc 返回子面板时会恢复父面板的选择、滚动位置和查询上下文。
+- **可配置的键位**：前缀键（默认 `Ctrl+B`）与每个动作的按键都能在 `termux.ini` 的 `[keys]` 段里改；帮助页显示的快捷键跟着配置实时变化
+- **配色主题**：内置 `github-dark` / `one-dark` / `nord` / `gruvbox-dark` / `dracula`，也可在 `[theme]` 段按语义角色单独覆盖任意一种颜色；`Ctrl+B` → 设置命令面板 → 切换配色主题 可即时轮换
+- **行为开关**：`scrollback` 滚动行数、`mouse` 鼠标开关、`copy_on_select` 拖选自动复制、`confirm_on_exit` 退出二次确认
 - **诊断日志**：`TERMUX_DUMP=1` 时输出原始 ConPTY 流 / 渲染输出 / 鼠标事件
 
 ## 快捷键
@@ -40,6 +43,8 @@ Windows 终端复用器（Terminal Multiplexer）—— 模块化 C 架构，基
 | `Ctrl+B d` | 退出 termux |
 | `Ctrl+B t` / `Shift+t` | 轮换标签颜色 |
 | `Ctrl+B 0-9` | 跳转到 pane（支持主键盘与小键盘数字） |
+
+> 上表是默认键位；前缀键与每个动作的按键都可以在 `termux.ini` 的 `[keys]` 段里改，见下文。
 
 ## 鼠标操作
 
@@ -77,24 +82,82 @@ termux.exe
 
 ## ⚙️ 配置文件 (termux.ini)
 
-`termux` 支持通过 `termux.ini` 配置文件自定义 **[+] 新建菜单** 中的条目、顺序与启动命令。
-
 - **配置文件路径**：优先读取 `termux.exe` 所在目录下的 `termux.ini`；若不存在则读取 `%USERPROFILE%\.termux.ini`。首次启动会自动生成默认配置文件。
-- **配置示例**：
-  ```ini
-  # win-termux 配置文件 (UTF-8)
-  # 格式: 序号 = 菜单显示名称, 启动命令行
-  # 特殊命令 ":custom" 表示打开自定义命令行输入框
+- **热重载**：`Ctrl+B r`（或命令面板的“热重载”）即时生效。`scrollback` 只对之后新建的 pane 生效，其余项立即生效。
+- 配置文件分四段：`[general]` 行为、`[theme]` 配色、`[keys]` 键位、`[menu]` 新建菜单。
 
-  [menu]
-  1 = cmd, cmd.exe
-  2 = PowerShell, powershell.exe
-  3 = 自定义命令行, :custom
-  # 自定义示例 (取消注释即可启用，支持 1-9 项，按数字键或鼠标点击直接启动):
-  # 4 = WSL Ubuntu, wsl.exe -d Ubuntu
-  # 5 = Git Bash, "C:\Program Files\Git\bin\bash.exe" --login -i
-  # 6 = Python, python -i
-  ```
+```ini
+# win-termux 配置文件 (UTF-8)
+
+[general]
+theme = github-dark        # github-dark | one-dark | nord | gruvbox-dark | dracula
+prefix = C-b               # 前缀键：C- = Ctrl，M- = Alt，S- = Shift
+scrollback = 10000         # 每个 pane 的滚动历史行数 (200 - 500000)
+mouse = true               # 关掉后标签点击 / 拖选 / 滚轮全部停用
+copy_on_select = true      # 鼠标拖选松开时自动复制到剪贴板
+confirm_on_exit = false    # 退出 termux 前弹出 Y/N 二次确认
+default_startup = 0        # 0 = 启动进终端，1 = 启动显示帮助
+
+[theme]
+# 按语义角色覆盖任意颜色，只写想改的那几行即可
+# accent = #58a6ff
+# background = #0d1117
+
+[keys]
+# 动作名 = 前缀之后要按的键
+# new-pane = c
+# next-theme = T
+
+[menu]
+# 序号 = 菜单显示名称, 启动命令行, 启动目录(可选)
+# 特殊命令 ":custom" 表示打开自定义命令行输入框
+1 = cmd, cmd.exe
+2 = PowerShell, powershell.exe
+3 = 自定义命令行, :custom
+# 4 = WSL Ubuntu, wsl.exe -d Ubuntu
+# 5 = Git Bash, "C:\Program Files\Git\bin\bash.exe" --login -i
+# 6 = 项目终端, cmd.exe, D:\work\myproject
+```
+
+### `[keys]` 可绑定的动作
+
+| 动作名 | 说明 | 默认键位 |
+|---|---|---|
+| `send-prefix` | 把前缀键本身发给当前 pane | 连按两次前缀键 |
+| `command-palette` | 打开命令面板 | `:` |
+| `new-pane` | 新建默认 pane | `c` |
+| `new-pane-menu` | 新建 pane 菜单 | `+` |
+| `copy-mode` | 进入复制模式 | `[` |
+| `search` | 搜索滚动历史 | `/` |
+| `settings` | 打开图形化设置 | `s` |
+| `reload-config` | 热重载配置 | `r` |
+| `help` | 打开 / 关闭帮助 | `?` / `h` |
+| `next-pane` / `prev-pane` | 下一个 / 上一个 pane | `n` / `p` |
+| `close-pane` | 关闭当前 pane | `x` |
+| `quit` | 退出 termux | `d` |
+| `tab-color-next` / `tab-color-prev` | 轮换标签颜色 | `t` / `Shift+t` |
+| `select-pane` | 按编号跳转 pane | `0`-`9` |
+| `next-theme` | 切换下一个配色主题 | 未绑定 |
+
+键位写法：`C-` = Ctrl，`M-`（或 `A-`）= Alt，`S-` = Shift；键名支持单个字符、`F1`-`F24`、
+`Space` / `Tab` / `Enter` / `Esc` / `Backspace` / `Up` / `Down` / `Left` / `Right` /
+`Home` / `End` / `PgUp` / `PgDn` / `Ins` / `Del`。例如 `prefix = C-a`、`new-pane = F2`、
+`close-pane = M-w`。给某个动作写了绑定，它的默认键位就会被顶掉。
+
+### `[theme]` 的 16 个语义角色
+
+| 角色名 | 用途 | 角色名 | 用途 |
+|---|---|---|---|
+| `background` | 最深背景 / 亮底上的文字 | `accent` | 主强调色（活动标签、边框） |
+| `tabbar` | 标签栏背景 | `cyan` | 信息色 / 浅蓝 |
+| `panel` | 面板与弹窗背景 | `green` / `green_dark` | 成功、绿色标签 |
+| `foreground` | 主文字 | `red` | 危险、关闭按钮 |
+| `foreground_dim` | 次要文字 | `orange` / `yellow` | 提示、当前匹配 |
+| `white` | 高亮文字 | `purple` / `pink` | 品牌色与彩色标签 |
+| `selection` | 选区底色 | | |
+
+界面里所有派生色（各种暗色标签底、hover 底色）都由这 16 个角色按固定比例混合得出，
+所以只改 `accent` 一行，活动标签、边框、选中行会一起跟着变。
 
 ## 系统要求
 
@@ -109,6 +172,14 @@ termux.exe
 
 ```bash
 python3 verify_all.py
+```
+
+主题与键位模块不依赖任何 Win32 调用，可以直接在本机（含 Linux CI）编译执行真正的 C 单元测试：
+
+```bash
+make unittest
+# 等价于
+gcc -Wall -Wextra -Werror -Itests/stub -Iinclude src/theme.c src/keymap.c tests/test_config.c -o test_config && ./test_config
 ```
 
 也可以单独运行验证脚本：
@@ -126,6 +197,7 @@ python3 verify_input_layout.py     # 输入框背景/末尾字符/光标列回�
 python3 verify_cursor_render.py    # 终端输出区域最后一格光标回归
 python3 verify_menu_settings.py    # 菜单项设置排序/搜索禁用/删除/模态输入回归
 python3 verify_palette_interaction.py # 命令面板焦点/9 项编号/Esc 快照/颜色单元格回归
+python3 verify_config_theme.py     # 配置体系：主题参考色板完整性 + keymap/theme C 单元测试
 ```
 
 

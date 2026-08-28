@@ -7,6 +7,7 @@
 #include "utf8.h"
 #include "config.h"
 #include "vt.h"
+#include "theme.h"
 
 int create_pane(void);
 int create_pane_shell(const WCHAR *shell);

@@ -270,7 +270,12 @@ int main(void) {
     SetConsoleCtrlHandler(ctrl_handler, TRUE);
     load_config();
 
-    host_printf("\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[2J\x1b[H\x1b[?25l");
+    /* mouse = false 时既不申请控制台鼠标事件，也不打开 VT 鼠标追踪 */
+    if (!g_mouse_enabled) SetConsoleMode(g_mux.hIn, im & ~(DWORD)ENABLE_MOUSE_INPUT);
+    if (g_mouse_enabled)
+        host_printf("\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[2J\x1b[H\x1b[?25l");
+    else
+        host_printf("\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l");
     g_mux.running = 1;
     int first = create_pane();
     if (first < 0) {

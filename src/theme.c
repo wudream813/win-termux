@@ -1,0 +1,263 @@
+#include "theme.h"
+
+/* ---------------------------------------------------------------------------
+ * 内置主题
+ * 每个主题只需要给出 16 个语义角色色，其余 30 多个界面用色由参考表按
+ * 「角色 + 底色 + 混合比例」自动派生。
+ * ------------------------------------------------------------------------- */
+
+#define C(r, g, b) {(unsigned char)(r), (unsigned char)(g), (unsigned char)(b)}
+
+const ThemeDef g_builtin_themes[] = {
+    {"github-dark", {
+        C( 13,  17,  23), C( 22,  27,  34), C( 33,  38,  45), C(230, 237, 243),
+        C(139, 148, 158), C(255, 255, 255), C( 31, 111, 235), C(121, 192, 255),
+        C( 63, 185,  80), C( 31, 136,  61), C(248,  81,  73), C(217, 119,  54),
+        C(210, 153,  34), C(137,  87, 229), C(205,  93, 173), C( 38,  75, 110),
+    }},
+    {"one-dark", {
+        C( 33,  37,  43), C( 40,  44,  52), C( 51,  56,  66), C(171, 178, 191),
+        C( 92,  99, 112), C(255, 255, 255), C( 97, 175, 239), C( 86, 182, 194),
+        C(152, 195, 121), C(109, 151,  86), C(224, 108, 117), C(209, 154, 102),
+        C(229, 192, 123), C(198, 120, 221), C(224, 108, 169), C( 62,  68,  81),
+    }},
+    {"nord", {
+        C( 46,  52,  64), C( 59,  66,  82), C( 67,  76,  94), C(216, 222, 233),
+        C(136, 146, 167), C(236, 239, 244), C( 94, 129, 172), C(136, 192, 208),
+        C(163, 190, 140), C(122, 145, 105), C(191,  97, 106), C(208, 135, 112),
+        C(235, 203, 139), C(180, 142, 173), C(191, 132, 181), C( 76,  86, 106),
+    }},
+    {"gruvbox-dark", {
+        C( 29,  32,  33), C( 40,  40,  40), C( 60,  56,  54), C(235, 219, 178),
+        C(168, 153, 132), C(251, 241, 199), C( 69, 133, 136), C(131, 165, 152),
+        C(152, 151,  26), C(121, 116,  14), C(204,  36,  29), C(214,  93,  14),
+        C(215, 153,  33), C(177,  98, 134), C(211, 134, 155), C( 80,  73,  69),
+    }},
+    {"dracula", {
+        C( 33,  34,  44), C( 40,  42,  54), C( 68,  71,  90), C(248, 248, 242),
+        C( 98, 114, 164), C(255, 255, 255), C(189, 147, 249), C(139, 233, 253),
+        C( 80, 250, 123), C( 60, 180,  95), C(255,  85,  85), C(255, 184, 108),
+        C(241, 250, 140), C(189, 147, 249), C(255, 121, 198), C( 68,  71,  90),
+    }},
+};
+const int g_builtin_theme_count = (int)(sizeof(g_builtin_themes) / sizeof(g_builtin_themes[0]));
+
+/* ---------------------------------------------------------------------------
+ * 参考色板：render.c / utf8.c / pane.c 中出现的每一个 UI 颜色
+ * out = base + mix% * (role - base)
+ * ------------------------------------------------------------------------- */
+typedef struct {
+    unsigned char r, g, b;      /* github-dark 下的原始值（即字面量中的值） */
+    unsigned char role, base, mix;
+} ThemeRef;
+
+static const ThemeRef g_theme_refs[] = {
+    { 13,  17,  23, TH_BG0,        TH_BG0,   100},
+    { 22,  27,  34, TH_BG1,        TH_BG1,   100},
+    { 33,  38,  45, TH_BG2,        TH_BG2,   100},
+    { 27,  33,  44, TH_BG2,        TH_BG1,    80},
+    {230, 237, 243, TH_FG,         TH_FG,    100},
+    {139, 148, 158, TH_FG_DIM,     TH_FG_DIM, 100},
+    {110, 118, 129, TH_FG_DIM,     TH_BG1,    78},
+    { 48,  54,  61, TH_FG_DIM,     TH_BG2,    16},
+    {255, 255, 255, TH_WHITE,      TH_WHITE, 100},
+    { 31, 111, 235, TH_ACCENT,     TH_ACCENT, 100},
+    { 22,  62, 128, TH_ACCENT,     TH_BG1,    45},
+    { 38,  50,  68, TH_ACCENT,     TH_BG2,    15},
+    { 38,  60,  88, TH_ACCENT,     TH_BG2,    25},
+    { 48,  75, 110, TH_ACCENT,     TH_BG2,    35},
+    {121, 192, 255, TH_CYAN,       TH_CYAN,  100},
+    { 52,  96, 128, TH_CYAN,       TH_BG1,    40},
+    { 45,  55,  72, TH_CYAN,       TH_BG2,    12},
+    {140, 205, 255, TH_CYAN,       TH_WHITE,  85},
+    {225, 235, 250, TH_CYAN,       TH_WHITE,  20},
+    { 88, 166, 255, TH_CYAN,       TH_ACCENT, 60},
+    { 63, 185,  80, TH_GREEN,      TH_GREEN, 100},
+    { 36,  99,  49, TH_GREEN,      TH_BG1,    50},
+    { 31, 136,  61, TH_GREEN_DARK, TH_GREEN_DARK, 100},
+    { 24,  80,  48, TH_GREEN_DARK, TH_BG1,    50},
+    {248,  81,  73, TH_RED,        TH_RED,   100},
+    {217, 119,  54, TH_ORANGE,     TH_ORANGE, 100},
+    {112,  66,  34, TH_ORANGE,     TH_BG1,    46},
+    {210, 153,  34, TH_YELLOW,     TH_YELLOW, 100},
+    {110,  82,  30, TH_YELLOW,     TH_BG1,    47},
+    {137,  87, 229, TH_PURPLE,     TH_PURPLE, 100},
+    { 74,  48, 122, TH_PURPLE,     TH_BG1,    45},
+    {163, 113, 247, TH_PURPLE,     TH_WHITE,  78},
+    {205,  93, 173, TH_PINK,       TH_PINK,  100},
+    {104,  50,  90, TH_PINK,       TH_BG1,    45},
+};
+static const int g_theme_ref_count = (int)(sizeof(g_theme_refs) / sizeof(g_theme_refs[0]));
+
+static const char *const g_role_names[TH_ROLE_COUNT] = {
+    "background", "tabbar", "panel", "foreground",
+    "foreground_dim", "white", "accent", "cyan",
+    "green", "green_dark", "red", "orange",
+    "yellow", "purple", "pink", "selection"
+};
+
+/* ---------------------------------------------------------------------------
+ * 运行时状态
+ * ------------------------------------------------------------------------- */
+typedef struct {
+    unsigned char from_r, from_g, from_b;
+    char to[12];                 /* "RRR;GGG;BBB" 定长 11 字节，等长替换 */
+} ThemeMapEntry;
+
+static int g_theme_idx = 0;
+static ThemeRGB g_roles[TH_ROLE_COUNT];
+static unsigned char g_override_set[TH_ROLE_COUNT];
+static ThemeRGB g_override_val[TH_ROLE_COUNT];
+static ThemeMapEntry g_map[sizeof(g_theme_refs) / sizeof(g_theme_refs[0])];
+static int g_map_count = 0;
+static int g_identity = 1;
+
+static unsigned char blend_ch(int role_v, int base_v, int mix) {
+    int v = base_v + (role_v - base_v) * mix / 100;
+    if (v < 0) v = 0;
+    if (v > 255) v = 255;
+    return (unsigned char)v;
+}
+
+void theme_init(void) {
+    g_theme_idx = 0;
+    memset(g_override_set, 0, sizeof(g_override_set));
+    memset(g_override_val, 0, sizeof(g_override_val));
+    theme_apply();
+}
+
+int theme_set_by_name(const char *name) {
+    if (!name || !*name) return 0;
+    for (int i = 0; i < g_builtin_theme_count; i++) {
+        if (_stricmp(name, g_builtin_themes[i].name) == 0) {
+            g_theme_idx = i;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int theme_role_index(const char *role_name) {
+    if (!role_name) return -1;
+    for (int i = 0; i < TH_ROLE_COUNT; i++)
+        if (_stricmp(role_name, g_role_names[i]) == 0) return i;
+    return -1;
+}
+
+const char *theme_role_name(int role) {
+    if (role < 0 || role >= TH_ROLE_COUNT) return "";
+    return g_role_names[role];
+}
+
+static int hex_nib(int c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+int theme_set_role_hex(const char *role_name, const char *hex) {
+    int role = theme_role_index(role_name);
+    if (role < 0 || !hex) return 0;
+    while (*hex == ' ' || *hex == '\t' || *hex == '#') hex++;
+    int v[6];
+    for (int i = 0; i < 6; i++) {
+        v[i] = hex_nib((unsigned char)hex[i]);
+        if (v[i] < 0) return 0;
+    }
+    /* 第 7 个字符必须是结束或空白，避免 "#1234567" 这类脏值被接受 */
+    if (hex[6] && hex[6] != ' ' && hex[6] != '\t' && hex[6] != '\r' && hex[6] != '\n') return 0;
+    g_override_set[role] = 1;
+    g_override_val[role].r = (unsigned char)(v[0] * 16 + v[1]);
+    g_override_val[role].g = (unsigned char)(v[2] * 16 + v[3]);
+    g_override_val[role].b = (unsigned char)(v[4] * 16 + v[5]);
+    return 1;
+}
+
+void theme_apply(void) {
+    const ThemeDef *def = &g_builtin_themes[g_theme_idx];
+    for (int i = 0; i < TH_ROLE_COUNT; i++)
+        g_roles[i] = g_override_set[i] ? g_override_val[i] : def->role[i];
+
+    g_map_count = 0;
+    g_identity = 1;
+    for (int i = 0; i < g_theme_ref_count; i++) {
+        const ThemeRef *ref = &g_theme_refs[i];
+        const ThemeRGB *role = &g_roles[ref->role];
+        const ThemeRGB *base = &g_roles[ref->base];
+        unsigned char r = blend_ch(role->r, base->r, ref->mix);
+        unsigned char g = blend_ch(role->g, base->g, ref->mix);
+        unsigned char b = blend_ch(role->b, base->b, ref->mix);
+        if (r != ref->r || g != ref->g || b != ref->b) g_identity = 0;
+        ThemeMapEntry *e = &g_map[g_map_count++];
+        e->from_r = ref->r; e->from_g = ref->g; e->from_b = ref->b;
+        snprintf(e->to, sizeof(e->to), "%03u;%03u;%03u",
+                 (unsigned)r, (unsigned)g, (unsigned)b);
+    }
+}
+
+void theme_role_rgb(int role, int *r, int *g, int *b) {
+    if (role < 0 || role >= TH_ROLE_COUNT) { if (r) *r = 0; if (g) *g = 0; if (b) *b = 0; return; }
+    if (r) *r = g_roles[role].r;
+    if (g) *g = g_roles[role].g;
+    if (b) *b = g_roles[role].b;
+}
+
+WORD theme_role_rgb565(int role) {
+    int r, g, b;
+    theme_role_rgb(role, &r, &g, &b);
+    return rgb565(r, g, b);
+}
+
+static int digits3(const char *p) {
+    return p[0] >= '0' && p[0] <= '9' && p[1] >= '0' && p[1] <= '9' && p[2] >= '0' && p[2] <= '9';
+}
+
+static int num3(const char *p) {
+    return (p[0] - '0') * 100 + (p[1] - '0') * 10 + (p[2] - '0');
+}
+
+/* 等长就地替换：只命中 "038;2;RRR;GGG;BBB" / "048;2;RRR;GGG;BBB" 形式。
+ * pane 内容里的颜色由 %d 输出（"38;2;121;192;255"），不带前导零的 038/048
+ * 前缀，因此永远不会被误改。 */
+void theme_remap(char *buf, int len) {
+    if (g_identity || !buf || len < 17) return;
+    for (int i = 0; i + 17 <= len; i++) {
+        if (buf[i] != '0') continue;
+        if (buf[i + 1] != '3' && buf[i + 1] != '4') continue;
+        if (buf[i + 2] != '8' || buf[i + 3] != ';' || buf[i + 4] != '2' || buf[i + 5] != ';') continue;
+        char *p = buf + i + 6;
+        if (!digits3(p) || p[3] != ';' || !digits3(p + 4) || p[7] != ';' || !digits3(p + 8)) continue;
+        char term = p[11];
+        if (term != 'm' && term != ';') continue;
+        int r = num3(p), g = num3(p + 4), b = num3(p + 8);
+        for (int k = 0; k < g_map_count; k++) {
+            if (g_map[k].from_r == r && g_map[k].from_g == g && g_map[k].from_b == b) {
+                memcpy(p, g_map[k].to, 11);
+                break;
+            }
+        }
+        i += 16;
+    }
+}
+
+const char *theme_name(void) { return g_builtin_themes[g_theme_idx].name; }
+int theme_index(void) { return g_theme_idx; }
+int theme_count(void) { return g_builtin_theme_count; }
+const char *theme_name_at(int idx) {
+    if (idx < 0 || idx >= g_builtin_theme_count) return "";
+    return g_builtin_themes[idx].name;
+}
+
+int theme_has_overrides(void) {
+    for (int i = 0; i < TH_ROLE_COUNT; i++) if (g_override_set[i]) return 1;
+    return 0;
+}
+
+void theme_get_override(int role, char *out_hex, int out_size) {
+    if (!out_hex || out_size <= 0) return;
+    out_hex[0] = 0;
+    if (role < 0 || role >= TH_ROLE_COUNT || !g_override_set[role]) return;
+    snprintf(out_hex, out_size, "#%02x%02x%02x",
+             g_override_val[role].r, g_override_val[role].g, g_override_val[role].b);
+}
