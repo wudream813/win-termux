@@ -211,20 +211,20 @@ check("%s%s%s\", bg," in _item_row and "038;2;139;148;158m" in _item_row,
 check("palette_bg_for_color" not in RENDER,
       "未使用的 palette_bg_for_color 应当已经删除")
 
-# v1.8.8: 滚轮先滚页面，滚不动了才挪光标 / 选中项。
+# v1.8.8: 命令面板滚轮只滚页面，选中项整体平移、相对位置不变。
 _pal_mouse = INPUT[INPUT.find("void handle_palette_mouse"):]
 _pal_wheel = _pal_mouse[:_pal_mouse.find("int r = my + 1;")]
 check("g_mux.palette_scroll +=" in _pal_wheel,
       "命令面板滚轮没有直接滚动列表窗口")
-check("if (g_mux.palette_scroll == before)" in _pal_wheel and "g_mux.palette_sel -= step;" in _pal_wheel,
-      "命令面板滚轮到顶/到底时没有退化成移动选中项")
-check(_pal_wheel.find("g_mux.palette_scroll +=") < _pal_wheel.find("g_mux.palette_sel -= step;"),
-      "命令面板滚轮必须先尝试滚动页面，再考虑移动选中项")
-check("if (!s->in_alt_screen) {" in INPUT and "do_scroll(d > 0 ? 3 : -3);" in INPUT,
-      "终端滚轮没有优先滚动滚动历史")
-check("s->app_cursor_keys ? \"\\x1bOA\" : \"\\x1b[A\"" in INPUT and
-      "for (int i = 0; i < 3; i++) write_to_pane(arrow, alen);" in INPUT,
-      "备用屏幕滚不动时没有退化成给程序送方向键")
+check("int moved = g_mux.palette_scroll - before;" in _pal_wheel and
+      "g_mux.palette_sel += moved;" in _pal_wheel,
+      "命令面板滚轮没有让选中项跟着页面等量平移（相对位置必须不变）")
+check("g_mux.palette_sel -= step;" not in _pal_wheel and "g_mux.palette_sel += step;" not in _pal_wheel,
+      "命令面板滚轮不应再单独移动选中项（已撤回“滚不动才动光标”）")
+check("if (!s->in_alt_screen) do_scroll(d > 0 ? 3 : -3);" in INPUT,
+      "终端滚轮没有保持“只滚动滚动历史”的原行为")
+check("write_to_pane(arrow, alen)" not in INPUT,
+      "备用屏幕滚轮不应再发送方向键（该改动已撤回）")
 check("render_color_picker_cell" in RENDER and "render_color_picker_row" in RENDER,
       "颜色选择器没有使用逐单元格渲染辅助函数")
 check("int interior_cols = 2 + 4 * 4;" in RENDER and
