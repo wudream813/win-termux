@@ -678,7 +678,7 @@ static const PaletteStaticItem g_palette_setting_items[] = {
     { "default-startup",    "修改默认启动项", "选择启动时显示终端或帮助页面",     "Enter 进入", PALETTE_ACTION_DEFAULT_STARTUP,     0, 2, 6 },
     { "open-ini",           "打开设置文件 (.ini)", "使用系统默认编辑器打开 termux.ini", "",           PALETTE_ACTION_OPEN_INI,          0, 3, 6 },
     { "add-panel",          "添加 panel 条目", "选择预设或自定义并继续编辑",       "Enter 进入", PALETTE_ACTION_ADD_PANEL,         0, 4, 2 },
-    { "menu-settings",      "菜单项设置",     "打开图形化菜单项设置面板",           "",           PALETTE_ACTION_MENU_SETTINGS,     0, 5, 4 },
+    { "menu-settings",      "菜单项设置",     "在子面板中选择并编辑 panel 条目",       "Enter 进入", PALETTE_ACTION_MENU_SETTINGS,     0, 5, 4 },
 };
 
 static const PaletteStaticItem g_palette_startup_items[] = {
@@ -745,6 +745,9 @@ int palette_item_count(int page) {
         }
         case PALETTE_PAGE_ADD_PANEL:
             return g_preset_count;
+        case PALETTE_PAGE_MENU_SETTINGS:
+            /* Existing menu items plus one child entry for adding a new item. */
+            return g_chooser_item_count + 1;
         default:
             return 0;
     }
@@ -807,6 +810,31 @@ int palette_item_info(int page, int item_index, PaletteItemInfo *out) {
         out->color = item_index == g_preset_count - 1 ? 2 : 5;
         return 1;
     }
+
+    if (page == PALETTE_PAGE_MENU_SETTINGS) {
+        if (item_index >= 0 && item_index < g_chooser_item_count) {
+            out->id = "menu-item";
+            out->title = g_chooser_items[item_index].name[0] ? g_chooser_items[item_index].name : "未命名 panel";
+            out->desc = g_chooser_items[item_index].cmd;
+            out->shortcut = "Enter 编辑";
+            out->action = PALETTE_ACTION_EDIT_PANEL;
+            out->value = item_index;
+            out->number = item_index + 1;
+            out->color = (item_index % 8) + 1;
+            return 1;
+        }
+        if (item_index == g_chooser_item_count) {
+            out->id = "add-panel";
+            out->title = "添加 panel 条目";
+            out->desc = "选择预设或自定义命令并进入编辑子框";
+            out->shortcut = "Enter 进入";
+            out->action = PALETTE_ACTION_ADD_PANEL;
+            out->value = 0;
+            out->number = item_index + 1;
+            out->color = 2;
+            return 1;
+        }
+    }
     return 0;
 }
 
@@ -836,14 +864,19 @@ int palette_visible_rows(int host_rows) {
 }
 
 void palette_editor_geom(int host_rows, int host_cols, int *top, int *left, int *w, int *h, int *input_w) {
-    (void)host_rows;
     int pw = PALETTE_EDITOR_W;
     if (pw > host_cols) pw = host_cols;
     if (pw < 1) pw = 1;
+    int ph = PALETTE_EDITOR_H;
+    /* The editor replaces the settings/add-panel list.  Keep its modal
+     * surface at least as tall as the list it covers, otherwise the parent's
+     * footer/bottom border remains visible below the child box. */
+    int parent_h = palette_visible_rows(host_rows) + 5;
+    if (ph < parent_h) ph = parent_h;
     if (top) *top = 2;
     if (left) *left = (host_cols - pw) / 2 + 1;
     if (w) *w = pw;
-    if (h) *h = PALETTE_EDITOR_H;
+    if (h) *h = ph;
     if (input_w) {
         int iw = pw - 4;
         if (iw < 8) iw = 8;
@@ -875,6 +908,7 @@ static const char *palette_page_title(int page) {
         case PALETTE_PAGE_SWITCH_PANEL: return "操作 / 切换 panel";
         case PALETTE_PAGE_DEFAULT_STARTUP: return "设置 / 默认启动项";
         case PALETTE_PAGE_ADD_PANEL: return "设置 / 添加 panel 条目";
+        case PALETTE_PAGE_MENU_SETTINGS: return "设置 / 菜单项设置";
         case PALETTE_PAGE_PANEL_EDITOR: return "设置 / 编辑 panel 条目";
         default: return "命令面板";
     }
@@ -979,8 +1013,16 @@ static void render_palette_editor(char *out, int bs, int *posp, int host_rows, i
         int input_row = label_row + 1;
         int active = (g_mux.palette_field == i);
         const char *label_style = active ? "\x1b[38;2;230;237;243;1m" : "\x1b[38;2;230;237;243m";
-        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s%s\x1b[0m",
-                        label_row, left + 2, label_style, labels[i]);
+        int label_cols = 1;
+        pos += snprintf(out + pos, bs - pos,
+                        "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m\x1b[48;2;33;38;45m ",
+                        label_row, left);
+        pos += snprintf(out + pos, bs - pos, "%s", label_style);
+        label_cols++;
+        int label_w = pw - 1 - label_cols;
+        if (label_w < 1) label_w = 1;
+        append_padded_utf8(out, bs, &pos, &label_cols, labels[i], label_w);
+        pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[48;2;33;38;45m│\x1b[0m");
         const char *field_bg = active ? "\x1b[48;2;38;60;88m" : "\x1b[48;2;22;27;34m";
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m%s ", input_row, left, field_bg);
         render_scrollable_input(out, bs, &pos, bufs[i], lens[i], poss[i], input_w, field_bg, NULL);
@@ -988,7 +1030,7 @@ static void render_palette_editor(char *out, int bs, int *posp, int host_rows, i
     }
 
     palette_hline(out, bs, &pos, top + 7, left, pw, "├", "┤");
-    const char *save_hint = " [Enter] 保存并返回添加面板";
+    const char *save_hint = " [Enter] 保存并返回上一级";
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m\x1b[38;2;121;192;255;1m%s\x1b[0m", top + 8, left, save_hint);
     int used = 1 + utf8_cols(save_hint, (int)strlen(save_hint));
     while (used < pw - 1 && pos < bs - 8) { out[pos++] = ' '; used++; }
@@ -998,6 +1040,19 @@ static void render_palette_editor(char *out, int bs, int *posp, int host_rows, i
     used = 1 + utf8_cols(editor_hint, (int)strlen(editor_hint));
     while (used < pw - 1 && pos < bs - 8) { out[pos++] = ' '; used++; }
     pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
+
+    /* Fill any rows added to cover the parent command-panel surface. */
+    for (int r = top + 10; r < top + ph - 1; r++) {
+        pos += snprintf(out + pos, bs - pos,
+                        "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m\x1b[48;2;33;38;45m",
+                        r, left);
+        int row_cols = 1;
+        while (row_cols < pw - 1 && pos < bs - 8) {
+            out[pos++] = ' ';
+            row_cols++;
+        }
+        pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[48;2;33;38;45m│\x1b[0m");
+    }
 
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m└", top + ph - 1, left);
     int cols = 1;

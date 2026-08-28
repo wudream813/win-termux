@@ -262,6 +262,15 @@ static void palette_open_copy_mode(void) {
     g_mux.needs_redraw = 1;
 }
 
+static void palette_open_panel_editor(int item_idx) {
+    if (item_idx < 0 || item_idx >= g_chooser_item_count) return;
+    load_item_to_editor(item_idx);
+    g_mux.palette_edit_idx = item_idx;
+    g_mux.palette_edit_new = 0;
+    g_mux.palette_field = 0;
+    palette_push_page(PALETTE_PAGE_PANEL_EDITOR);
+}
+
 static int palette_add_item_from_source(const ChooserItem *source, int preset_index) {
     if (g_chooser_item_count >= MAX_CHOOSER_ITEMS) return -1;
     int idx = g_chooser_item_count++;
@@ -353,10 +362,15 @@ void execute_palette_command(int item_index) {
             g_mux.needs_redraw = 1;
             break;
         case PALETTE_ACTION_GRAPHICAL_SETTINGS:
-        case PALETTE_ACTION_MENU_SETTINGS:
             palette_close();
             open_settings_pane();
             g_mux.needs_redraw = 1;
+            break;
+        case PALETTE_ACTION_MENU_SETTINGS:
+            palette_push_page(PALETTE_PAGE_MENU_SETTINGS);
+            break;
+        case PALETTE_ACTION_EDIT_PANEL:
+            palette_open_panel_editor(item.value);
             break;
         case PALETTE_ACTION_CLOSE_PANEL:
             palette_close();
@@ -401,9 +415,9 @@ void open_command_palette(void) {
                            g_mux.panes[g_mux.active_pane].is_settings);
     g_mux.palette_mode = 1;
     /* Keep the palette in the same domain as the page it was opened from:
-     * Ctrl+B : on the graphical settings page goes straight to the settings
-     * command panel instead of making the user walk through the root page. */
-    g_mux.palette_page = settings_active ? PALETTE_PAGE_SETTINGS : PALETTE_PAGE_ROOT;
+     * Ctrl+B : opens the settings command panel on the graphical settings page
+     * and the operations command panel everywhere else. */
+    g_mux.palette_page = settings_active ? PALETTE_PAGE_SETTINGS : PALETTE_PAGE_OPERATIONS;
     g_mux.palette_stack_len = 0;
     g_settings_show_presets = 0;
     g_mux.palette_field = 0;

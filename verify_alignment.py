@@ -162,10 +162,22 @@ check("return row;" in RENDER and "row = csbi.srWindow.Bottom - csbi.srWindow.To
       "搜索底栏没有读取实际控制台窗口最低行")
 
 # ---- 8) Requested interaction/text guards ----
-check("g_mux.palette_page = settings_active ? PALETTE_PAGE_SETTINGS : PALETTE_PAGE_ROOT;" in INPUT,
-      "设置页打开 Ctrl+B : 没有直达设置命令面板")
+check("g_mux.palette_page = settings_active ? PALETTE_PAGE_SETTINGS : PALETTE_PAGE_OPERATIONS;" in INPUT,
+      "Ctrl+B : 没有按当前页面直达设置/操作命令面板")
 check("\"open-settings-page\"" in RENDER and "PALETTE_ACTION_GRAPHICAL_SETTINGS" in RENDER,
       "设置命令面板没有默认的图形化设置入口")
+check("PALETTE_PAGE_MENU_SETTINGS" in RENDER and "PALETTE_ACTION_EDIT_PANEL" in RENDER,
+      "菜单项设置没有独立的子面板/编辑动作")
+check("palette_push_page(PALETTE_PAGE_MENU_SETTINGS);" in INPUT,
+      "菜单项设置没有进入子面板")
+check("out->action = PALETTE_ACTION_EDIT_PANEL;" in RENDER,
+      "菜单项子面板没有把条目连接到编辑子框")
+check("int parent_h = palette_visible_rows(host_rows) + 5;" in RENDER and "if (ph < parent_h) ph = parent_h;" in RENDER,
+      "编辑 panel 子框高度不足，可能露出父命令面板")
+check("Fill any rows added to cover the parent command-panel surface." in RENDER,
+      "编辑 panel 子框没有填充父面板多出的行")
+check("append_padded_utf8(out, bs, &pos, &label_cols, labels[i], label_w);" in RENDER,
+      "编辑 panel 子框的标签行没有填充整行背景")
 check("\"退出 termux\"" in RENDER, "命令面板仍缺少‘退出 termux’文案")
 check("退出标签页" not in RENDER and "退出标签页" not in ROOT.joinpath("README.md").read_text(encoding="utf-8"),
       "仍存在过时的‘退出标签页’文案")
