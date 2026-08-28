@@ -1540,7 +1540,10 @@ void render_command_palette(char *out, int bs, int *posp, int host_rows, int hos
 
     int footer = top + 3 + visible;
     const char *focus_label = g_mux.palette_focus == PALETTE_FOCUS_LIST ? "选择" : "输入";
-    const char *digit_label = g_mux.palette_focus == PALETTE_FOCUS_LIST ? "选当前" : "搜索";
+    /* An untouched query field hands arrows/digits straight to the list, so
+     * advertise the digits as a quick pick there too. */
+    const char *digit_label = (g_mux.palette_focus == PALETTE_FOCUS_LIST ||
+                               g_mux.palette_query_len == 0) ? "选当前" : "搜索";
     char footer_hint[192];
     if (g_mux.palette_page == PALETTE_PAGE_MENU_SETTINGS) {
         snprintf(footer_hint, sizeof(footer_hint),

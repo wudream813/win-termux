@@ -276,6 +276,18 @@ def main() -> int:
           "g_mux.palette_focus == PALETTE_FOCUS_LIST" in key_handler and
           "vk >= VK_NUMPAD1 && vk <= VK_NUMPAD9" in key_handler,
           "数字快捷键没有按当前可见窗口/结果焦点工作")
+    jump_block = key_handler[key_handler.find("int jump_to_list ="):] if "int jump_to_list =" in key_handler else ""
+    check("g_mux.palette_focus == PALETTE_FOCUS_INPUT && g_mux.palette_query_len == 0" in key_handler and
+          jump_block and
+          "vk == VK_UP || vk == VK_DOWN" in jump_block and
+          "vk == VK_PRIOR || vk == VK_NEXT" in jump_block and
+          "vk == VK_LEFT || vk == VK_RIGHT" in jump_block and
+          "vk >= VK_NUMPAD1 && vk <= VK_NUMPAD9" in jump_block and
+          "g_mux.palette_focus = PALETTE_FOCUS_LIST;" in jump_block and
+          key_handler.find("int jump_to_list =") < key_handler.find("palette_move_menu_item"),
+          "刚打开命令面板时方向键/数字没有直接把焦点切到结果列表")
+    check('g_mux.palette_query_len == 0) ? "选当前" : "搜索"' in RENDER,
+          "空查询时底部提示没有把数字标注为选当前")
     check("if (vk == VK_TAB)" in key_handler and
           "PALETTE_FOCUS_LIST" in key_handler and
           "PALETTE_FOCUS_INPUT" in key_handler,

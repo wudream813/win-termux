@@ -667,6 +667,22 @@ void handle_palette_key(KEY_EVENT_RECORD *ke) {
             execute_palette_command(filtered[g_mux.palette_sel]);
         return;
     }
+    /* Freshly opened palette (nothing typed yet): arrow keys, PageUp/Down and
+     * the 1-9 quick-pick digits should act on the result list right away
+     * instead of poking at the empty query field.  Once the user has typed a
+     * filter, digits stay searchable characters and Tab is the way over. */
+    if (g_mux.palette_focus == PALETTE_FOCUS_INPUT && g_mux.palette_query_len == 0) {
+        int jump_to_list =
+            (vk == VK_UP || vk == VK_DOWN || vk == VK_PRIOR || vk == VK_NEXT ||
+             vk == VK_LEFT || vk == VK_RIGHT ||
+             ((vk == 'P' || vk == 'N') && has_ctrl) ||
+             (uc >= '1' && uc <= '9') || (vk >= '1' && vk <= '9') ||
+             (vk >= VK_NUMPAD1 && vk <= VK_NUMPAD9));
+        if (jump_to_list) {
+            g_mux.palette_focus = PALETTE_FOCUS_LIST;
+            g_mux.needs_redraw = 1;
+        }
+    }
     if (g_mux.palette_page == PALETTE_PAGE_MENU_SETTINGS &&
         g_mux.palette_focus == PALETTE_FOCUS_LIST && has_ctrl &&
         (vk == VK_UP || vk == VK_DOWN)) {
