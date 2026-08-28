@@ -446,10 +446,13 @@ int get_input_screen_offset(const char *buf, int len, int cursor_byte_pos, int v
     if (vis_width < 1) vis_width = 1;
     int cursor_col = utf8_cols(buf, cursor_byte_pos);
     int total_cols = utf8_cols(buf, len);
-    /* At exactly vis_width columns the insertion point would otherwise land
-     * on the separator/right border.  Use the clipped view so the caret stays
-     * inside the input field. */
-    if (total_cols < vis_width) return cursor_col;
+    /* An exactly full field needs no scroll arrows.  Keep the insertion
+     * caret inside the field as well: the terminal cursor occupies a cell,
+     * so the end-of-text position is painted over the final visible cell
+     * instead of leaking onto the separator/right border. */
+    if (total_cols <= vis_width) {
+        return cursor_col < vis_width ? cursor_col : vis_width - 1;
+    }
     int scroll_col = 0;
     if (cursor_col >= vis_width - 2) {
         scroll_col = cursor_col - (vis_width - 3);
@@ -460,9 +463,12 @@ int get_input_screen_offset(const char *buf, int len, int cursor_byte_pos, int v
     if (scroll_col < 0) scroll_col = 0;
     int has_left = (scroll_col > 0);
     int has_right = (scroll_col + vis_width - (has_left ? 1 : 0) < total_cols);
+    int min_cx = has_left ? 1 : 0;
+    int max_cx = vis_width - 1 - (has_right ? 1 : 0);
+    if (max_cx < min_cx) max_cx = min_cx;
     int cx = cursor_col - scroll_col + (has_left ? 1 : 0);
-    if (cx < (has_left ? 1 : 0)) cx = (has_left ? 1 : 0);
-    if (cx > vis_width - (has_right ? 1 : 0)) cx = vis_width - (has_right ? 1 : 0);
+    if (cx < min_cx) cx = min_cx;
+    if (cx > max_cx) cx = max_cx;
     return cx;
 }
 
@@ -475,13 +481,15 @@ void render_scrollable_input(char *out, int bs, int *posp,
     int total_cols = utf8_cols(buf, len);
     const char *bg = (bg_sgr && bg_sgr[0]) ? bg_sgr : "";
 
-    if (total_cols < vis_width) {
+    if (total_cols <= vis_width) {
         pos += snprintf(out + pos, bs - pos, "%s\x1b[38;2;230;237;243m", bg);
         for (int p = 0; p < len && pos < bs - 8; p++) out[pos++] = buf[p];
         int used = total_cols;
         while (used < vis_width && pos < bs - 8) { out[pos++] = ' '; used++; }
         pos += snprintf(out + pos, bs - pos, "\x1b[0m");
-        if (cursor_screen_offset) *cursor_screen_offset = cursor_col;
+        if (cursor_screen_offset) {
+            *cursor_screen_offset = cursor_col < vis_width ? cursor_col : vis_width - 1;
+        }
         *posp = pos;
         return;
     }
@@ -551,9 +559,12 @@ void render_scrollable_input(char *out, int bs, int *posp,
     }
     pos += snprintf(out + pos, bs - pos, "\x1b[0m");
 
+    int min_cx = has_left ? 1 : 0;
+    int max_cx = vis_width - 1 - (has_right ? 1 : 0);
+    if (max_cx < min_cx) max_cx = min_cx;
     int cx_offset = cursor_col - scroll_col + (has_left ? 1 : 0);
-    if (cx_offset < (has_left ? 1 : 0)) cx_offset = (has_left ? 1 : 0);
-    if (cx_offset > vis_width - (has_right ? 1 : 0)) cx_offset = vis_width - (has_right ? 1 : 0);
+    if (cx_offset < min_cx) cx_offset = min_cx;
+    if (cx_offset > max_cx) cx_offset = max_cx;
     if (cursor_screen_offset) *cursor_screen_offset = cx_offset;
 
     *posp = pos;

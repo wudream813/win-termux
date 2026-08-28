@@ -163,6 +163,17 @@ static void palette_push_page(int page) {
     g_mux.needs_redraw = 1;
 }
 
+static void palette_switch_domain(int page) {
+    /* Operations and settings are peer pages.  Switching between them must
+     * not grow the modal stack on every toggle; Esc therefore still returns
+     * to the same parent (or closes the palette when it was opened directly).
+     * A query/selection belongs to the old page and is intentionally reset. */
+    if (page != PALETTE_PAGE_OPERATIONS && page != PALETTE_PAGE_SETTINGS) return;
+    g_mux.palette_page = page;
+    palette_reset_query();
+    g_mux.needs_redraw = 1;
+}
+
 static void palette_pop_page(void) {
     if (g_mux.palette_stack_len > 0) {
         g_mux.palette_page = g_mux.palette_stack[--g_mux.palette_stack_len];
@@ -330,10 +341,16 @@ void execute_palette_command(int item_index) {
 
     switch (item.action) {
         case PALETTE_ACTION_OPEN_OPERATIONS:
-            palette_push_page(PALETTE_PAGE_OPERATIONS);
+            if (g_mux.palette_page == PALETTE_PAGE_SETTINGS)
+                palette_switch_domain(PALETTE_PAGE_OPERATIONS);
+            else
+                palette_push_page(PALETTE_PAGE_OPERATIONS);
             break;
         case PALETTE_ACTION_OPEN_SETTINGS:
-            palette_push_page(PALETTE_PAGE_SETTINGS);
+            if (g_mux.palette_page == PALETTE_PAGE_OPERATIONS)
+                palette_switch_domain(PALETTE_PAGE_SETTINGS);
+            else
+                palette_push_page(PALETTE_PAGE_SETTINGS);
             break;
         case PALETTE_ACTION_OPEN_NEW_TERMINAL:
             palette_push_page(PALETTE_PAGE_NEW_TERMINAL);

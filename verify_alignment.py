@@ -158,16 +158,33 @@ check("int box_w = search_input_width(host_cols);" in RENDER,
       "搜索框和光标没有共享同一个输入宽度公式")
 check("int box_w = search_input_width(g_mux.host_cols);" in RENDER,
       "搜索框光标未使用共享输入宽度公式")
+check("ui_bottom_row(g_mux.host_rows), SEARCH_PREFIX_COLS + scr_off" in RENDER,
+      "搜索框光标起点没有与输入框前缀列宽对齐")
 check("return row;" in RENDER and "row = csbi.srWindow.Bottom - csbi.srWindow.Top + 1" in RENDER,
       "搜索底栏没有读取实际控制台窗口最低行")
 
 # ---- 8) Requested interaction/text guards ----
 check("g_mux.palette_page = settings_active ? PALETTE_PAGE_SETTINGS : PALETTE_PAGE_OPERATIONS;" in INPUT,
       "Ctrl+B : 没有按当前页面直达设置/操作命令面板")
-check("\"open-settings-page\"" in RENDER and "PALETTE_ACTION_GRAPHICAL_SETTINGS" in RENDER,
+operation_items = RENDER[RENDER.find("g_palette_operation_items"):RENDER.find("g_palette_setting_items")]
+setting_items = RENDER[RENDER.find("g_palette_setting_items"):RENDER.find("g_palette_startup_items")]
+check("\"open-settings-page\"" in setting_items and "PALETTE_ACTION_GRAPHICAL_SETTINGS" in setting_items,
       "设置命令面板没有默认的图形化设置入口")
+check("graphical-settings" not in operation_items and "图形化设置" not in operation_items,
+      "图形化设置入口仍错误地出现在操作命令面板")
+check("settings-command-panel" in operation_items and "PALETTE_ACTION_OPEN_SETTINGS" in operation_items,
+      "操作命令面板没有打开设置命令面板入口")
+check("operations-command-panel" in setting_items and "PALETTE_ACTION_OPEN_OPERATIONS" in setting_items,
+      "设置命令面板没有打开操作命令面板入口")
 check("PALETTE_PAGE_MENU_SETTINGS" in RENDER and "PALETTE_ACTION_EDIT_PANEL" in RENDER,
       "菜单项设置没有独立的子面板/编辑动作")
+domain_switch_start = INPUT.find("static void palette_switch_domain")
+domain_switch_end = INPUT.find("static void palette_pop_page")
+domain_switch = INPUT[domain_switch_start:domain_switch_end]
+check("palette_switch_domain" in INPUT and "palette_reset_query();" in domain_switch,
+      "两类命令面板互跳没有重置查询并保持弹窗栈")
+check("palette_push_page" not in domain_switch and "g_mux.palette_page = page;" in domain_switch,
+      "两类命令面板互跳错误地增长弹窗栈或没有切换页面")
 check("g_mux.palette_page = settings_active ? PALETTE_PAGE_SETTINGS : PALETTE_PAGE_OPERATIONS;" in INPUT,
       "普通页面没有直接打开操作命令面板")
 check("uc == 0xFF1A" in INPUT,
@@ -186,19 +203,35 @@ check("palette_push_page(PALETTE_PAGE_MENU_SETTINGS);" in INPUT,
       "菜单项设置没有进入子面板")
 check("out->action = PALETTE_ACTION_EDIT_PANEL;" in RENDER,
       "菜单项子面板没有把条目连接到编辑子框")
-check("int parent_h = palette_visible_rows(host_rows) + 5;" in RENDER and "if (ph < parent_h) ph = parent_h;" in RENDER,
-      "编辑 panel 子框高度不足，可能露出父命令面板")
-check("Fill any rows added to cover the parent command-panel surface." in RENDER,
-      "编辑 panel 子框没有填充父面板多出的行")
+check("#define PALETTE_EDITOR_H 10" in RENDER and "int action_row = top + 8;" in RENDER,
+      "编辑 panel 子框没有使用压缩后的十行布局")
+check("int parent_h = palette_visible_rows(host_rows) + 5;" in RENDER and
+      "for (int r = top + ph; r < top + parent_h; r++)" in RENDER,
+      "编辑 panel 子框没有清除紧凑布局下残留的父面板行")
 check("append_padded_utf8(out, bs, &pos, &label_cols, labels[i], label_w);" in RENDER,
       "编辑 panel 子框的标签行没有填充整行背景")
+check("int action_row = top + 8;" in INPUT or "r == top + 8" in INPUT,
+      "编辑 panel 保存按钮热区没有跟随压缩布局")
 check("\"退出 termux\"" in RENDER, "命令面板仍缺少‘退出 termux’文案")
-check("退出标签页" not in RENDER and "退出标签页" not in ROOT.joinpath("README.md").read_text(encoding="utf-8"),
+check("退出标签页" not in RENDER and
+      "退出标签页" not in ROOT.joinpath("README.md").read_text(encoding="utf-8") and
+      "退出标签页" not in ROOT.joinpath("history.md").read_text(encoding="utf-8"),
       "仍存在过时的‘退出标签页’文案")
 check("g_mux.running = 0;" in INPUT[INPUT.find("case PALETTE_ACTION_QUIT"):INPUT.find("case PALETTE_ACTION_DEFAULT_STARTUP")],
       "退出 termux 没有设置整个程序的 running 状态")
-check("if (total_cols < vis_width)" in UTF8,
+check("if (total_cols <= vis_width)" in UTF8,
       "输入光标在文本恰好填满时仍可能落到右边框/分隔符")
+check("int max_cx = vis_width - 1 - (has_right ? 1 : 0);" in UTF8,
+      "输入光标仍可能落到右滚动箭头或输入框外")
+check("render_scrollable_input(out, bs, &pos, g_mux.custom_cmd_buf" in RENDER and
+      "CMD_BOX_W - 3, TB_BG, NULL" in RENDER,
+      "自定义命令输入框没有使用连续背景渲染")
+check("render_scrollable_input(out, bs, &pos, g_mux.rename_buf" in RENDER and
+      "RENAME_W - 3, TB_BG, NULL" in RENDER,
+      "重命名输入框没有使用连续背景渲染")
+check("%s \\x1b[0m\\x1b[48;2;33;38;45m│\\x1b[0m\", f0_bg" in RENDER and
+      "%s \\x1b[0m\\x1b[48;2;33;38;45m│\\x1b[0m\", field_bg" in RENDER,
+      "输入框末尾空白单元格没有继承字段背景")
 
 if errors:
     print("对齐验证失败:")

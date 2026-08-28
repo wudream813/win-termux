@@ -20,7 +20,7 @@ Windows 终端复用器（Terminal Multiplexer）—— 模块化 C 架构，基
 - **滚动历史**：10000 行环形滚动缓冲，PgUp/PgDn/滚轮查看
 - **Alt 屏幕支持**：nano / vim 等全屏编辑器正常使用，退出后历史完整保留
 - **内置帮助**：点击左上角 `termux` 徽标查看
-- **分层命令面板**：仅通过 `Ctrl+B :` 打开；普通终端直接进入“操作命令面板”，设置页直接进入“设置命令面板”。操作面板支持新建终端（子面板内可搜索）、自定义命令行、标题/颜色、历史搜索、panel 切换（按编号或标题并显示颜色）、复制模式、热重载、图形化设置、关闭当前标签和退出 termux；设置面板首项可直接回到图形化设置页面，并支持默认启动项、打开 `.ini`、添加 panel 条目（预设/自定义后继续编辑）及菜单项设置（进入子面板后可直接编辑已有条目）。
+- **分层命令面板**：仅通过 `Ctrl+B :` 打开（同时兼容中文全角冒号 `：`）；普通终端直接进入“操作命令面板”，设置页直接进入“设置命令面板”。操作面板支持新建终端（子面板内可按名称/命令搜索）、自定义命令行、标题/颜色、历史搜索、panel 切换（按编号或标题并显示颜色）、复制模式、热重载、关闭当前 panel、退出整个 termux，并可切换到设置命令面板；设置面板包含图形化设置页面入口、操作命令面板入口、默认启动项、打开 `.ini`、添加 panel 条目（预设/自定义后继续编辑）及菜单项设置（进入子面板后可直接编辑已有条目）。
 - **诊断日志**：`TERMUX_DUMP=1` 时输出原始 ConPTY 流 / 渲染输出 / 鼠标事件
 
 ## 快捷键
@@ -36,7 +36,7 @@ Windows 终端复用器（Terminal Multiplexer）—— 模块化 C 架构，基
 | `Ctrl+B r` | 热重载配置文件 (`termux.ini`) |
 | `Ctrl+B ?` / `h` | 打开 / 关闭帮助 |
 | `Ctrl+B n / p` | 下一个 / 上一个 pane |
-| `Ctrl+B x` | 关闭当前标签页 (panel) |
+| `Ctrl+B x` | 关闭当前 panel |
 | `Ctrl+B d` | 退出 termux |
 | `Ctrl+B t` / `Shift+t` | 轮换标签颜色 |
 | `Ctrl+B 0-9` | 跳转到 pane（支持主键盘与小键盘数字） |
@@ -120,7 +120,9 @@ python3 verify_mouse53.py       # 鼠标按钮优先级 / 兜底 / 渲染用色
 python3 verify_color8.py        # color=8 渲染用色回归
 python3 verify_emoji.py         # Emoji 与字素簇边界测试
 python3 verify_ringbuf_asan.py  # 环形缓冲区局部滚动 ASAN 内存安全
-python3 verify_search.py        # 滚动历史搜索行为验证
+python3 verify_search.py          # 滚动历史搜索行为验证
+python3 verify_palette_search.py   # 新建终端短查询/名称优先搜索回归
+python3 verify_input_layout.py     # 输入框背景/末尾字符/光标列回归
 ```
 
 
