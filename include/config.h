@@ -24,7 +24,8 @@ extern int g_default_startup;
 extern int g_scrollback_lines;    /* 每个 pane 的滚动历史行数 */
 extern int g_mouse_enabled;       /* 是否启用鼠标（标签点击 / 拖选 / 滚轮） */
 extern int g_copy_on_select;      /* 拖选松开后是否自动复制 */
-extern int g_confirm_on_exit;     /* 退出 termux 前是否二次确认 */
+extern int g_confirm_on_exit;        /* 退出 termux 前是否二次确认 */
+extern int g_search_case_sensitive;  /* 搜索是否锁定大小写（区分大小写） */
 extern int g_settings_show_presets;
 extern int g_preset_sel;
 

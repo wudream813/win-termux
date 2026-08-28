@@ -360,6 +360,48 @@ static void test_keymap_actions(void) {
     check(keymap_action_id("bogus") == ACT_NONE, "未知动作名返回 ACT_NONE");
 }
 
+static void test_keymap_noprefix(void) {
+    printf("keymap: 直接键（noprefix）与前缀可读描述\n");
+    keymap_init();
+    char buf[48];
+    keymap_prefix_describe(buf, sizeof(buf));
+    check_str(buf, "Ctrl+B", "前缀描述带 Ctrl 全名");
+    check(keymap_prefix_is_default() == 1, "默认前缀被识别为默认值");
+    keymap_set_prefix("C-a");
+    keymap_prefix_describe(buf, sizeof(buf));
+    check_str(buf, "Ctrl+A", "改前缀后描述同步");
+    check(keymap_prefix_is_default() == 0, "非默认前缀被识别");
+    keymap_init();
+
+    int arg = 0;
+    check(keymap_action_uses_prefix(ACT_NEW_PANE) == 1, "默认动作走前缀");
+    check(keymap_lookup('C', 0, 'c', &arg) == ACT_NEW_PANE, "前缀态下 c 命中");
+    check(keymap_lookup_direct('C', 0, 'c', &arg) == ACT_NONE, "前缀动作不会被直接键命中");
+
+    check(keymap_set_action_prefix(ACT_NEW_PANE, 0) == 1, "把 new-pane 改成直接键");
+    check(keymap_action_uses_prefix(ACT_NEW_PANE) == 0, "标记生效");
+    check(keymap_lookup('C', 0, 'c', &arg) == ACT_NONE, "直接键不再出现在前缀表里");
+    check(keymap_lookup_direct('C', 0, 'c', &arg) == ACT_NEW_PANE, "直接键由 lookup_direct 命中");
+    keymap_describe(ACT_NEW_PANE, buf, sizeof(buf));
+    check_str(buf, "c", "直接键的描述不带前缀段");
+
+    check(keymap_set_action_prefix(ACT_NEW_PANE, 1) == 1, "改回前缀键");
+    check(keymap_lookup('C', 0, 'c', &arg) == ACT_NEW_PANE, "改回后前缀态恢复命中");
+    check(keymap_lookup_direct('C', 0, 'c', &arg) == ACT_NONE, "改回后不再直接命中");
+
+    keymap_init();
+    check(keymap_bind("copy-mode", "F8 noprefix") == 1, "[keys] 里 \"F8 noprefix\" 解析成功");
+    check(keymap_lookup_direct(VK_F1 + 7, 0, 0, &arg) == ACT_COPY_MODE, "F8 直接触发复制模式");
+    check(keymap_lookup(VK_F1 + 7, 0, 0, &arg) == ACT_NONE, "F8 不再需要前缀");
+    check(keymap_user_binding_count() == 1, "写回一条用户绑定");
+    check(keymap_user_binding_no_prefix(0) == 1, "该绑定被标记为 noprefix");
+    check_str(keymap_user_binding_key(0), "F8", "回写键位文本不含 noprefix 后缀");
+    check(keymap_bind("next-pane", "F9 direct") == 1, "direct 同义词可用");
+    check(keymap_lookup_direct(VK_F1 + 8, 0, 0, &arg) == ACT_NEXT_PANE, "direct 绑定生效");
+    keymap_init();
+    check(keymap_action_uses_prefix(ACT_COPY_MODE) == 1, "keymap_init 复位直接键标记");
+}
+
 int main(void) {
     test_theme_identity();
     test_theme_remap();
@@ -374,6 +416,7 @@ int main(void) {
     test_keymap_capture();
     test_theme_clear();
     test_keymap_actions();
+    test_keymap_noprefix();
 
     printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;

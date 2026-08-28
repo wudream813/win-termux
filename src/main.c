@@ -39,6 +39,7 @@ int g_copy_cx = 0, g_copy_cy = 0;
 int g_copy_anchor_x = 0, g_copy_anchor_abs_y = 0;
 int g_copy_block = 0;
 int g_copy_quick = 0;
+int g_ui_mode_pane = -1;
 int g_mouse_selecting = 0;
 int g_mouse_sel_sx = 0, g_mouse_sel_s_abs_y = 0;
 int g_mouse_sel_ex = 0, g_mouse_sel_e_abs_y = 0;

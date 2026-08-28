@@ -11,6 +11,7 @@ int g_scrollback_lines = SCROLL_BUF_LINES;
 int g_mouse_enabled = 1;
 int g_copy_on_select = 1;
 int g_confirm_on_exit = 0;
+int g_search_case_sensitive = 0;
 int g_settings_show_presets = 0;
 int g_preset_sel = 0;
 
@@ -68,6 +69,7 @@ void init_default_config(void) {
     g_mouse_enabled = 1;
     g_copy_on_select = 1;
     g_confirm_on_exit = 0;
+    g_search_case_sensitive = 0;
     theme_init();
     keymap_init();
     g_chooser_item_count = 3;
@@ -111,6 +113,7 @@ static int apply_general_key(const char *key, const char *val) {
     if (_stricmp(key, "mouse") == 0)           { g_mouse_enabled = config_parse_bool(val, 1); return 1; }
     if (_stricmp(key, "copy_on_select") == 0)  { g_copy_on_select = config_parse_bool(val, 1); return 1; }
     if (_stricmp(key, "confirm_on_exit") == 0) { g_confirm_on_exit = config_parse_bool(val, 0); return 1; }
+    if (_stricmp(key, "search_case_sensitive") == 0) { g_search_case_sensitive = config_parse_bool(val, 0); return 1; }
     return 0;
 }
 
@@ -265,11 +268,13 @@ void save_config(void) {
         "mouse = %s\r\n"
         "copy_on_select = %s\r\n"
         "confirm_on_exit = %s\r\n"
+        "search_case_sensitive = %s\r\n"
         "default_startup = %d\r\n\r\n",
         theme_name(), keymap_prefix_text(), g_scrollback_lines,
         g_mouse_enabled ? "true" : "false",
         g_copy_on_select ? "true" : "false",
         g_confirm_on_exit ? "true" : "false",
+        g_search_case_sensitive ? "true" : "false",
         g_default_startup);
     if (len > 0) fwrite(buf, 1, len, f);
 
@@ -293,12 +298,14 @@ void save_config(void) {
 
     const char *keys_hdr =
         "[keys]\r\n"
-        "# 动作名 = 前缀之后要按的键，例如: new-pane = c\r\n";
+        "# 动作名 = 前缀之后要按的键，例如: new-pane = c\r\n"
+        "# 键后面加 noprefix 表示不用按前缀，直接触发，例如: next-pane = M-n noprefix\r\n";
     fwrite(keys_hdr, 1, strlen(keys_hdr), f);
     if (keymap_has_user_bindings()) {
         for (int i = 0; i < keymap_user_binding_count(); i++) {
-            len = snprintf(buf, sizeof(buf), "%s = %s\r\n",
-                           keymap_user_binding_action(i), keymap_user_binding_key(i));
+            len = snprintf(buf, sizeof(buf), "%s = %s%s\r\n",
+                           keymap_user_binding_action(i), keymap_user_binding_key(i),
+                           keymap_user_binding_no_prefix(i) ? " noprefix" : "");
             if (len > 0) fwrite(buf, 1, len, f);
         }
     } else {

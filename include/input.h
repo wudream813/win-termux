@@ -10,6 +10,11 @@
 #include "render.h"
 
 void handle_key(KEY_EVENT_RECORD *ke);
+
+/* 复制 / 搜索模态的归属管理：进入时记下 pane，切走时收回。 */
+void ui_modes_claim(void);
+void ui_modes_cancel(void);
+void ui_modes_sync_pane(void);
 void handle_mouse(MOUSE_EVENT_RECORD *me);
 void action_execute(int action, int arg, DWORD ctrl);
 void handle_prefix(WORD vk, DWORD ctrl, WCHAR uc);

@@ -142,6 +142,7 @@ int g_search_mode = 0;
 int g_search_active = 0;
 char g_search_buf[64] = {0};
 int g_search_len = 0, g_search_pos = 0;
+int g_search_case_sensitive = 0;
 
 static inline void EnterCriticalSection(void *cs) { (void)cs; }
 static inline void LeaveCriticalSection(void *cs) { (void)cs; }
@@ -215,11 +216,39 @@ int main(void) {
     search_jump_prev(); // Should go forward to 1
     assert(g_search_match_cur == 1);
 
+    // v1.8.7: search_case_sensitive 锁定大小写后，"error" 只应命中小写那两行，
+    // "ERROR" 只应命中第 95 行。
+    g_search_case_sensitive = 1;
+    strcpy(g_search_buf, "error");
+    g_search_len = (int)strlen(g_search_buf);
+    execute_search();
+    assert(g_search_match_count == 1);
+    assert(g_search_matches[0].abs_y == 50);
+
+    strcpy(g_search_buf, "ERROR");
+    g_search_len = (int)strlen(g_search_buf);
+    execute_search();
+    assert(g_search_match_count == 1);
+    assert(g_search_matches[0].abs_y == 95);
+
+    strcpy(g_search_buf, "Error");
+    g_search_len = (int)strlen(g_search_buf);
+    execute_search();
+    assert(g_search_match_count == 1);
+    assert(g_search_matches[0].abs_y == 10);
+
+    // 关掉锁定后仍然是三条
+    g_search_case_sensitive = 0;
+    strcpy(g_search_buf, "error");
+    g_search_len = (int)strlen(g_search_buf);
+    execute_search();
+    assert(g_search_match_count == 3);
+
     free(s->lines[pr10].cells);
     free(s->lines[pr50].cells);
     free(s->lines[pr95].cells);
     free(s->lines);
-    printf("Scrollback Search real source test passed successfully: 3/3 matches found and verified.\n");
+    printf("Scrollback Search real source test passed successfully: 3/3 matches + 大小写锁定 3 例验证通过。\n");
     return 0;
 }
 """

@@ -1,5 +1,6 @@
 #include "pane.h"
 #include "render.h"
+#include "input.h"
 
 void write_to_pane_internal(Pane *pane, const char *data, int len) {
     if (!pane || !pane->active) return;
@@ -176,6 +177,10 @@ int create_about_pane(void) {
 
     char sys_ver[128] = {0};
     get_system_version_string(sys_ver, sizeof(sys_ver));
+    /* v1.8.7: 关闭键跟随实际键位配置，不再写死 Ctrl+B x。 */
+    char close_key[48] = {0};
+    keymap_describe(ACT_CLOSE_PANE, close_key, sizeof(close_key));
+    if (!close_key[0]) snprintf(close_key, sizeof(close_key), "%s", "关闭标签页快捷键");
 
     char about_buf[2048];
     int len = snprintf(about_buf, sizeof(about_buf),
@@ -192,8 +197,8 @@ int create_about_pane(void) {
         "  \x1b[038;2;048;054;061m────────────────────────────────────────────────────────────\x1b[0m\r\n\r\n"
         "  \x1b[038;2;139;148;158m开源项目仓库 : \x1b[038;2;088;166;255;4mhttps://github.com/wudream813/win-termux\x1b[0m\r\n"
         "  \x1b[038;2;139;148;158m开源许可协议 : \x1b[038;2;230;237;243mMIT License\x1b[0m\r\n\r\n"
-        "  \x1b[038;2;110;118;129m提示: 这是一个独立的关于标签页，可点击右上角 [x] 或按 Ctrl+B x 关闭\x1b[0m\r\n",
-        sys_ver);
+        "  \x1b[038;2;110;118;129m提示: 这是一个独立的关于标签页，可点击右上角 [x] 或按 %s 关闭\x1b[0m\r\n",
+        sys_ver, close_key);
 
     if (len > 0) theme_remap(about_buf, len);
 
@@ -452,6 +457,9 @@ void close_pane(int idx) {
 
 void switch_pane(int idx) {
     if (idx < 0 || idx >= g_mux.pane_count || !g_mux.panes[idx].active) return;
+    /* 复制 / 搜索属于原来那个 pane：换标签页时先收回，避免两个标签页同时
+     * 响应同一套按键（选区、匹配高亮都会串台）。 */
+    if (idx != g_mux.active_pane) ui_modes_cancel();
     g_mux.active_pane = idx;
     g_mux.panes[idx].scroll_offset = 0;
     g_mux.needs_redraw = 1;

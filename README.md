@@ -5,7 +5,7 @@
 Windows 终端复用器（Terminal Multiplexer）—— 模块化 C 架构，基于 Windows ConPTY。
 在 Windows 控制台里管理多个 cmd / PowerShell 会话，像 tmux 一样分标签页。
 
-当前版本：**v1.8.6**
+当前版本：**v1.8.7**
 
 > ⚠️ **警告 / 注意事项**：
 > 控制台终端**必须配置使用等宽字体**（Monospace Font，例如 *Cascadia Code*、*Consolas*、*JetBrains Mono*、*Fira Code* 等）。
@@ -21,7 +21,8 @@ Windows 终端复用器（Terminal Multiplexer）—— 模块化 C 架构，基
 - **Alt 屏幕支持**：nano / vim 等全屏编辑器正常使用，退出后历史完整保留
 - **内置帮助**：点击左上角 `termux` 徽标查看
 - **分层命令面板**：仅通过 `Ctrl+B :` 打开（同时兼容中文全角冒号 `：`）；普通终端直接进入“操作命令面板”，设置页直接进入“设置命令面板”。每次最多显示 9 个结果，当前窗口始终重新编号为 `1`～`9`；Tab 在搜索输入框与结果选择框之间切换，输入焦点下数字会继续搜索，结果焦点下数字选择当前可见项。操作面板支持新建终端（子面板内可按名称/命令搜索）、自定义命令行、标题/颜色、历史搜索、panel 切换（按编号或标题并显示颜色）、复制模式、热重载、打开图形化设置、独立 About panel、关闭当前 panel、退出整个 termux，并可切换到设置命令面板；设置面板包含打开操作命令面板、默认启动项、打开 `.ini`、添加 panel 条目（预设/自定义后继续编辑）与菜单项设置。菜单项设置子面板只管理已有条目：Enter 编辑、`Ctrl+↑/↓` 调整位置（搜索期间禁用）、无查询时结果焦点下 `X` 删除；搜索输入焦点下 `U/D` 仍是普通查询字符，有查询时使用 `Ctrl+X` 删除；添加 panel 仍从设置面板的独立入口执行。Esc 返回子面板时会恢复父面板的选择、滚动位置和查询上下文。
-- **可配置的键位**：前缀键（默认 `Ctrl+B`）与每个动作的按键都能在 `termux.ini` 的 `[keys]` 段里改；帮助页显示的快捷键跟着配置实时变化
+- **可配置的键位**：前缀键（默认 `Ctrl+B`）与每个动作的按键都能在 `termux.ini` 的 `[keys]` 段里改，每个动作还能单独设为「不带前缀的直接键」（`noprefix`，设置页键位表里按 `P` 或点 `[前缀]/[直接]` 列切换）；帮助页显示的快捷键跟着配置实时变化
+- **右上角状态徽章**：复制模式与历史搜索都折叠成右上角一枚小徽章（`[复制模式 行选区]` / `[搜索 "err" 3/12]`），鼠标悬停时才向左展开完整操作提示，不再长期占据一整行
 - **配色主题**：内置 `github-dark` / `one-dark` / `nord` / `gruvbox-dark` / `dracula`，也可在 `[theme]` 段按语义角色单独覆盖任意一种颜色；`Ctrl+B` → 设置命令面板 → 切换配色主题 可即时轮换
 - **行为开关**：`scrollback` 滚动行数、`mouse` 鼠标开关、`copy_on_select` 拖选自动复制、`confirm_on_exit` 退出二次确认
 - **图形化设置页**：`Ctrl+B s` 打开，侧栏含「启动 / 菜单项 / 外观·主题 / 键位 / 行为」五类；主题可即时预览切换、语义色可改十六进制、键位支持**按键录制**，改完即时写回 `termux.ini`
@@ -36,7 +37,7 @@ Windows 终端复用器（Terminal Multiplexer）—— 模块化 C 架构，基
 | `Ctrl+B +` | 新建 pane 菜单（选已配置项目 / 自定义命令行） |
 | `Ctrl+B [` | 进入复制模式（方向键/hjkl 移动、Space/v 选区、`Shift+方向` 行选、`Alt+方向` 块选、`b` 切换行/块、Enter/`Ctrl+C`/y 复制、Esc 退出） |
 | `Shift+点击两点` | 直接进入复制模式并选中两点之间（行选）；`Alt+点击两点` 为矩形框选。`Ctrl+C`/Enter 复制并关闭，Esc 退出，其它键退出并把该键发给终端 |
-| `Ctrl+B /` | 搜索滚动历史（n/N 跳转匹配，Esc 退出） |
+| `Ctrl+B /` | 搜索滚动历史（`U`/`D` 或 `n`/`N` 跳转上一个/下一个匹配，Esc 退出；右上角徽章上的 `[U 上] [D 下] [×]` 也可鼠标点） |
 | `Ctrl+B s` | 打开图形化设置页面 (`termux.ini`) |
 | `Ctrl+B r` | 热重载配置文件 (`termux.ini`) |
 | `Ctrl+B ?` / `h` | 打开 / 关闭帮助 |
@@ -98,6 +99,7 @@ scrollback = 10000         # 每个 pane 的滚动历史行数 (200 - 500000)
 mouse = true               # 关掉后标签点击 / 拖选 / 滚轮全部停用
 copy_on_select = true      # 鼠标拖选松开时自动复制到剪贴板
 confirm_on_exit = false    # 退出 termux 前弹出 Y/N 二次确认
+search_case_sensitive = false  # 历史搜索是否锁定大小写（false = 忽略大小写）
 default_startup = 0        # 0 = 启动进终端，1 = 启动显示帮助
 
 [theme]
@@ -106,9 +108,11 @@ default_startup = 0        # 0 = 启动进终端，1 = 启动显示帮助
 # background = #0d1117
 
 [keys]
-# 动作名 = 前缀之后要按的键
+# 动作名 = 键位[ noprefix]
+# 默认要先按前缀键；加上 noprefix（或 direct）就是不带前缀的直接键
 # new-pane = c
 # next-theme = T
+# copy-mode = F8 noprefix
 
 [menu]
 # 序号 = 菜单显示名称, 启动命令行, 启动目录(可选)

@@ -18,9 +18,11 @@
 #define SETTINGS_ROLE_COL_W     34
 #define SETTINGS_KEYS_ROW0      6
 #define SETTINGS_BEHAVIOR_ROW0  6
+#define SETTINGS_BEHAVIOR_TOGGLES 4   /* mouse / copy_on_select / confirm_on_exit / search_case_sensitive */
 /* 相对 main_left 的按钮列偏移，渲染时用绝对定位写出，鼠标按同样的偏移命中 */
-#define SETTINGS_KEYS_EDIT_COL  58
-#define SETTINGS_KEYS_RESET_COL 63
+#define SETTINGS_KEYS_PREFIX_COL 56   /* [前缀] / [直接] 切换 */
+#define SETTINGS_KEYS_EDIT_COL  64
+#define SETTINGS_KEYS_RESET_COL 69
 #define SETTINGS_SB_MINUS_COL   22
 #define SETTINGS_SB_PLUS_COL    33
 #define RENAME_W 30
@@ -118,6 +120,21 @@ int settings_keys_row_at(int host_rows, int entry);
 int settings_keys_entry_at(int host_rows, int row);
 void render_search_box(char *out, int bs, int *posp, int host_rows, int host_cols);
 void render_confirm_exit(char *out, int bs, int *posp, int host_rows, int host_cols);
+/* 顶栏右侧状态徽章（复制模式 / 搜索）。折叠时只有徽章本体与按钮，鼠标悬停
+ * 才向左展开提示文字，所以按钮列不会随提示出现而漂移。 */
+typedef struct {
+    int kind;                 /* 0 = 无, 1 = 复制模式, 2 = 搜索 */
+    int row;                  /* 1-based ANSI 行 */
+    int start, end;           /* 折叠区间，1-based，end 独占 */
+    int prev_s, prev_e;       /* 搜索：上一个按钮 */
+    int next_s, next_e;       /* 搜索：下一个按钮 */
+    int close_s, close_e;     /* 搜索：关闭按钮 */
+} StatusBadge;
+
+int status_badge_layout(int host_cols, StatusBadge *out);
+int status_badge_hovered(const StatusBadge *b);
+void render_status_badge(char *out, int bs, int *posp, int host_cols);
+
 void confirm_exit_geom(int host_rows, int host_cols, int *top, int *left, int *w, int *h);
 void confirm_exit_button_geom(int host_rows, int host_cols, int *row,
                               int *yes_start, int *yes_end,

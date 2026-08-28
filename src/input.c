@@ -13,6 +13,33 @@ void do_scroll(int d) {
     g_mux.needs_redraw = 1;
 }
 
+/* 复制模式与搜索是“当前 pane 的模态”，而不是全局状态。进入时记住是谁开的，
+ * 切换标签页时立刻收回，否则新标签页会继承旧标签页的选区/匹配，两个页面看起来
+ * 能被同时操控。 */
+void ui_modes_claim(void) { g_ui_mode_pane = g_mux.active_pane; }
+
+void ui_modes_cancel(void) {
+    if (g_ui_mode_pane >= 0 && g_ui_mode_pane < g_mux.pane_count)
+        g_mux.panes[g_ui_mode_pane].scroll_offset = 0;
+    g_copy_mode = 0;
+    g_copy_sel_active = 0;
+    g_copy_quick = 0;
+    g_copy_block = 0;
+    g_search_mode = 0;
+    g_search_active = 0;
+    g_search_match_count = 0;
+    g_search_match_cur = -1;
+    g_mouse_selecting = 0;
+    g_ui_mode_pane = -1;
+}
+
+void ui_modes_sync_pane(void) {
+    if (g_ui_mode_pane < 0) return;
+    if (g_ui_mode_pane == g_mux.active_pane) return;
+    ui_modes_cancel();
+    g_mux.needs_redraw = 1;
+}
+
 void execute_search(void) {
     g_search_match_count = 0;
     g_search_match_cur = -1;
@@ -59,8 +86,9 @@ void execute_search(void) {
         for (int x = 0; x <= rlen - wq_len; x++) {
             int match = 1;
             for (int k = 0; k < wq_len; k++) {
-                WCHAR c1 = towlower(row_chars[x + k]);
-                WCHAR c2 = towlower(wquery[k]);
+                /* 锁定大小写时逐字符精确比较，否则统一折叠成小写。 */
+                WCHAR c1 = g_search_case_sensitive ? row_chars[x + k] : towlower(row_chars[x + k]);
+                WCHAR c2 = g_search_case_sensitive ? wquery[k] : towlower(wquery[k]);
                 if (c1 != c2) {
                     match = 0;
                     break;
@@ -224,6 +252,7 @@ static void close_active_pane_and_select(void) {
 static void palette_open_search(void) {
     palette_close();
     g_search_mode = 1;
+    ui_modes_claim();
     g_search_len = 0;
     g_search_pos = 0;
     g_search_buf[0] = 0;
@@ -285,6 +314,7 @@ static void palette_open_copy_mode(void) {
     Pane *p = &g_mux.panes[g_mux.active_pane];
     palette_close();
     g_copy_mode = 1;
+    ui_modes_claim();
     g_copy_sel_active = 0;
     g_copy_quick = 0;
     g_copy_block = 0;
@@ -1157,6 +1187,7 @@ int handle_copy_mode_key(KEY_EVENT_RECORD *ke) {
 
     if (uc == '/' || vk == VK_OEM_2) {
         g_search_mode = 1;
+        ui_modes_claim();
         g_search_len = 0;
         g_search_pos = 0;
         g_search_buf[0] = 0;
@@ -1380,6 +1411,16 @@ static void settings_keys_reset_entry(int entry) {
     g_mux.needs_redraw = 1;
 }
 
+/* 前缀行（entry 0）本身没有“是否使用前缀”的概念，其余动作可以切成直接键。 */
+static void settings_keys_toggle_prefix(int entry) {
+    if (entry <= 0) return;
+    int action = keymap_action_at(entry - 1);
+    if (action == ACT_NONE) return;
+    if (!keymap_set_action_prefix(action, !keymap_action_uses_prefix(action))) return;
+    save_config();
+    g_mux.needs_redraw = 1;
+}
+
 static void handle_settings_keys_key(WORD vk, WCHAR uc, BOOL is_ctrl) {
     int total = settings_keys_rows();
     if (vk == VK_ESCAPE) { settings_leave_subpage(); return; }
@@ -1407,12 +1448,17 @@ static void handle_settings_keys_key(WORD vk, WCHAR uc, BOOL is_ctrl) {
         return;
     }
     if (uc == 'r' || uc == 'R') { settings_keys_reset_entry(g_settings_keys_sel); return; }
+    if (uc == 'p' || uc == 'P') { settings_keys_toggle_prefix(g_settings_keys_sel); return; }
 }
 
 static void settings_behavior_toggle(int idx) {
     if (idx == 0) g_mouse_enabled = !g_mouse_enabled;
     else if (idx == 1) g_copy_on_select = !g_copy_on_select;
     else if (idx == 2) g_confirm_on_exit = !g_confirm_on_exit;
+    else if (idx == 3) {
+        g_search_case_sensitive = !g_search_case_sensitive;
+        if (g_search_active) execute_search();   /* 立刻按新规则重新匹配 */
+    }
     save_config();
     g_mux.needs_redraw = 1;
 }
@@ -1434,17 +1480,19 @@ static void handle_settings_behavior_key(WORD vk, WCHAR uc) {
         return;
     }
     if (vk == VK_DOWN) {
-        if (g_settings_behavior_sel < 3) g_settings_behavior_sel++;
+        if (g_settings_behavior_sel < SETTINGS_BEHAVIOR_TOGGLES) g_settings_behavior_sel++;
         g_mux.needs_redraw = 1;
         return;
     }
     if (vk == VK_LEFT || vk == VK_RIGHT) {
-        if (g_settings_behavior_sel == 3) settings_scrollback_step(vk == VK_RIGHT ? 1000 : -1000);
+        if (g_settings_behavior_sel == SETTINGS_BEHAVIOR_TOGGLES)
+            settings_scrollback_step(vk == VK_RIGHT ? 1000 : -1000);
         else settings_behavior_toggle(g_settings_behavior_sel);
         return;
     }
     if (vk == VK_RETURN || vk == VK_SPACE || uc == ' ') {
-        if (g_settings_behavior_sel < 3) settings_behavior_toggle(g_settings_behavior_sel);
+        if (g_settings_behavior_sel < SETTINGS_BEHAVIOR_TOGGLES)
+            settings_behavior_toggle(g_settings_behavior_sel);
         return;
     }
 }
@@ -1941,23 +1989,25 @@ void handle_settings_mouse(MOUSE_EVENT_RECORD *me) {
                 g_settings_keys_sel = entry;
                 if (c >= main_left + SETTINGS_KEYS_RESET_COL && c < main_left + SETTINGS_KEYS_RESET_COL + 6) {
                     settings_keys_reset_entry(entry);
-                } else if (c >= main_left + SETTINGS_KEYS_EDIT_COL && c < main_left + SETTINGS_KEYS_RESET_COL) {
+                } else if (c >= main_left + SETTINGS_KEYS_EDIT_COL && c < main_left + SETTINGS_KEYS_EDIT_COL + 4) {
                     g_key_capture_active = 1;
+                } else if (c >= main_left + SETTINGS_KEYS_PREFIX_COL && c < main_left + SETTINGS_KEYS_PREFIX_COL + 6) {
+                    settings_keys_toggle_prefix(entry);
                 }
                 g_mux.needs_redraw = 1;
             }
             return;
         }
         if (g_settings_nav == SETTINGS_NAV_BEHAVIOR) {
-            for (int i = 0; i < 3; i++) {
+            for (int i = 0; i < SETTINGS_BEHAVIOR_TOGGLES; i++) {
                 if (r == SETTINGS_BEHAVIOR_ROW0 + i) {
                     g_settings_behavior_sel = i;
                     settings_behavior_toggle(i);
                     return;
                 }
             }
-            if (r == SETTINGS_BEHAVIOR_ROW0 + 3) {
-                g_settings_behavior_sel = 3;
+            if (r == SETTINGS_BEHAVIOR_ROW0 + SETTINGS_BEHAVIOR_TOGGLES) {
+                g_settings_behavior_sel = SETTINGS_BEHAVIOR_TOGGLES;
                 if (c >= main_left + SETTINGS_SB_MINUS_COL && c < main_left + SETTINGS_SB_MINUS_COL + 3)
                     settings_scrollback_step(-1000);
                 else if (c >= main_left + SETTINGS_SB_PLUS_COL && c < main_left + SETTINGS_SB_PLUS_COL + 3)
@@ -2141,6 +2191,7 @@ void action_execute(int action, int arg, DWORD ctrl) {
         case ACT_SEARCH: {
             g_mux.palette_mode = 0;
             g_search_mode = 1;
+            ui_modes_claim();
             g_search_len = 0;
             g_search_pos = 0;
             g_search_buf[0] = 0;
@@ -2158,6 +2209,7 @@ void action_execute(int action, int arg, DWORD ctrl) {
             if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
                 Pane *p = &g_mux.panes[g_mux.active_pane];
                 g_copy_mode = 1;
+                ui_modes_claim();
                 g_copy_sel_active = 0;
                 g_copy_quick = 0;
                 g_copy_block = 0;
@@ -2351,11 +2403,13 @@ void handle_key(KEY_EVENT_RECORD *ke) {
             g_mux.needs_redraw = 1;
             return;
         }
-        if (uc == 'n' && !is_ctrl && !is_alt) {
+        /* U = 上一个, D = 下一个（与状态徽章上的两个按钮一致）；
+         * 老的 n / N 继续保留。 */
+        if ((uc == 'd' || uc == 'D' || uc == 'n') && !is_ctrl && !is_alt) {
             search_jump_next();
             return;
         }
-        if ((uc == 'N' || (vk == 'N' && is_shift)) && !is_ctrl && !is_alt) {
+        if ((uc == 'u' || uc == 'U' || uc == 'N' || (vk == 'N' && is_shift)) && !is_ctrl && !is_alt) {
             search_jump_prev();
             return;
         }
@@ -2382,6 +2436,17 @@ void handle_key(KEY_EVENT_RECORD *ke) {
         /* A quick Shift/Alt click session forwards the key that closed it, so
          * typing straight after selecting does not lose a character. */
         if (!handle_copy_mode_key(ke)) return;
+    }
+
+    /* 被标记为“直接键”的动作不需要前缀；只有用户显式设置过的绑定会进这里，
+     * 所以普通输入不会被吃掉。 */
+    if (!key_input_modal_active()) {
+        int direct_arg = 0;
+        int direct = keymap_lookup_direct(vk, ctrl, uc, &direct_arg);
+        if (direct != ACT_NONE) {
+            action_execute(direct, direct_arg, 0);
+            return;
+        }
     }
 
     if (!key_input_modal_active() && keymap_is_prefix(vk, ctrl, uc)) {
@@ -2856,8 +2921,39 @@ static void handle_confirm_exit_mouse(MOUSE_EVENT_RECORD *me) {
     }
 }
 
+/* 右上角状态徽章的鼠标交互：悬停要重绘（提示展开 / 按钮高亮），点击命中
+ * 搜索的上一个 / 下一个 / 关闭。热区来自渲染同款 status_badge_layout()。 */
+static int handle_status_badge_mouse(MOUSE_EVENT_RECORD *me) {
+    StatusBadge b;
+    if (!status_badge_layout(g_mux.host_cols, &b)) return 0;
+    int mx = me->dwMousePosition.X, my = me->dwMousePosition.Y;
+    int r = my + 1, c = mx + 1;
+    int inside = (r == b.row && c >= b.start && c < b.end);
+    if ((mx != g_mouse_x || my != g_mouse_y) && (inside || status_badge_hovered(&b))) {
+        g_mouse_x = mx;
+        g_mouse_y = my;
+        g_mux.needs_redraw = 1;
+    }
+    if (!inside || b.kind != 2) return 0;
+    int pressed = (me->dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
+    if (!pressed || (me->dwEventFlags != 0 && me->dwEventFlags != DOUBLE_CLICK)) return inside;
+    if (c >= b.prev_s && c < b.prev_e) { search_jump_prev(); return 1; }
+    if (c >= b.next_s && c < b.next_e) { search_jump_next(); return 1; }
+    if (c >= b.close_s && c < b.close_e) {
+        g_search_active = 0;
+        g_search_match_count = 0;
+        g_search_match_cur = -1;
+        g_ui_mode_pane = -1;
+        g_mux.needs_redraw = 1;
+        return 1;
+    }
+    return 1;
+}
+
 void handle_mouse(MOUSE_EVENT_RECORD *me) {
     if (!g_mouse_enabled) return;
+    ui_modes_sync_pane();
+    if (handle_status_badge_mouse(me)) return;
     if (g_mux.confirm_exit_mode) {
         handle_confirm_exit_mouse(me);
         return;
@@ -3241,6 +3337,7 @@ void handle_mouse(MOUSE_EVENT_RECORD *me) {
             if (!g_copy_mode || !g_copy_quick) {
                 /* First corner. */
                 g_copy_mode = 1;
+                ui_modes_claim();
                 g_copy_quick = 1;
                 g_copy_cx = click_x;
                 g_copy_cy = click_y;

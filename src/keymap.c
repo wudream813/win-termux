@@ -99,6 +99,7 @@ static const int g_default_count = (int)(sizeof(g_default_bindings) / sizeof(g_d
 typedef struct {
     KeyBinding bind;
     char key_text[24];
+    unsigned char no_prefix;   /* 1 = 这个键不需要先按前缀，直接触发 */
 } UserBinding;
 
 static UserBinding g_user[KEYMAP_MAX_USER_BINDINGS];
@@ -219,11 +220,31 @@ int keymap_bind(const char *action_name, const char *key_text) {
     KeySpec spec;
     if (!keymap_parse_key(key_text, &spec)) return 0;
 
+    /* "M-n noprefix" / "F5 direct"：键后面的可选标记表示这个动作不走前缀。 */
+    int no_prefix = 0;
+    char key_only[24] = {0};
+    {
+        const char *t = key_text;
+        while (*t == ' ' || *t == '\t') t++;
+        int n = 0;
+        while (t[n] && t[n] != ' ' && t[n] != '\t' && n < (int)sizeof(key_only) - 1) {
+            key_only[n] = t[n];
+            n++;
+        }
+        key_only[n] = 0;
+        const char *rest = t + n;
+        while (*rest == ' ' || *rest == '\t') rest++;
+        if (_strnicmp(rest, "noprefix", 8) == 0 || _strnicmp(rest, "no-prefix", 9) == 0 ||
+            _strnicmp(rest, "direct", 6) == 0)
+            no_prefix = 1;
+    }
+
     UserBinding *ub = &g_user[g_user_count++];
     ub->bind.key = spec;
     ub->bind.action = action;
     ub->bind.arg = 0;
-    snprintf(ub->key_text, sizeof(ub->key_text), "%s", key_text);
+    ub->no_prefix = (unsigned char)no_prefix;
+    snprintf(ub->key_text, sizeof(ub->key_text), "%s", key_only);
     g_action_overridden[action] = 1;
     return 1;
 }
@@ -237,6 +258,15 @@ int keymap_set_prefix(const char *key_text) {
 }
 
 const char *keymap_prefix_text(void) { return g_prefix_text; }
+
+static void spec_text(const KeySpec *s, char *out, int out_size);
+
+void keymap_prefix_describe(char *out, int out_size) {
+    if (!out || out_size <= 0) return;
+    spec_text(&g_prefix, out, out_size);
+}
+
+int keymap_prefix_is_default(void) { return strcmp(g_prefix_text, "C-b") == 0; }
 
 char keymap_prefix_char(void) {
     if (g_prefix.ctrl && g_prefix.vk >= 'A' && g_prefix.vk <= 'Z')
@@ -267,6 +297,7 @@ int keymap_is_prefix(WORD vk, DWORD ctrl, WCHAR uc) {
 int keymap_lookup(WORD vk, DWORD ctrl, WCHAR uc, int *arg) {
     if (arg) *arg = 0;
     for (int i = 0; i < g_user_count; i++) {
+        if (g_user[i].no_prefix) continue;   /* 直接键不再挂在前缀下面 */
         if (spec_match(&g_user[i].bind.key, vk, ctrl, uc)) {
             if (arg) *arg = g_user[i].bind.arg;
             return g_user[i].bind.action;
@@ -281,6 +312,67 @@ int keymap_lookup(WORD vk, DWORD ctrl, WCHAR uc, int *arg) {
         }
     }
     return ACT_NONE;
+}
+
+int keymap_lookup_direct(WORD vk, DWORD ctrl, WCHAR uc, int *arg) {
+    if (arg) *arg = 0;
+    for (int i = 0; i < g_user_count; i++) {
+        if (!g_user[i].no_prefix) continue;
+        if (spec_match(&g_user[i].bind.key, vk, ctrl, uc)) {
+            if (arg) *arg = g_user[i].bind.arg;
+            return g_user[i].bind.action;
+        }
+    }
+    return ACT_NONE;
+}
+
+int keymap_action_uses_prefix(int action) {
+    for (int i = 0; i < g_user_count; i++)
+        if (g_user[i].bind.action == action) return g_user[i].no_prefix ? 0 : 1;
+    return 1;   /* 默认键位一律走前缀 */
+}
+
+/* 把一个 KeySpec 写回 ini 语法（"C-b" / "F5" / "t"），用于把默认键位固化成
+ * 用户绑定 —— 切换“是否使用前缀”时必须先有一条用户绑定可以打标记。 */
+static int spec_ini_text(const KeySpec *s, char *out, int out_size) {
+    char key[12] = {0};
+    if (s->ch) {
+        if (s->ch < 128) snprintf(key, sizeof(key), "%c", (char)s->ch);
+        else return 0;
+    } else if (s->vk >= VK_F1 && s->vk <= VK_F24) {
+        snprintf(key, sizeof(key), "F%d", s->vk - VK_F1 + 1);
+    } else if ((s->vk >= 'A' && s->vk <= 'Z') || (s->vk >= '0' && s->vk <= '9')) {
+        char c = (char)s->vk;
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        snprintf(key, sizeof(key), "%c", c);
+    } else {
+        for (int i = 0; i < g_named_key_count; i++)
+            if (g_named_keys[i].vk == s->vk) { snprintf(key, sizeof(key), "%s", g_named_keys[i].name); break; }
+    }
+    if (!key[0]) return 0;
+    snprintf(out, out_size, "%s%s%s%s",
+             s->ctrl ? "C-" : "", s->alt ? "M-" : "",
+             (s->shift && !s->shift_any) ? "S-" : "", key);
+    return 1;
+}
+
+int keymap_set_action_prefix(int action, int use_prefix) {
+    if (action <= ACT_NONE || action >= ACT_COUNT) return 0;
+    for (int i = 0; i < g_user_count; i++) {
+        if (g_user[i].bind.action != action) continue;
+        g_user[i].no_prefix = use_prefix ? 0 : 1;
+        return 1;
+    }
+    /* 还在用默认键位：先固化成用户绑定，再打标记。 */
+    const KeySpec *found = NULL;
+    for (int i = 0; i < g_default_count && !found; i++)
+        if (g_default_bindings[i].action == action) found = &g_default_bindings[i].key;
+    if (!found) return 0;
+    char text[24];
+    if (!spec_ini_text(found, text, sizeof(text))) return 0;
+    if (!keymap_bind(keymap_action_name(action), text)) return 0;
+    g_user[g_user_count - 1].no_prefix = use_prefix ? 0 : 1;
+    return 1;
 }
 
 static void spec_text(const KeySpec *s, char *out, int out_size) {
@@ -326,7 +418,9 @@ void keymap_describe(int action, char *out, int out_size) {
     } else {
         spec_text(found, key, sizeof(key));
     }
-    snprintf(out, out_size, "%s %s", prefix, key);
+    /* 标记为直接键的动作不显示前缀段，否则会教用户按一个没用的键。 */
+    if (!keymap_action_uses_prefix(action)) snprintf(out, out_size, "%s", key);
+    else snprintf(out, out_size, "%s %s", prefix, key);
 }
 
 int keymap_action_count(void) { return g_action_count; }
@@ -410,4 +504,9 @@ const char *keymap_user_binding_action(int idx) {
 const char *keymap_user_binding_key(int idx) {
     if (idx < 0 || idx >= g_user_count) return "";
     return g_user[idx].key_text;
+}
+
+int keymap_user_binding_no_prefix(int idx) {
+    if (idx < 0 || idx >= g_user_count) return 0;
+    return g_user[idx].no_prefix ? 1 : 0;
 }

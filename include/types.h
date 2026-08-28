@@ -196,6 +196,9 @@ extern int g_copy_cx, g_copy_cy;
 extern int g_copy_anchor_x, g_copy_anchor_abs_y;
 extern int g_copy_block;   /* 1 = 矩形（框）选区，0 = 行内连续选区 */
 extern int g_copy_quick;   /* Shift/Alt 点选发起的临时复制会话 */
+/* 复制 / 搜索这两个模态属于某一个 pane：切到别的标签页必须先收回，
+ * 否则两个标签页会同时响应同一套按键。-1 = 当前没有模态。 */
+extern int g_ui_mode_pane;
 extern int g_mouse_selecting;
 extern int g_mouse_sel_sx, g_mouse_sel_s_abs_y;
 extern int g_mouse_sel_ex, g_mouse_sel_e_abs_y;

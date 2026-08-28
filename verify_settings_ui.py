@@ -110,7 +110,15 @@ check("g_hex_edit_active" in appearance and "g_hex_edit_active" in INPUT,
       "语义色十六进制编辑在渲染与输入两侧都实现")
 check("keymap_describe(action" in keys and "keymap_action_is_overridden(action)" in keys,
       "键位页显示实时键位与自定义标记")
-check("keymap_prefix_text()" in keys, "键位页第一行是可改的前缀键")
+check("keymap_prefix_describe(combo" in keys and "keymap_prefix_text()" not in keys,
+      "键位页第一行必须显示 Ctrl+B 这种可读写法，而不是 ini 里的 C-b")
+check("keymap_action_uses_prefix(action)" in keys and '"[前缀]" : "[直接]"'.replace("'", "") in keys.replace("'", "") and
+      "settings_keys_toggle_prefix" in INPUT and "SETTINGS_KEYS_PREFIX_COL" in RENDER and
+      "SETTINGS_KEYS_PREFIX_COL" in INPUT,
+      "键位页没有“是否使用前缀”的切换（渲染 / 键盘 / 鼠标三侧）")
+check("search_case_sensitive" in behavior and "SETTINGS_BEHAVIOR_TOGGLES" in RENDER and
+      "SETTINGS_BEHAVIOR_TOGGLES" in INPUT,
+      "行为页缺少搜索锁定大小写开关，或开关数量仍写死")
 check("g_key_capture_active" in keys and "handle_key_capture" in INPUT,
       "键位录制在渲染与输入两侧都实现")
 check(all(k in behavior for k in ("mouse", "copy_on_select", "confirm_on_exit", "scrollback")),

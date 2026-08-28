@@ -593,7 +593,7 @@ static void render_settings_keys(char *out, int bs, int *posp, int host_rows, in
         "\x1b[4;%dH\x1b[038;2;139;148;158m所有改动写入 termux.ini 的 [general] prefix 与 [keys] 段；帮助页会同步显示。\x1b[0m",
         main_left);
     pos += snprintf(out + pos, bs - pos,
-        "\x1b[5;%dH\x1b[038;2;121;192;255;1m   动作名             说明               当前键位        操作\x1b[0m", main_left);
+        "\x1b[5;%dH\x1b[038;2;121;192;255;1m   动作名             说明               当前键位      前缀   操作\x1b[0m", main_left);
 
     settings_keys_clamp_scroll(host_rows);
     int total = settings_keys_rows();
@@ -609,8 +609,9 @@ static void render_settings_keys(char *out, int bs, int *posp, int host_rows, in
         if (entry == 0) {
             snprintf(name, sizeof(name), "prefix");
             snprintf(label, sizeof(label), "前缀键");
-            snprintf(combo, sizeof(combo), "%s", keymap_prefix_text());
-            custom = (strcmp(keymap_prefix_text(), "C-b") != 0);
+            /* 界面显示 Ctrl+B，而不是 ini 里的 C-b 写法。 */
+            keymap_prefix_describe(combo, sizeof(combo));
+            custom = !keymap_prefix_is_default();
         } else {
             int action = keymap_action_at(entry - 1);
             snprintf(name, sizeof(name), "%s", keymap_action_name(action));
@@ -631,6 +632,19 @@ static void render_settings_keys(char *out, int bs, int *posp, int host_rows, in
         append_padded_utf8(out, bs, &pos, &cols, combo, 16);
         pos += snprintf(out + pos, bs - pos, "\x1b[0m");
 
+        /* 是否需要先按前缀键，可以按 P 或点这里切换。 */
+        if (entry > 0) {
+            int action = keymap_action_at(entry - 1);
+            int uses_prefix = keymap_action_uses_prefix(action);
+            int h_prefix = (hovered && g_mouse_x >= main_left + SETTINGS_KEYS_PREFIX_COL - 1 &&
+                            g_mouse_x < main_left + SETTINGS_KEYS_PREFIX_COL + 5);
+            pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s%s\x1b[0m",
+                            row, main_left + SETTINGS_KEYS_PREFIX_COL,
+                            h_prefix ? "\x1b[048;2;137;087;229m\x1b[038;2;255;255;255;1m"
+                                     : (uses_prefix ? "\x1b[038;2;139;148;158m" : "\x1b[038;2;063;185;080;1m"),
+                            uses_prefix ? "[前缀]" : "[直接]");
+        }
+
         int h_edit = (hovered && g_mouse_x >= main_left + SETTINGS_KEYS_EDIT_COL - 1 &&
                       g_mouse_x < main_left + SETTINGS_KEYS_RESET_COL - 1);
         int h_reset = (hovered && g_mouse_x >= main_left + SETTINGS_KEYS_RESET_COL - 1 &&
@@ -648,7 +662,7 @@ static void render_settings_keys(char *out, int bs, int *posp, int host_rows, in
     pos += snprintf(out + pos, bs - pos,
         "\x1b[%d;%dH\x1b[038;2;139;148;158m%s\x1b[0m", hint_r, main_left,
         g_key_capture_active ? "请按下新的组合键（Esc 取消）；修饰键单独按无效。"
-                             : "提示: Enter/点击 [改] 录制新键, R/点击 [复位] 恢复默认, Ctrl+S 保存, Esc 返回");
+                             : "提示: Enter/[改] 录制, P/[前缀] 切换是否需要前缀, R/[复位] 默认, Esc 返回");
     *posp = pos;
 }
 
@@ -660,27 +674,28 @@ static void render_settings_behavior(char *out, int bs, int *posp, int host_rows
     pos += snprintf(out + pos, bs - pos,
         "\x1b[4;%dH\x1b[038;2;139;148;158m↑/↓ 选择，Space/Enter 切换开关，←/→ 调整数值（scrollback 步进 1000）：\x1b[0m", main_left);
 
-    struct { const char *key; const char *desc; int value; } toggles[3] = {
+    struct { const char *key; const char *desc; int value; } toggles[SETTINGS_BEHAVIOR_TOGGLES] = {
         {"mouse",           "鼠标支持（标签点击 / 拖选 / 滚轮）", g_mouse_enabled},
         {"copy_on_select",  "拖选松开后自动复制到剪贴板",         g_copy_on_select},
         {"confirm_on_exit", "退出 termux 前二次确认",             g_confirm_on_exit},
+        {"search_case_sensitive", "搜索锁定大小写（区分大小写）",  g_search_case_sensitive},
     };
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < SETTINGS_BEHAVIOR_TOGGLES; i++) {
         int row = SETTINGS_BEHAVIOR_ROW0 + i;
         if (row > host_rows) break;
         int selected = (g_settings_behavior_sel == i);
         int hovered = (g_mouse_y == row - 1 && g_mouse_x >= main_left - 1 && g_mouse_x < main_left + 60);
-        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s %s %-16s \x1b[0m%s%s\x1b[0m",
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s %s %-22s \x1b[0m%s%s\x1b[0m",
                         row, main_left, settings_row_style(selected, hovered),
                         toggles[i].value ? "[x]" : "[ ]", toggles[i].key,
                         settings_row_style(selected, hovered), toggles[i].desc);
     }
 
-    int sb_row = SETTINGS_BEHAVIOR_ROW0 + 3;
+    int sb_row = SETTINGS_BEHAVIOR_ROW0 + SETTINGS_BEHAVIOR_TOGGLES;
     if (sb_row <= host_rows) {
-        int selected = (g_settings_behavior_sel == 3);
+        int selected = (g_settings_behavior_sel == SETTINGS_BEHAVIOR_TOGGLES);
         int hovered = (g_mouse_y == sb_row - 1 && g_mouse_x >= main_left - 1 && g_mouse_x < main_left + 60);
-        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s     %-16s \x1b[0m",
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s     %-22s \x1b[0m",
                         sb_row, main_left, settings_row_style(selected, hovered), "scrollback");
         int h_minus = (hovered && g_mouse_x >= main_left + SETTINGS_SB_MINUS_COL - 1 &&
                        g_mouse_x < main_left + SETTINGS_SB_MINUS_COL + 2);
@@ -698,7 +713,7 @@ static void render_settings_behavior(char *out, int bs, int *posp, int host_rows
                         sb_row, main_left + SETTINGS_SB_PLUS_COL + 4);
     }
 
-    int hint_r = SETTINGS_BEHAVIOR_ROW0 + 6;
+    int hint_r = SETTINGS_BEHAVIOR_ROW0 + SETTINGS_BEHAVIOR_TOGGLES + 3;
     if (hint_r > host_rows) hint_r = host_rows;
     pos += snprintf(out + pos, bs - pos,
         "\x1b[%d;%dH\x1b[038;2;139;148;158m提示: Space/Enter 切换, ←/→ 调整 scrollback, Ctrl+S 保存, Esc 返回\x1b[0m",
@@ -917,6 +932,128 @@ void render_settings_panel(char *out, int bs, int *posp, int host_rows, int host
         render_settings_presets(out, bs, &pos, host_rows, host_cols);
     }
 
+    *posp = pos;
+}
+
+/* ---------------------------------------------------------------------------
+ * 顶栏右侧状态徽章
+ *
+ * 复制模式与搜索以前把整条操作提示常驻在屏幕上（复制模式占 60 列，搜索占满
+ * 底行），信息量大但绝大多数时间是噪音。现在只保留一个短徽章贴在右上角，
+ * 提示文字改成鼠标悬停时才向左展开；搜索的“上一个 / 下一个 / 关闭”做成可点
+ * 的按钮，热区与绘制位置来自同一个 status_badge_layout()。
+ * ------------------------------------------------------------------------- */
+#define BADGE_ROW        2
+#define BADGE_BTN_COLS   6   /* "[U 上]" / "[D 下]" */
+#define BADGE_CLOSE_COLS 3   /* "[×]" */
+
+static void badge_collapsed_text(char *out, int n) {
+    if (g_copy_mode) {
+        const char *state = g_copy_sel_active ? (g_copy_block ? "块选区" : "行选区")
+                                              : (g_copy_quick ? "点选区" : "移动光标");
+        snprintf(out, n, " [复制模式 %s] ", state);
+        return;
+    }
+    char query[28] = {0};
+    snprintf(query, sizeof(query), "%s", g_search_buf);
+    /* 长关键词截断，徽章宽度必须可预测。 */
+    int qcols = utf8_cols(query, (int)strlen(query));
+    if (qcols > 16) {
+        int keep = 0, cols = 0;
+        while (query[keep] && cols < 13) {
+            int adv = 0;
+            unsigned int cp = utf8_decode_cp(query + keep, (int)strlen(query + keep), &adv);
+            if (adv <= 0) break;
+            cols += is_wide_cp(cp) ? 2 : 1;
+            keep += adv;
+        }
+        query[keep] = 0;
+        snprintf(out, n, " [搜索 \"%s…\" %d/%d] ", query, g_search_match_cur + 1, g_search_match_count);
+        return;
+    }
+    snprintf(out, n, " [搜索 \"%s\" %d/%d] ", query, g_search_match_cur + 1, g_search_match_count);
+}
+
+int status_badge_layout(int host_cols, StatusBadge *out) {
+    if (!out) return 0;
+    memset(out, 0, sizeof(*out));
+    int kind = 0;
+    if (g_copy_mode) kind = 1;
+    else if (g_search_active && g_search_match_count > 0 && !g_search_mode) kind = 2;
+    if (!kind) return 0;
+
+    char text[96];
+    badge_collapsed_text(text, sizeof(text));
+    int badge_cols = utf8_cols(text, (int)strlen(text));
+    int width = badge_cols;
+    if (kind == 2) width += BADGE_BTN_COLS * 2 + BADGE_CLOSE_COLS;
+
+    int start = host_cols - width + 1;
+    if (start < 1) start = 1;
+    out->kind = kind;
+    out->row = BADGE_ROW;
+    out->start = start;
+    out->end = start + width;
+    if (kind == 2) {
+        out->prev_s = start + badge_cols;
+        out->prev_e = out->prev_s + BADGE_BTN_COLS;
+        out->next_s = out->prev_e;
+        out->next_e = out->next_s + BADGE_BTN_COLS;
+        out->close_s = out->next_e;
+        out->close_e = out->close_s + BADGE_CLOSE_COLS;
+    }
+    return kind;
+}
+
+int status_badge_hovered(const StatusBadge *b) {
+    if (!b || !b->kind) return 0;
+    return (g_mouse_y + 1 == b->row && g_mouse_x + 1 >= b->start && g_mouse_x + 1 < b->end);
+}
+
+void render_status_badge(char *out, int bs, int *posp, int host_cols) {
+    StatusBadge b;
+    if (!status_badge_layout(host_cols, &b)) return;
+    int pos = *posp;
+    int hovered = status_badge_hovered(&b);
+    const char *panel = "\x1b[048;2;033;038;045m";
+
+    if (hovered) {
+        const char *hint = (b.kind == 1)
+            ? " Enter/Ctrl+C 复制 · Shift/Alt+方向改选区 · Esc 退出 "
+            : (g_search_case_sensitive ? " U 上一个 · D 下一个 · Esc 退出 · 大小写:锁定 "
+                                       : " U 上一个 · D 下一个 · Esc 退出 · 大小写:忽略 ");
+        int hint_cols = utf8_cols(hint, (int)strlen(hint));
+        int hint_left = b.start - hint_cols;
+        if (hint_left >= 1)
+            pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s\x1b[038;2;230;237;243m%s\x1b[0m",
+                            b.row, hint_left, panel, hint);
+    }
+
+    char text[96];
+    badge_collapsed_text(text, sizeof(text));
+    const char *badge_style = (b.kind == 1)
+        ? "\x1b[048;2;210;153;034m\x1b[038;2;013;017;023;1m"
+        : "\x1b[048;2;031;111;235m\x1b[038;2;255;255;255;1m";
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s%s\x1b[0m", b.row, b.start, badge_style, text);
+
+    if (b.kind == 2) {
+        int mrow = g_mouse_y + 1, mcol = g_mouse_x + 1;
+        struct { int s, e; const char *label; } btns[3] = {
+            { b.prev_s, b.prev_e, "[U 上]" },
+            { b.next_s, b.next_e, "[D 下]" },
+            { b.close_s, b.close_e, "[×]" },
+        };
+        for (int i = 0; i < 3; i++) {
+            int hot = (mrow == b.row && mcol >= btns[i].s && mcol < btns[i].e);
+            const char *style = hot
+                ? (i == 2 ? "\x1b[048;2;248;081;073m\x1b[038;2;255;255;255;1m"
+                          : "\x1b[048;2;121;192;255m\x1b[038;2;013;017;023;1m")
+                : (i == 2 ? "\x1b[048;2;033;038;045m\x1b[038;2;248;081;073m"
+                          : "\x1b[048;2;033;038;045m\x1b[038;2;121;192;255m");
+            pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s%s\x1b[0m",
+                            b.row, btns[i].s, style, btns[i].label);
+        }
+    }
     *posp = pos;
 }
 
@@ -1711,11 +1848,19 @@ static const char *help_shortcut_line(int idx, char *buf, int buf_size) {
     const HelpShortcut *hs = &g_help_shortcuts[idx];
     char combo[48] = {0};
     keymap_describe(hs->action, combo, sizeof(combo));
-    if (!combo[0]) snprintf(combo, sizeof(combo), "%s -", keymap_prefix_text());
+    if (!combo[0]) {
+        char pfx[32];
+        keymap_prefix_describe(pfx, sizeof(pfx));
+        snprintf(combo, sizeof(combo), "%s -", pfx);
+    }
 
     char prefix[32] = {0}, key[32] = {0};
     const char *sp = strrchr(combo, ' ');
-    if (sp) {
+    /* v1.8.7: 被设为「直接键」的动作 combo 里没有前缀段，左列改标注「直接」。 */
+    if (!keymap_action_uses_prefix(hs->action)) {
+        snprintf(prefix, sizeof(prefix), "%s", "直接");
+        snprintf(key, sizeof(key), "%s", combo);
+    } else if (sp) {
         int plen = (int)(sp - combo);
         if (plen > (int)sizeof(prefix) - 1) plen = (int)sizeof(prefix) - 1;
         memcpy(prefix, combo, plen);
@@ -2057,16 +2202,7 @@ void render_screen(void) {
                 if (pos > bs - 256) break;
             }
 
-            if (g_copy_mode) {
-                int badge_x = (g_mux.host_cols > 65) ? (g_mux.host_cols - 60) : 1;
-                pos += snprintf(out + pos, bs - pos, "\x1b[2;%dH\x1b[048;2;210;153;034m\x1b[038;2;013;017;023;1m [复制模式] \x1b[0m\x1b[048;2;033;038;045m\x1b[038;2;230;237;243m %s | Enter/Ctrl+C 复制, Shift/Alt+方向改选区, Esc 退出 \x1b[0m",
-                                badge_x, g_copy_sel_active ? (g_copy_block ? "块选区" : "行选区")
-                                                          : (g_copy_quick ? "点选区" : "移动光标"));
-            } else if (g_search_active && g_search_match_count > 0 && !g_search_mode) {
-                int bot_r = ui_bottom_row(g_mux.host_rows);
-                pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[048;2;033;038;045m\x1b[038;2;210;153;034;1m [搜索: \"%s\" (%d/%d)] \x1b[0m\x1b[048;2;022;027;034m\x1b[038;2;230;237;243m n 下一个, N 上一个, Esc 退出 \x1b[0m\x1b[K",
-                                bot_r, g_search_buf, g_search_match_cur + 1, g_search_match_count);
-            }
+            render_status_badge(out, bs, &pos, g_mux.host_cols);
 
             for (int y = rr; y < g_mux.host_rows && pos < bs - 64; y++)
                 pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[0m\x1b[K", y + 2);

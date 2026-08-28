@@ -65,13 +65,23 @@ int keymap_bind(const char *action_name, const char *key_text);
 
 /* 前缀键设置 / 判定。 */
 int keymap_set_prefix(const char *key_text);
-const char *keymap_prefix_text(void);
+const char *keymap_prefix_text(void);          /* ini 写法，例如 "C-b" */
+/* 人类可读写法，例如 "Ctrl+B"；界面一律用这个，不要直接显示 ini 文本。 */
+void keymap_prefix_describe(char *out, int out_size);
+int keymap_prefix_is_default(void);
 int keymap_is_prefix(WORD vk, DWORD ctrl, WCHAR uc);
 /* 前缀键对应的控制字符（Ctrl+B -> 0x02），无则返回 0。 */
 char keymap_prefix_char(void);
 
 /* 前缀模式下查表；返回动作 ID，arg 为附带参数（如 pane 序号）。 */
 int keymap_lookup(WORD vk, DWORD ctrl, WCHAR uc, int *arg);
+/* 免前缀（直接键）查表：只匹配被标记为“不使用前缀”的绑定。 */
+int keymap_lookup_direct(WORD vk, DWORD ctrl, WCHAR uc, int *arg);
+
+/* 某个动作是否需要先按前缀键；可在设置页 / [keys] 段里切换。
+ * ini 写法：动作名 = 键 noprefix   （例如 next-pane = M-n noprefix） */
+int keymap_action_uses_prefix(int action);
+int keymap_set_action_prefix(int action, int use_prefix);
 
 /* 生成可读键位文本，例如 "Ctrl+B c"。out 至少 32 字节。 */
 void keymap_describe(int action, char *out, int out_size);
@@ -93,5 +103,6 @@ int keymap_has_user_bindings(void);
 int keymap_user_binding_count(void);
 const char *keymap_user_binding_action(int idx);
 const char *keymap_user_binding_key(int idx);
+int keymap_user_binding_no_prefix(int idx);
 
 #endif /* WIN_TERMUX_KEYMAP_H */
