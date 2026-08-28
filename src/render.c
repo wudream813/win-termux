@@ -290,7 +290,7 @@ void render_color_picker(char *out, int bs, int *posp, int host_rows, int host_c
     int ax = (g_pop_anchor_x >= 0) ? g_pop_anchor_x : g_mouse_x;
     int left = popup_left_1based(ax, CP_W, host_cols);
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m┌─ 选择颜色 ─────────────────┐\x1b[0m", top, left);
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m ", top + 1, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m\x1b[48;2;33;38;45m ", top + 1, left);
     int row_cols = 2; /* left border + the initial interior space */
     for (int i = 1; i <= 4; i++) {
         /* Swatch background occupies ANSI columns left+2..left+5;
@@ -300,14 +300,14 @@ void render_color_picker(char *out, int bs, int *posp, int host_rows, int host_c
                         TAB_COLOR_BG[i], h ? "255;255;255" : "13;17;23", i, TAB_COLOR_BG[i]);
         row_cols += 4;
     }
-    pos += snprintf(out + pos, bs - pos, " \x1b[48;2;33;38;45m");
+    pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m ");
     row_cols++;
     while (row_cols < CP_W - 1 && pos < bs - 8) {
         out[pos++] = ' ';
         row_cols++;
     }
     pos += snprintf(out + pos, bs - pos, "│\x1b[0m");
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m ", top + 2, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m\x1b[48;2;33;38;45m ", top + 2, left);
     row_cols = 2;
     for (int i = 5; i <= 8; i++) {
         int h = (g_mouse_y == top + 1 && g_mouse_x >= left + 1 + (i-5)*4 && g_mouse_x < left + 5 + (i-5)*4);
@@ -315,7 +315,7 @@ void render_color_picker(char *out, int bs, int *posp, int host_rows, int host_c
                         TAB_COLOR_BG[i], h ? "255;255;255" : "13;17;23", i, TAB_COLOR_BG[i]);
         row_cols += 4;
     }
-    pos += snprintf(out + pos, bs - pos, " \x1b[48;2;33;38;45m");
+    pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m ");
     row_cols++;
     while (row_cols < CP_W - 1 && pos < bs - 8) {
         out[pos++] = ' ';
@@ -793,7 +793,8 @@ int palette_item_info(int page, int item_index, PaletteItemInfo *out) {
             out->action = PALETTE_ACTION_SELECT_PANEL;
             out->value = i;
             out->number = item_index + 1;
-            out->color = g_mux.panes[i].color;
+            out->color = (g_mux.panes[i].color >= 0 && g_mux.panes[i].color <= 8) ?
+                         g_mux.panes[i].color : 0;
             return 1;
         }
         return 0;
@@ -915,7 +916,7 @@ static const char *palette_page_title(int page) {
 }
 
 static const char *palette_bg_for_color(int color) {
-    if (color < 1 || color > 8) color = 4;
+    if (color < 0 || color > 8) color = 0;
     return TAB_COLOR_BG[color];
 }
 
@@ -953,7 +954,7 @@ static void render_palette_item_row(char *out, int bs, int *posp, int row, int l
     pos += snprintf(out + pos, bs - pos, "%s ", selected ? "▶" : " ");
     cols += 2;
 
-    if (item && item->color >= 1 && item->color <= 8) {
+    if (item && item->color >= 0 && item->color <= 8) {
         pos += snprintf(out + pos, bs - pos, "%s\x1b[38;2;13;17;23;1m%s\x1b[0m%s", palette_bg_for_color(item->color), tag, bg);
     } else {
         pos += snprintf(out + pos, bs - pos, "\x1b[38;2;210;153;34;1m%s\x1b[0m%s", tag, bg);

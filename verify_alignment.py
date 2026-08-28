@@ -168,6 +168,20 @@ check("\"open-settings-page\"" in RENDER and "PALETTE_ACTION_GRAPHICAL_SETTINGS"
       "设置命令面板没有默认的图形化设置入口")
 check("PALETTE_PAGE_MENU_SETTINGS" in RENDER and "PALETTE_ACTION_EDIT_PANEL" in RENDER,
       "菜单项设置没有独立的子面板/编辑动作")
+check("g_mux.palette_page = settings_active ? PALETTE_PAGE_SETTINGS : PALETTE_PAGE_OPERATIONS;" in INPUT,
+      "普通页面没有直接打开操作命令面板")
+check("uc == 0xFF1A" in INPUT,
+      "命令面板快捷键没有兼容中文全角冒号 U+FF1A")
+check("out->color = (g_mux.panes[i].color >= 0 && g_mux.panes[i].color <= 8)" in RENDER and
+      "item->color >= 0 && item->color <= 8" in RENDER,
+      "切换 panel 的默认颜色没有按蓝色处理")
+check("if (color < 0 || color > 8) color = 0;" in RENDER,
+      "panel 颜色无效值没有回退到默认蓝色")
+check(RENDER.count('"\\x1b[48;2;33;38;45m ");') >= 2,
+      "颜色选择器末尾间隙仍被上一块颜色错误填充")
+check("top + 1, left);" in RENDER and "top + 2, left);" in RENDER and
+      "\\x1b[0m\\x1b[48;2;33;38;45m ",
+      "颜色选择器首个空白格没有使用面板背景填充")
 check("palette_push_page(PALETTE_PAGE_MENU_SETTINGS);" in INPUT,
       "菜单项设置没有进入子面板")
 check("out->action = PALETTE_ACTION_EDIT_PANEL;" in RENDER,

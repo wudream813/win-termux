@@ -1599,7 +1599,9 @@ void handle_prefix(WORD vk, DWORD ctrl, WCHAR uc) {
     /* The command palette has one deliberate entry point: Ctrl+B :.  Keep
      * Ctrl+B p available for previous-panel navigation instead of treating
      * P/Space/another global shortcut as a palette alias. */
-    if (uc == ':' || (vk == VK_OEM_1 && (ctrl & SHIFT_PRESSED))) {
+    /* Chinese keyboard layouts often deliver Shift+; as fullwidth U+FF1A
+     * instead of ASCII ':'.  Accept both forms for Ctrl+B :. */
+    if (uc == ':' || uc == 0xFF1A || (vk == VK_OEM_1 && (ctrl & SHIFT_PRESSED))) {
         g_mux.ctx_mode = 0;
         g_mux.rename_mode = 0;
         g_mux.custom_cmd_mode = 0;
