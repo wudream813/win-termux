@@ -2744,8 +2744,42 @@ void handle_key(KEY_EVENT_RECORD *ke) {
     }
 }
 
+/* The exit confirmation used to swallow every mouse event, so its buttons
+ * looked clickable but were not.  Hit testing reuses confirm_exit_button_geom
+ * so the highlight and the click target are the same rectangle. */
+static void handle_confirm_exit_mouse(MOUSE_EVENT_RECORD *me) {
+    int mx = me->dwMousePosition.X, my = me->dwMousePosition.Y;
+    if (mx != g_mouse_x || my != g_mouse_y) {
+        g_mouse_x = mx;
+        g_mouse_y = my;
+        g_mux.needs_redraw = 1;
+    }
+    int pressed = (me->dwButtonState & (FROM_LEFT_1ST_BUTTON_PRESSED |
+                                        FROM_LEFT_2ND_BUTTON_PRESSED |
+                                        RIGHTMOST_BUTTON_PRESSED)) != 0;
+    if (!pressed || (me->dwEventFlags != 0 && me->dwEventFlags != DOUBLE_CLICK))
+        return;
+    int row, ys, ye, ns, ne;
+    confirm_exit_button_geom(g_mux.host_rows, g_mux.host_cols, &row, &ys, &ye, &ns, &ne);
+    int r = my + 1, c = mx + 1;
+    if (r != row) return;
+    if (c >= ys && c < ye) {
+        g_mux.confirm_exit_mode = 0;
+        g_mux.running = 0;
+        return;
+    }
+    if (c >= ns && c < ne) {
+        g_mux.confirm_exit_mode = 0;
+        g_mux.needs_redraw = 1;
+    }
+}
+
 void handle_mouse(MOUSE_EVENT_RECORD *me) {
-    if (!g_mouse_enabled || g_mux.confirm_exit_mode) return;
+    if (!g_mouse_enabled) return;
+    if (g_mux.confirm_exit_mode) {
+        handle_confirm_exit_mouse(me);
+        return;
+    }
     int mx = me->dwMousePosition.X, my = me->dwMousePosition.Y;
     log_mouse_event("ev", me);
 

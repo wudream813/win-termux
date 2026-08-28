@@ -20,6 +20,7 @@ CHECKS = (
     "verify_menu_settings.py",
     "verify_palette_interaction.py",
     "verify_alignment.py",
+    "verify_confirm_exit.py",
     "verify_config_theme.py",
     "verify_settings_ui.py",
 )

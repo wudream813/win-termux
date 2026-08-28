@@ -181,9 +181,21 @@ COLOR_PRELUDE = r"""
 #include <stdio.h>
 #include <string.h>
 
-#define CP_W 30
+#define CP_W 20
 static int g_mouse_x;
 static int g_mouse_y;
+#define CP_SWATCH_W 3
+static const char *const TAB_COLOR_BG_DIM[9] = {
+    "\x1b[48;2;22;62;128m",
+    "\x1b[48;2;22;62;128m",
+    "\x1b[48;2;36;99;49m",
+    "\x1b[48;2;110;82;30m",
+    "\x1b[48;2;74;48;122m",
+    "\x1b[48;2;24;80;48m",
+    "\x1b[48;2;52;96;128m",
+    "\x1b[48;2;112;66;34m",
+    "\x1b[48;2;104;50;90m",
+};
 static const char *const TAB_COLOR_BG[9] = {
     "\x1b[48;2;31;111;235m",
     "\x1b[48;2;31;111;235m",
@@ -337,6 +349,27 @@ def main() -> int:
           "int interior_cols = 2 + 4 * 4;" in RENDER and
           "while (interior_cols < CP_W - 1)" in RENDER,
           "颜色选择器没有逐单元格封闭面板背景")
+    check("CP_SWATCH_W" in RENDER_H and
+          "if (w >= CP_SWATCH_W)" in RENDER and
+          "int cols = utf8_cols(hdr" in RENDER and
+          'palette_hline(out, bs, &pos, top + 3, left, CP_W, "└", "┘")' in RENDER,
+          "颜色选择器面板没有按 CP_W 自适应收窄（右侧留大片空白）")
+    confirm_render = extract_func(RENDER, "void render_confirm_exit")
+    confirm_geom = extract_func(RENDER, "void confirm_exit_button_geom")
+    check("confirm_exit_button_geom" in RENDER_H and
+          "CONFIRM_YES_W" in confirm_geom and "CONFIRM_NO_W" in confirm_geom and
+          "confirm_exit_button_geom(host_rows, host_cols, &row" in confirm_render and
+          "confirm_pad(out, bs, &pos, interior - msg_cols)" in confirm_render and
+          "confirm_pad(out, bs, &pos, (left + w - 1) - ne)" in confirm_render,
+          "退出确认对话框没有按面板宽度补齐（右边框会错位）")
+    check("handle_confirm_exit_mouse" in INPUT and
+          "confirm_exit_button_geom(g_mux.host_rows, g_mux.host_cols" in INPUT and
+          "if (!g_mouse_enabled) return;" in INPUT and
+          "!g_mouse_enabled || g_mux.confirm_exit_mode" not in INPUT,
+          "退出确认对话框仍然吞掉全部鼠标事件")
+    check("int yes_hover = (mrow == row && mcol >= ys && mcol < ye);" in confirm_render and
+          "int no_hover = (mrow == row && mcol >= ns && mcol < ne);" in confirm_render,
+          "退出确认按钮没有 hover 高亮")
     check("dc = c - (left + 2)" in INPUT and
           "g_mouse_x >= left + 1 + i * 4" in RENDER and
           "int mouse_row = row - 1" in RENDER,
@@ -370,14 +403,24 @@ def main() -> int:
         4: (137, 87, 229), 5: (31, 136, 61), 6: (121, 192, 255),
         7: (217, 119, 54), 8: (205, 93, 173),
     }
+    dim = {
+        1: (22, 62, 128), 2: (36, 99, 49), 3: (110, 82, 30), 4: (74, 48, 122),
+        5: (24, 80, 48), 6: (52, 96, 128), 7: (112, 66, 34), 8: (104, 50, 90),
+    }
+
+    def swatch(index, hovered):
+        """3 coloured cells (bright only while hovered) plus a panel gap cell."""
+        base = colors[index] if hovered else dim[index]
+        return [base] * 3 + [panel]
+
     expected_backgrounds = (
-        [panel, panel] + sum(([colors[i]] * 4 for i in range(1, 5)), []) + [panel] * 12,
-        [panel, panel] + sum(([colors[i]] * 4 for i in range(5, 9)), []) + [panel] * 12,
+        [panel, panel] + sum((swatch(i, i == 3) for i in range(1, 5)), []) + [panel] * 2,
+        [panel, panel] + sum((swatch(i, False) for i in range(5, 9)), []) + [panel] * 2,
     )
     for row_index, (line, expected) in enumerate(zip(rows, expected_backgrounds), start=1):
         cells = parse_row(line)
-        if len(cells) != 30:
-            print(f"FAIL: 颜色选择器第{row_index}行只渲染 {len(cells)} 个单元格（应为 30）", file=sys.stderr)
+        if len(cells) != 20:
+            print(f"FAIL: 颜色选择器第{row_index}行只渲染 {len(cells)} 个单元格（应为 20）", file=sys.stderr)
             return 1
         got = [cell[1] for cell in cells]
         if got != expected:
@@ -388,17 +431,17 @@ def main() -> int:
 
     first = parse_row(rows[0])
     white = (255, 255, 255)
-    dark = (13, 17, 23)
-    # Third swatch's number is the 13th cell: border + padding + 2*4 + 2.
-    if first[12][2] != white:
+    idle = (139, 148, 158)
+    # Third swatch's number is the 12th cell: border + padding + 2*4 + 1.
+    if first[11][2] != white:
         print("FAIL: hover 没有只高亮第三个色块的数字", file=sys.stderr)
         return 1
     for index, cell in enumerate(first):
-        if index != 12 and cell[2] == white:
+        if index != 11 and cell[2] == white:
             print(f"FAIL: hover 意外高亮了第 {index + 1} 个单元格", file=sys.stderr)
             return 1
-    if any(cell[2] != dark for cell in parse_row(rows[1]) if cell[0].isdigit()):
-        print("FAIL: 第二行非 hover 色块数字前景异常", file=sys.stderr)
+    if any(cell[2] != idle for cell in parse_row(rows[1]) if cell[0].isdigit()):
+        print("FAIL: 第二行非 hover 色块数字没有用未激活标签页的灰色前景", file=sys.stderr)
         return 1
 
     print("color picker regression passed: 8 contiguous swatches, hover and final backgrounds are exact.")

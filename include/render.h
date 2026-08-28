@@ -29,7 +29,8 @@
 #define CMD_BOX_H 4
 #define CTX_W 24
 #define CTX_H 4
-#define CP_W 30
+#define CP_SWATCH_W 3   /* coloured cells per swatch; the 4th cell is a gap */
+#define CP_W 20
 #define CP_H 4
 
 /* Command palette pages.  palette_mode remains a boolean so the rest of the
@@ -118,6 +119,9 @@ int settings_keys_entry_at(int host_rows, int row);
 void render_search_box(char *out, int bs, int *posp, int host_rows, int host_cols);
 void render_confirm_exit(char *out, int bs, int *posp, int host_rows, int host_cols);
 void confirm_exit_geom(int host_rows, int host_cols, int *top, int *left, int *w, int *h);
+void confirm_exit_button_geom(int host_rows, int host_cols, int *row,
+                              int *yes_start, int *yes_end,
+                              int *no_start, int *no_end);
 void render_command_palette(char *out, int bs, int *posp, int host_rows, int host_cols);
 void palette_geom(int host_rows, int host_cols, int *top, int *left, int *w, int *h);
 int palette_visible_rows(int host_rows);

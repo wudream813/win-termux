@@ -206,9 +206,9 @@ check("render_color_picker_cell" in RENDER and "render_color_picker_row" in REND
 check("int interior_cols = 2 + 4 * 4;" in RENDER and
       "while (interior_cols < CP_W - 1)" in RENDER,
       "颜色选择器没有显式封闭右侧面板背景填充")
-check("const char *swatch_bg = TAB_COLOR_BG[color];" in RENDER and
+check("const char *swatch_bg = hovered ? TAB_COLOR_BG[color] : TAB_COLOR_BG_DIM[color];" in RENDER and
       "render_color_picker_cell(out, bs, &pos, swatch_bg" in RENDER,
-      "颜色选择器色块背景没有逐单元格绑定到对应颜色")
+      "颜色选择器色块背景没有逐单元格绑定到对应颜色（hover=亮/非 hover=暗）")
 check('"\\x1b[0m\\x1b[048;2;033;038;045m "' not in RENDER,
       "颜色选择器仍使用旧的额外背景空格切换")
 check("palette_push_page(PALETTE_PAGE_MENU_SETTINGS);" in INPUT,

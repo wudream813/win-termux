@@ -283,6 +283,9 @@ void render_ctx_menu(char *out, int bs, int *posp, int host_rows, int host_cols)
     *posp = pos;
 }
 
+static void palette_hline(char *out, int bs, int *posp, int row, int left, int width,
+                          const char *prefix, const char *suffix);
+
 static void render_color_picker_cell(char *out, int bs, int *posp,
                                      const char *bg, const char *fg, char ch) {
     int pos = *posp;
@@ -296,6 +299,10 @@ static void render_color_picker_row(char *out, int bs, int *posp, int row,
     const char *panel_bg = "\x1b[048;2;033;038;045m";
     const char *normal_fg = "\x1b[038;2;013;017;023;1m";
     const char *hover_fg = "\x1b[038;2;255;255;255;1m";
+    /* A swatch is a miniature tab: hovering it shows the "active tab" look
+     * (full-strength colour, bold white label), everything else uses the
+     * inactive-tab look (dimmed colour, muted grey label). */
+    const char *idle_fg = "\x1b[038;2;139;148;158m";
     int mouse_row = row - 1; /* rendered row is ANSI 1-based */
 
     pos += snprintf(out + pos, bs - pos,
@@ -304,13 +311,19 @@ static void render_color_picker_row(char *out, int bs, int *posp, int row,
 
     for (int i = 0; i < 4; i++) {
         int color = base_color + i;
-        const char *swatch_bg = TAB_COLOR_BG[color];
         int hovered = (g_mouse_y == mouse_row &&
                        g_mouse_x >= left + 1 + i * 4 &&
                        g_mouse_x < left + 5 + i * 4);
+        const char *swatch_bg = hovered ? TAB_COLOR_BG[color] : TAB_COLOR_BG_DIM[color];
         for (int w = 0; w < 4; w++) {
-            char ch = (w == 2) ? (char)('0' + color) : ' ';
-            const char *fg = (w == 2 && hovered) ? hover_fg : normal_fg;
+            /* CP_SWATCH_W coloured cells then one panel-background gap, so the
+             * swatches read as separate tabs instead of one long ribbon. */
+            if (w >= CP_SWATCH_W) {
+                render_color_picker_cell(out, bs, &pos, panel_bg, normal_fg, ' ');
+                continue;
+            }
+            char ch = (w == 1) ? (char)('0' + color) : ' ';
+            const char *fg = (w == 1) ? (hovered ? hover_fg : idle_fg) : normal_fg;
             render_color_picker_cell(out, bs, &pos, swatch_bg, fg, ch);
         }
     }
@@ -333,14 +346,20 @@ void render_color_picker(char *out, int bs, int *posp, int host_rows, int host_c
     int top = 2;
     int ax = (g_pop_anchor_x >= 0) ? g_pop_anchor_x : g_mouse_x;
     int left = popup_left_1based(ax, CP_W, host_cols);
+    /* The frame is drawn to CP_W instead of a hard-coded ruler so the panel
+     * always hugs the swatches; it used to be padded out with dead space. */
+    const char *hdr = "┌─ 选择颜色 ";
+    int cols = utf8_cols(hdr, (int)strlen(hdr));
     pos += snprintf(out + pos, bs - pos,
-                    "\x1b[%d;%dH\x1b[038;2;255;255;255m\x1b[048;2;031;111;235m┌─ 选择颜色 ─────────────────┐\x1b[0m",
-                    top, left);
+                    "\x1b[%d;%dH\x1b[038;2;255;255;255m\x1b[048;2;031;111;235m%s",
+                    top, left, hdr);
+    while (cols < CP_W - 1 && pos < bs - 8) {
+        out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80'; cols++;
+    }
+    pos += snprintf(out + pos, bs - pos, "┐\x1b[0m");
     render_color_picker_row(out, bs, &pos, top + 1, left, 1);
     render_color_picker_row(out, bs, &pos, top + 2, left, 5);
-    pos += snprintf(out + pos, bs - pos,
-                    "\x1b[%d;%dH\x1b[048;2;033;038;045m└────────────────────────────┘\x1b[0m",
-                    top + 3, left);
+    palette_hline(out, bs, &pos, top + 3, left, CP_W, "└", "┘");
     *posp = pos;
 }
 
@@ -925,6 +944,9 @@ static int ui_bottom_row(int host_rows) {
 
 #define CONFIRM_W 34
 #define CONFIRM_H 4
+#define CONFIRM_YES_W 10   /* [ Y 确认 ] */
+#define CONFIRM_NO_W  14   /* [ N/Esc 取消 ] */
+#define CONFIRM_GAP    2
 
 void confirm_exit_geom(int host_rows, int host_cols, int *top, int *left, int *w, int *h) {
     int width = CONFIRM_W, height = CONFIRM_H;
@@ -939,23 +961,85 @@ void confirm_exit_geom(int host_rows, int host_cols, int *top, int *left, int *w
     if (h) *h = height;
 }
 
+/* Both the renderer and the mouse handler derive the button boxes from this
+ * one helper, so the highlighted area and the clickable area can never drift
+ * apart.  Columns are 1-based ANSI columns; *_end is exclusive. */
+void confirm_exit_button_geom(int host_rows, int host_cols, int *row,
+                              int *yes_start, int *yes_end,
+                              int *no_start, int *no_end) {
+    int top, left, w, h;
+    confirm_exit_geom(host_rows, host_cols, &top, &left, &w, &h);
+    (void)h;
+    int interior = w - 2;
+    if (interior < 0) interior = 0;
+    int used = CONFIRM_YES_W + CONFIRM_GAP + CONFIRM_NO_W;
+    int pad = interior - used;
+    if (pad < 0) pad = 0;
+    int lead = pad / 2;
+    int ys = left + 1 + lead;
+    int ns = ys + CONFIRM_YES_W + CONFIRM_GAP;
+    if (row) *row = top + 2;
+    if (yes_start) *yes_start = ys;
+    if (yes_end) *yes_end = ys + CONFIRM_YES_W;
+    if (no_start) *no_start = ns;
+    if (no_end) *no_end = ns + CONFIRM_NO_W;
+}
+
+static void confirm_pad(char *out, int bs, int *posp, int n) {
+    int pos = *posp;
+    while (n-- > 0 && pos < bs - 2) out[pos++] = ' ';
+    *posp = pos;
+}
+
 void render_confirm_exit(char *out, int bs, int *posp, int host_rows, int host_cols) {
     int pos = *posp, top, left, w, h;
     confirm_exit_geom(host_rows, host_cols, &top, &left, &w, &h);
     (void)h;
+    int interior = w - 2;
+    if (interior < 0) interior = 0;
 
+    const char *panel = "\x1b[048;2;033;038;045m";
+    const char *hdr = "┌─ 退出确认 ";
+    int cols = utf8_cols(hdr, (int)strlen(hdr));
     pos += snprintf(out + pos, bs - pos,
-        "\x1b[%d;%dH\x1b[038;2;255;255;255m\x1b[048;2;248;081;073m┌─ 退出确认 ─────────────────────┐\x1b[0m", top, left);
+        "\x1b[%d;%dH\x1b[038;2;255;255;255m\x1b[048;2;248;081;073m%s", top, left, hdr);
+    while (cols < w - 1 && pos < bs - 8) {
+        out[pos++] = '\xe2'; out[pos++] = '\x94'; out[pos++] = '\x80'; cols++;
+    }
+    pos += snprintf(out + pos, bs - pos, "┐\x1b[0m");
+
+    const char *msg = " 确定要退出 termux 吗？";
+    int msg_cols = utf8_cols(msg, (int)strlen(msg));
     pos += snprintf(out + pos, bs - pos,
-        "\x1b[%d;%dH\x1b[048;2;033;038;045m│\x1b[0m\x1b[048;2;033;038;045m\x1b[038;2;230;237;243m 确定要退出 termux 吗？         \x1b[0m\x1b[048;2;033;038;045m│\x1b[0m",
-        top + 1, left);
-    pos += snprintf(out + pos, bs - pos,
-        "\x1b[%d;%dH\x1b[048;2;033;038;045m│\x1b[0m\x1b[048;2;033;038;045m\x1b[038;2;139;148;158m ",
-        top + 2, left);
-    pos += snprintf(out + pos, bs - pos,
-        "\x1b[038;2;248;081;073;1mY\x1b[22m\x1b[038;2;139;148;158m 确认    \x1b[038;2;063;185;080;1mN/Esc\x1b[22m\x1b[038;2;139;148;158m 取消     \x1b[0m\x1b[048;2;033;038;045m│\x1b[0m");
-    pos += snprintf(out + pos, bs - pos,
-        "\x1b[%d;%dH\x1b[048;2;033;038;045m└────────────────────────────────┘\x1b[0m", top + 3, left);
+        "\x1b[%d;%dH%s│%s\x1b[038;2;230;237;243m%s", top + 1, left, panel, panel, msg);
+    confirm_pad(out, bs, &pos, interior - msg_cols);
+    pos += snprintf(out + pos, bs - pos, "\x1b[0m%s│\x1b[0m", panel);
+
+    int row, ys, ye, ns, ne;
+    confirm_exit_button_geom(host_rows, host_cols, &row, &ys, &ye, &ns, &ne);
+    int mrow = g_mouse_y + 1, mcol = g_mouse_x + 1;
+    int yes_hover = (mrow == row && mcol >= ys && mcol < ye);
+    int no_hover = (mrow == row && mcol >= ns && mcol < ne);
+
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s│%s", row, left, panel, panel);
+    confirm_pad(out, bs, &pos, ys - (left + 1));
+    if (yes_hover)
+        pos += snprintf(out + pos, bs - pos,
+            "\x1b[048;2;248;081;073m\x1b[038;2;255;255;255;1m[ Y 确认 ]\x1b[0m%s", panel);
+    else
+        pos += snprintf(out + pos, bs - pos,
+            "%s\x1b[038;2;248;081;073;1m[\x1b[22m\x1b[038;2;230;237;243m Y 确认 \x1b[038;2;248;081;073;1m]\x1b[22m", panel);
+    confirm_pad(out, bs, &pos, CONFIRM_GAP);
+    if (no_hover)
+        pos += snprintf(out + pos, bs - pos,
+            "\x1b[048;2;063;185;080m\x1b[038;2;013;017;023;1m[ N/Esc 取消 ]\x1b[0m%s", panel);
+    else
+        pos += snprintf(out + pos, bs - pos,
+            "%s\x1b[038;2;063;185;080;1m[\x1b[22m\x1b[038;2;230;237;243m N/Esc 取消 \x1b[038;2;063;185;080;1m]\x1b[22m", panel);
+    confirm_pad(out, bs, &pos, (left + w - 1) - ne);
+    pos += snprintf(out + pos, bs - pos, "\x1b[0m%s│\x1b[0m", panel);
+
+    palette_hline(out, bs, &pos, top + 3, left, w, "└", "┘");
     pos += snprintf(out + pos, bs - pos, "\x1b[?25l");
     *posp = pos;
 }
