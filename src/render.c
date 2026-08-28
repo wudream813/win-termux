@@ -1538,11 +1538,6 @@ static const char *palette_page_title(int page) {
     }
 }
 
-static const char *palette_bg_for_color(int color) {
-    if (color < 0 || color > 8) color = 0;
-    return TAB_COLOR_BG[color];
-}
-
 static void palette_hline(char *out, int bs, int *posp, int row, int left, int width, const char *prefix, const char *suffix) {
     int pos = *posp;
     int cols = 0;
@@ -1577,11 +1572,10 @@ static void render_palette_item_row(char *out, int bs, int *posp, int row, int l
     pos += snprintf(out + pos, bs - pos, "%s ", selected ? "▶" : " ");
     cols += 2;
 
-    if (item && item->color >= 0 && item->color <= 8) {
-        pos += snprintf(out + pos, bs - pos, "%s\x1b[038;2;013;017;023;1m%s\x1b[0m%s", palette_bg_for_color(item->color), tag, bg);
-    } else {
-        pos += snprintf(out + pos, bs - pos, "\x1b[038;2;210;153;034;1m%s\x1b[0m%s", tag, bg);
-    }
+    /* v1.8.8: 序号一律用普通文字色，不再按标签颜色上色块、也不再用琥珀色，
+     * 避免一列 [1][2][3] 花花绿绿抢视线。 */
+    pos += snprintf(out + pos, bs - pos, "%s%s%s", bg,
+                    selected ? "\x1b[038;2;230;237;243m" : "\x1b[038;2;139;148;158m", tag);
     cols += tagw;
     out[pos++] = ' '; cols++;
 

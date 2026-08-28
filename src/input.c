@@ -896,17 +896,35 @@ void handle_palette_mouse(MOUSE_EVENT_RECORD *me) {
     palette_geom(g_mux.host_rows, g_mux.host_cols, &top, &left, &pw, &ph);
 
     if (me->dwEventFlags == MOUSE_WHEELED) {
+        /* v1.8.8: 滚轮先滚页面（列表窗口），滚不动了才去挪选中项。 */
         int direction = (short)HIWORD(me->dwButtonState);
         int filtered[64];
         int count = palette_filter_cmds(g_mux.palette_page, filtered, 64, g_mux.palette_query);
-        int step = palette_visible_rows(g_mux.host_rows) > 1 ? 2 : 1;
+        int visible = palette_visible_rows(g_mux.host_rows);
+        int step = visible > 1 ? 2 : 1;
+        int max_scroll = count > visible ? count - visible : 0;
         g_mux.palette_focus = PALETTE_FOCUS_LIST;
-        if (direction > 0) {
-            g_mux.palette_sel -= step;
-            if (g_mux.palette_sel < 0) g_mux.palette_sel = 0;
-        } else if (count > 0) {
-            g_mux.palette_sel += step;
-            if (g_mux.palette_sel >= count) g_mux.palette_sel = count - 1;
+
+        int before = g_mux.palette_scroll;
+        g_mux.palette_scroll += (direction > 0 ? -step : step);
+        if (g_mux.palette_scroll > max_scroll) g_mux.palette_scroll = max_scroll;
+        if (g_mux.palette_scroll < 0) g_mux.palette_scroll = 0;
+
+        if (g_mux.palette_scroll == before) {
+            /* 已经到顶 / 到底，滚不动了：这时才让滚轮移动选中项。 */
+            if (direction > 0) {
+                g_mux.palette_sel -= step;
+                if (g_mux.palette_sel < 0) g_mux.palette_sel = 0;
+            } else if (count > 0) {
+                g_mux.palette_sel += step;
+                if (g_mux.palette_sel >= count) g_mux.palette_sel = count - 1;
+            }
+        } else {
+            /* 页面滚动了：选中项只在被滚出可视窗口时才跟着走，保持在窗口边缘。 */
+            if (g_mux.palette_sel < g_mux.palette_scroll) g_mux.palette_sel = g_mux.palette_scroll;
+            int last = g_mux.palette_scroll + visible - 1;
+            if (last > count - 1) last = count - 1;
+            if (last >= 0 && g_mux.palette_sel > last) g_mux.palette_sel = last;
         }
         g_mux.needs_redraw = 1;
         return;
@@ -3408,7 +3426,16 @@ void handle_mouse(MOUSE_EVENT_RECORD *me) {
             if (len > 0) write_to_pane(seq, len);
             return;
         }
-        if (!s->in_alt_screen) do_scroll(d > 0 ? 3 : -3);
+        if (!s->in_alt_screen) {
+            do_scroll(d > 0 ? 3 : -3);
+            return;
+        }
+        /* v1.8.8: 备用屏幕（vim / less / man 这类全屏程序）没有滚动历史可翻，
+         * 滚不动的时候才退化成给程序送方向键，让它自己挪光标 / 翻页。 */
+        const char *arrow = d > 0 ? (s->app_cursor_keys ? "\x1bOA" : "\x1b[A")
+                                  : (s->app_cursor_keys ? "\x1bOB" : "\x1b[B");
+        int alen = (int)strlen(arrow);
+        for (int i = 0; i < 3; i++) write_to_pane(arrow, alen);
         return;
     }
     if (s->mouse_tracking == 0) {

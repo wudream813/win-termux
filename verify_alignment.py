@@ -196,11 +196,35 @@ check("g_mux.palette_page = settings_active ? PALETTE_PAGE_SETTINGS : PALETTE_PA
       "普通页面没有直接打开操作命令面板")
 check("CHR(0xFF1A)" in KEYMAP,
       "命令面板快捷键没有兼容中文全角冒号 U+FF1A")
-check("out->color = (g_mux.panes[i].color >= 0 && g_mux.panes[i].color <= 8)" in RENDER and
-      "item->color >= 0 && item->color <= 8" in RENDER,
-      "切换 panel 的默认颜色没有按蓝色处理")
-check("if (color < 0 || color > 8) color = 0;" in RENDER,
-      "panel 颜色无效值没有回退到默认蓝色")
+check("out->color = (g_mux.panes[i].color >= 0 && g_mux.panes[i].color <= 8)" in RENDER,
+      "切换 panel 条目没有带出 panel 的颜色编号")
+# v1.8.8: 命令面板的序号一律用普通文字色，不再按标签颜色上色块 / 不再用琥珀色。
+_item_row_start = RENDER.find("static void render_palette_item_row")
+_item_row_end = RENDER.find("static void render_palette", _item_row_start + 10)
+_item_row = RENDER[_item_row_start:_item_row_end]
+check(_item_row_start >= 0 and "TAB_COLOR_BG" not in _item_row and "palette_bg_for_color" not in _item_row,
+      "命令面板序号又被按标签颜色上色了")
+check("\\x1b[038;2;210;153;034;1m%s" not in _item_row,
+      "命令面板序号又用回了琥珀色")
+check("%s%s%s\", bg," in _item_row and "038;2;139;148;158m" in _item_row,
+      "命令面板序号没有使用行内普通文字色")
+check("palette_bg_for_color" not in RENDER,
+      "未使用的 palette_bg_for_color 应当已经删除")
+
+# v1.8.8: 滚轮先滚页面，滚不动了才挪光标 / 选中项。
+_pal_mouse = INPUT[INPUT.find("void handle_palette_mouse"):]
+_pal_wheel = _pal_mouse[:_pal_mouse.find("int r = my + 1;")]
+check("g_mux.palette_scroll +=" in _pal_wheel,
+      "命令面板滚轮没有直接滚动列表窗口")
+check("if (g_mux.palette_scroll == before)" in _pal_wheel and "g_mux.palette_sel -= step;" in _pal_wheel,
+      "命令面板滚轮到顶/到底时没有退化成移动选中项")
+check(_pal_wheel.find("g_mux.palette_scroll +=") < _pal_wheel.find("g_mux.palette_sel -= step;"),
+      "命令面板滚轮必须先尝试滚动页面，再考虑移动选中项")
+check("if (!s->in_alt_screen) {" in INPUT and "do_scroll(d > 0 ? 3 : -3);" in INPUT,
+      "终端滚轮没有优先滚动滚动历史")
+check("s->app_cursor_keys ? \"\\x1bOA\" : \"\\x1b[A\"" in INPUT and
+      "for (int i = 0; i < 3; i++) write_to_pane(arrow, alen);" in INPUT,
+      "备用屏幕滚不动时没有退化成给程序送方向键")
 check("render_color_picker_cell" in RENDER and "render_color_picker_row" in RENDER,
       "颜色选择器没有使用逐单元格渲染辅助函数")
 check("int interior_cols = 2 + 4 * 4;" in RENDER and
