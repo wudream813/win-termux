@@ -257,8 +257,12 @@ check("退出标签页" not in RENDER and
       "退出标签页" not in ROOT.joinpath("README.md").read_text(encoding="utf-8") and
       "退出标签页" not in ROOT.joinpath("history.md").read_text(encoding="utf-8"),
       "仍存在过时的‘退出标签页’文案")
-check("g_mux.running = 0;" in INPUT[INPUT.find("case PALETTE_ACTION_QUIT"):INPUT.find("case PALETTE_ACTION_DEFAULT_STARTUP")],
-      "退出 termux 没有设置整个程序的 running 状态")
+# v1.8.4：命令面板的退出改为走统一的 ACT_QUIT 动作，confirm_on_exit 才会生效
+_quit_case = INPUT[INPUT.find("case PALETTE_ACTION_QUIT"):INPUT.find("case PALETTE_ACTION_DEFAULT_STARTUP")]
+check("action_execute(ACT_QUIT" in _quit_case,
+      "退出 termux 没有走统一的 ACT_QUIT 动作（confirm_on_exit 会失效）")
+check("g_confirm_on_exit" in INPUT[INPUT.find("case ACT_QUIT:"):INPUT.find("case ACT_TAB_COLOR_NEXT:")],
+      "ACT_QUIT 没有处理 confirm_on_exit 二次确认")
 check("if (total_cols <= vis_width)" in UTF8,
       "输入光标在文本恰好填满时仍可能落到右边框/分隔符")
 check("int max_cx = vis_width - 1 - (has_right ? 1 : 0);" in UTF8,

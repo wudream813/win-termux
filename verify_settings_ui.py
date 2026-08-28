@@ -135,6 +135,16 @@ check("keymap_action_at(" in keys and "settings_keys_rows()" in keys and
       "keymap_action_count()" in RENDER,
       f"键位表格按动作表（当前 {action_count} 项）动态生成，不写死条目")
 
+print("\n== 5) 命令面板入口与光标 ==")
+for act in ("PALETTE_ACTION_OPEN_APPEARANCE", "PALETTE_ACTION_OPEN_KEYS", "PALETTE_ACTION_OPEN_BEHAVIOR"):
+    check(act in RENDER and act in INPUT, f"命令面板存在入口 {act}")
+cursor_block = RENDER[RENDER.index("g_hex_edit_active && !g_settings_show_presets"):]
+cursor_block = cursor_block[:cursor_block.index("} else {")]
+check("g_settings_nav <= g_chooser_item_count" in RENDER,
+      "只有菜单项详情页显示文本光标，三个分类页不会留下错位光标")
+check("settings_role_row(g_hex_edit_role)" in cursor_block,
+      "颜色十六进制编辑时光标落在对应角色行")
+
 if errors:
     print(f"\n设置页 UI 验证失败：{len(errors)} 项", file=sys.stderr)
     raise SystemExit(1)

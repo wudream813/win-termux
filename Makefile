@@ -23,7 +23,7 @@ test:
 
 # 主题 / 键位模块不依赖 Win32 API，可用 tests/stub 的 windows.h 替身在本机跑
 unittest:
-	gcc -O1 -Wall -Wextra -Werror -Itests/stub -Iinclude src/theme.c src/keymap.c tests/test_config.c -o /tmp/termux_test_config
+	gcc -O1 -Wall -Wextra -Werror -Itests/stub -Iinclude src/theme.c src/keymap.c tests/test_config.c -o /tmp/termux_test_config -lm
 	/tmp/termux_test_config
 
 clean:

@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 static int g_checks = 0;
 static int g_failed = 0;
@@ -115,6 +116,62 @@ static void test_theme_roles(void) {
     theme_init();
 }
 
+/* WCAG 相对亮度与对比度：换主题后界面必须依然“看得清” */
+static double srgb_channel(int v) {
+    double c = v / 255.0;
+    return c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4);
+}
+
+static double luminance(int r, int g, int b) {
+    return 0.2126 * srgb_channel(r) + 0.7152 * srgb_channel(g) + 0.0722 * srgb_channel(b);
+}
+
+static double contrast_roles(int fg_role, int bg_role) {
+    int fr, fg, fb, br, bg2, bb;
+    theme_role_rgb(fg_role, &fr, &fg, &fb);
+    theme_role_rgb(bg_role, &br, &bg2, &bb);
+    double l1 = luminance(fr, fg, fb), l2 = luminance(br, bg2, bb);
+    if (l1 < l2) { double t = l1; l1 = l2; l2 = t; }
+    return (l1 + 0.05) / (l2 + 0.05);
+}
+
+static void check_contrast(const char *theme, int fg_role, int bg_role, double min, const char *what) {
+    double c = contrast_roles(fg_role, bg_role);
+    g_checks++;
+    if (c < min) {
+        g_failed++;
+        printf("  [FAIL] %s: %s 对比度 %.2f < %.2f\n", theme, what, c, min);
+    }
+}
+
+static void test_theme_contrast(void) {
+    printf("theme: 每套内置主题的关键配色对比度\n");
+    for (int i = 0; i < theme_count(); i++) {
+        theme_init();
+        theme_set_by_name(theme_name_at(i));
+        theme_apply();
+        const char *name = theme_name_at(i);
+        /* 正文 / 次要文字压在面板与标签栏底色上 */
+        check_contrast(name, TH_FG, TH_BG2, 7.0, "正文 vs 面板底");
+        check_contrast(name, TH_FG, TH_BG1, 7.0, "正文 vs 标签栏底");
+        check_contrast(name, TH_FG_DIM, TH_BG2, 3.2, "次要文字 vs 面板底");
+        check_contrast(name, TH_FG_DIM, TH_BG1, 3.2, "次要文字 vs 标签栏底");
+        /* 活动标签：白字压强调色 */
+        check_contrast(name, TH_WHITE, TH_ACCENT, 3.2, "白字 vs 强调色");
+        /* 深色字压在亮色按钮上（[*] [+] 等） */
+        check_contrast(name, TH_BG0, TH_CYAN, 5.0, "深色字 vs 浅蓝按钮");
+        check_contrast(name, TH_BG0, TH_GREEN, 4.5, "深色字 vs 绿色按钮");
+        check_contrast(name, TH_BG0, TH_YELLOW, 5.0, "深色字 vs 琥珀按钮");
+        check_contrast(name, TH_BG0, TH_ORANGE, 4.0, "深色字 vs 橙色按钮");
+        /* 白字压危险色 / 选区 */
+        check_contrast(name, TH_WHITE, TH_RED, 3.0, "白字 vs 红色");
+        check_contrast(name, TH_WHITE, TH_SELECTION, 5.0, "白字 vs 选区底");
+        /* 面板与标签栏必须能分层 */
+        check_contrast(name, TH_BG2, TH_BG1, 1.12, "面板底 vs 标签栏底");
+    }
+    theme_init();
+}
+
 /* ------------------------------------------------------------------ 键位 */
 
 #define CTRL_ONLY  (LEFT_CTRL_PRESSED)
@@ -210,6 +267,17 @@ static void test_keymap_describe(void) {
     keymap_describe(ACT_TAB_COLOR_PREV, buf, sizeof(buf));
     check_str(buf, "Ctrl+B Shift+T", "Shift 组合的描述");
 
+    keymap_describe(ACT_SEND_PREFIX, buf, sizeof(buf));
+    check_str(buf, "Ctrl+B Ctrl+B", "未绑定时 send-prefix 显示为连按两次前缀");
+    keymap_bind("send-prefix", "q");
+    keymap_describe(ACT_SEND_PREFIX, buf, sizeof(buf));
+    check_str(buf, "Ctrl+B q", "绑定后 send-prefix 显示真实键位");
+    int sp_arg = 0;
+    check(keymap_lookup('Q', 0, 'q', &sp_arg) == ACT_SEND_PREFIX, "绑定后的键真的触发 send-prefix");
+    keymap_unbind("send-prefix");
+    keymap_describe(ACT_SEND_PREFIX, buf, sizeof(buf));
+    check_str(buf, "Ctrl+B Ctrl+B", "复位后回到连按两次前缀");
+
     keymap_set_prefix("C-a");
     keymap_bind("new-pane", "F2");
     keymap_describe(ACT_NEW_PANE, buf, sizeof(buf));
@@ -297,6 +365,7 @@ int main(void) {
     test_theme_remap();
     test_theme_override();
     test_theme_roles();
+    test_theme_contrast();
     test_keymap_defaults();
     test_keymap_prefix();
     test_keymap_parse();

@@ -150,7 +150,7 @@ def check_unit_tests() -> None:
     out = ROOT / ".test_config.bin"
     cmd = [cc, "-O1", "-Wall", "-Wextra", "-Werror",
            "-Itests/stub", "-Iinclude",
-           "src/theme.c", "src/keymap.c", "tests/test_config.c", "-o", str(out)]
+           "src/theme.c", "src/keymap.c", "tests/test_config.c", "-o", str(out), "-lm"]
     build = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
     if build.returncode:
         fail("单元测试编译失败:\n" + build.stdout + build.stderr)

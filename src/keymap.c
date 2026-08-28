@@ -309,19 +309,24 @@ static void spec_text(const KeySpec *s, char *out, int out_size) {
 void keymap_describe(int action, char *out, int out_size) {
     if (!out || out_size <= 0) return;
     out[0] = 0;
+    /* send-prefix 默认没有独立键位（连按两次前缀即可），但用户可以在
+     * [keys] / 设置页里给它绑一个键，这时必须显示真实键位而不是前缀两连。 */
     const KeySpec *found = NULL;
     for (int i = 0; i < g_user_count && !found; i++)
         if (g_user[i].bind.action == action) found = &g_user[i].bind.key;
     for (int i = 0; i < g_default_count && !found; i++)
         if (g_default_bindings[i].action == action && !g_action_overridden[action])
             found = &g_default_bindings[i].key;
-    if (!found) return;
 
     char prefix[24], key[24];
     spec_text(&g_prefix, prefix, sizeof(prefix));
-    spec_text(found, key, sizeof(key));
-    if (action == ACT_SEND_PREFIX) snprintf(out, out_size, "%s %s", prefix, prefix);
-    else snprintf(out, out_size, "%s %s", prefix, key);
+    if (!found) {
+        if (action != ACT_SEND_PREFIX) return;
+        snprintf(key, sizeof(key), "%s", prefix);   /* 连按两次前缀 */
+    } else {
+        spec_text(found, key, sizeof(key));
+    }
+    snprintf(out, out_size, "%s %s", prefix, key);
 }
 
 int keymap_action_count(void) { return g_action_count; }

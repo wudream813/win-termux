@@ -400,6 +400,19 @@ void execute_palette_command(int item_index) {
             palette_close();
             action_execute(ACT_NEXT_THEME, 0, 0);
             break;
+        case PALETTE_ACTION_OPEN_APPEARANCE:
+        case PALETTE_ACTION_OPEN_KEYS:
+        case PALETTE_ACTION_OPEN_BEHAVIOR: {
+            palette_close();
+            g_key_capture_active = 0;
+            g_hex_edit_active = 0;
+            open_settings_pane();
+            g_settings_nav = (item.action == PALETTE_ACTION_OPEN_APPEARANCE) ? SETTINGS_NAV_APPEARANCE
+                           : (item.action == PALETTE_ACTION_OPEN_KEYS) ? SETTINGS_NAV_KEYS
+                           : SETTINGS_NAV_BEHAVIOR;
+            g_mux.needs_redraw = 1;
+            break;
+        }
         case PALETTE_ACTION_GRAPHICAL_SETTINGS:
             palette_close();
             open_settings_pane();
@@ -425,7 +438,8 @@ void execute_palette_command(int item_index) {
             break;
         case PALETTE_ACTION_QUIT:
             palette_close();
-            g_mux.running = 0;
+            /* 走统一的退出动作，confirm_on_exit 才会对命令面板同样生效 */
+            action_execute(ACT_QUIT, 0, 0);
             break;
         case PALETTE_ACTION_DEFAULT_STARTUP:
             palette_push_page(PALETTE_PAGE_DEFAULT_STARTUP);

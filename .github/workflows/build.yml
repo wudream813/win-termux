@@ -8,7 +8,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
       - run: x86_64-w64-mingw32-gcc -O2 -s -Wall -Wextra -Iinclude src/*.c -o termux.exe -luser32
       - run: x86_64-w64-mingw32-g++ -O2 -s -Wall -Wextra -Iinclude src/*.c -o termux_cpp.exe -luser32
-      - run: gcc -O1 -Wall -Wextra -Werror -Itests/stub -Iinclude src/theme.c src/keymap.c tests/test_config.c -o /tmp/test_config && /tmp/test_config
+      - run: gcc -O1 -Wall -Wextra -Werror -Itests/stub -Iinclude src/theme.c src/keymap.c tests/test_config.c -o /tmp/test_config -lm && /tmp/test_config
       - run: python3 verify_all.py
   msvc:
     runs-on: windows-latest

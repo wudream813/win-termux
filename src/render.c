@@ -1020,6 +1020,9 @@ static const PaletteStaticItem g_palette_setting_items[] = {
     { "add-panel",          "添加 panel 条目", "选择预设或自定义并继续编辑",       "Enter 进入", PALETTE_ACTION_ADD_PANEL,         0, 4, 2 },
     { "menu-settings",      "菜单项设置",     "在子面板中选择并编辑 panel 条目",       "Enter 进入", PALETTE_ACTION_MENU_SETTINGS,     0, 5, 4 },
     { "next-theme",         "切换配色主题",   "在内置主题之间轮换并写入 termux.ini", "",           PALETTE_ACTION_NEXT_THEME,        0, 6, 8 },
+    { "appearance",         "外观 / 主题",    "设置页：选择主题、编辑 16 个语义色",  "Enter 打开", PALETTE_ACTION_OPEN_APPEARANCE,   0, 7, 6 },
+    { "key-bindings",       "键位设置",       "设置页：前缀键与全部动作键位录制",    "Enter 打开", PALETTE_ACTION_OPEN_KEYS,         0, 8, 1 },
+    { "behavior",           "行为开关",       "设置页：鼠标、自动复制、退出确认、滚动行数", "Enter 打开", PALETTE_ACTION_OPEN_BEHAVIOR, 0, 9, 2 },
 };
 
 static const PaletteStaticItem g_palette_startup_items[] = {
@@ -2071,7 +2074,21 @@ void render_screen(void) {
         int cx = c_left + 2 + scr_off;
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", c_top + 1, cx);
     } else if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active && g_mux.panes[g_mux.active_pane].is_settings) {
-        if (g_settings_nav >= 1 && !g_settings_show_presets) {
+        /* 只有菜单项详情页（文本输入）与颜色十六进制编辑才显示光标；
+         * 外观 / 键位 / 行为页没有输入框，必须把光标藏起来，
+         * 否则会留下一个位置错乱的闪烁光标。 */
+        if (g_hex_edit_active && !g_settings_show_presets) {
+            int sb_w = SETTINGS_SIDEBAR_W;
+            if (sb_w > g_mux.host_cols / 2) sb_w = g_mux.host_cols / 2;
+            if (sb_w < 15) sb_w = 15;
+            if (sb_w > g_mux.host_cols) sb_w = g_mux.host_cols;
+            if (sb_w < 1) sb_w = 1;
+            int main_left = sb_w + 3;
+            int role_col = settings_role_col(main_left, g_hex_edit_role);
+            pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h",
+                            settings_role_row(g_hex_edit_role),
+                            role_col + 21 + g_hex_edit_len);
+        } else if (g_settings_nav >= 1 && g_settings_nav <= g_chooser_item_count && !g_settings_show_presets) {
             int sb_w = SETTINGS_SIDEBAR_W;
             if (sb_w > g_mux.host_cols / 2) sb_w = g_mux.host_cols / 2;
             if (sb_w < 15) sb_w = 15;
