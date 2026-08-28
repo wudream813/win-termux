@@ -21,6 +21,16 @@
 #define SETTINGS_BEHAVIOR_TOGGLES 4   /* mouse / copy_on_select / confirm_on_exit / search_case_sensitive */
 /* 相对 main_left 的按钮列偏移，渲染时用绝对定位写出，鼠标按同样的偏移命中 */
 #define SETTINGS_KEYS_PREFIX_COL 56   /* [前缀] / [直接] 切换 */
+
+/* v1.8.9: 菜单项的「启动默认颜色」选择条。
+ * 第 0 格是「默认」(宽 6)，其后 8 格分别是标签色 1-8 (每格宽 3)，格子彼此相连，
+ * 渲染与鼠标命中共用同一套几何。 */
+#define ITEM_COLOR_DEFAULT_W 6
+#define ITEM_COLOR_SWATCH_W  3
+#define ITEM_COLOR_ROW_W     (ITEM_COLOR_DEFAULT_W + 8 * ITEM_COLOR_SWATCH_W)
+/* col / left 均为 1-based 终端列；未命中返回 -1，命中返回 0(默认) 或 1-8。 */
+int item_color_hit(int left, int col);
+void render_item_color_row(char *out, int bs, int *posp, int row, int left, int color, int focused);
 #define SETTINGS_KEYS_EDIT_COL  64
 #define SETTINGS_KEYS_RESET_COL 69
 #define SETTINGS_SB_MINUS_COL   22

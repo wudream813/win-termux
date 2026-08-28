@@ -5,7 +5,7 @@
 Windows 终端复用器（Terminal Multiplexer）—— 模块化 C 架构，基于 Windows ConPTY。
 在 Windows 控制台里管理多个 cmd / PowerShell 会话，像 tmux 一样分标签页。
 
-当前版本：**v1.8.8**
+当前版本：**v1.8.9**
 
 > ⚠️ **警告 / 注意事项**：
 > 控制台终端**必须配置使用等宽字体**（Monospace Font，例如 *Cascadia Code*、*Consolas*、*JetBrains Mono*、*Fira Code* 等）。
@@ -25,6 +25,7 @@ Windows 终端复用器（Terminal Multiplexer）—— 模块化 C 架构，基
 - **右上角状态徽章**：复制模式与历史搜索都折叠成右上角一枚小徽章（`[复制模式 行选区]` / `[搜索 "err" 3/12]`），鼠标悬停时才向左展开完整操作提示，不再长期占据一整行
 - **配色主题**：内置 `github-dark` / `one-dark` / `nord` / `gruvbox-dark` / `dracula`，也可在 `[theme]` 段按语义角色单独覆盖任意一种颜色；`Ctrl+B` → 设置命令面板 → 切换配色主题 可即时轮换
 - **行为开关**：`scrollback` 滚动行数、`mouse` 鼠标开关、`copy_on_select` 拖选自动复制、`confirm_on_exit` 退出二次确认
+- **每个菜单项可配启动默认颜色**：菜单项详情页（以及命令面板的 panel 编辑器）多了一条颜色选择条，`←/→`、数字 `0-8` 或鼠标点选即可指定这一项新建标签页时的颜色，写回 `termux.ini` 的 `color=` 字段
 - **图形化设置页**：`Ctrl+B s` 打开，侧栏含「启动 / 菜单项 / 外观·主题 / 键位 / 行为」五类；主题可即时预览切换、语义色可改十六进制、键位支持**按键录制**，改完即时写回 `termux.ini`
 - **诊断日志**：`TERMUX_DUMP=1` 时输出原始 ConPTY 流 / 渲染输出 / 鼠标事件
 
@@ -115,10 +116,11 @@ default_startup = 0        # 0 = 启动进终端，1 = 启动显示帮助
 # copy-mode = F8 noprefix
 
 [menu]
-# 序号 = 菜单显示名称, 启动命令行, 启动目录(可选)
+# 序号 = 菜单显示名称, 启动命令行, 启动目录(可选), color=启动默认颜色(可选 1-8)
 # 特殊命令 ":custom" 表示打开自定义命令行输入框
+# color 省略或写 0 表示跟随默认蓝色
 1 = cmd, cmd.exe
-2 = PowerShell, powershell.exe
+2 = PowerShell, powershell.exe, , color=2
 3 = 自定义命令行, :custom
 # 4 = WSL Ubuntu, wsl.exe -d Ubuntu
 # 5 = Git Bash, "C:\Program Files\Git\bin\bash.exe" --login -i
@@ -213,6 +215,7 @@ python3 verify_color8.py        # color=8 渲染用色回归
 python3 verify_emoji.py         # Emoji 与字素簇边界测试
 python3 verify_ringbuf_asan.py  # 环形缓冲区局部滚动 ASAN 内存安全
 python3 verify_search.py          # 滚动历史搜索行为验证
+python3 verify_item_color.py       # 菜单项启动默认颜色选择条的渲染/热区一致性
 python3 verify_palette_search.py   # 新建终端短查询/名称优先搜索回归
 python3 verify_input_layout.py     # 输入框背景/末尾字符/光标列回归
 python3 verify_cursor_render.py    # 终端输出区域最后一格光标回归

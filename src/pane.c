@@ -361,6 +361,9 @@ int create_pane_from_item(int idx) {
     if (p >= 0) {
         strncpy(g_mux.panes[p].title, g_chooser_items[idx].name, sizeof(g_mux.panes[p].title) - 1);
         strncpy(g_mux.panes[p].full_title, g_chooser_items[idx].name, sizeof(g_mux.panes[p].full_title) - 1);
+        /* v1.8.9: 菜单项可以配置启动默认颜色（0 = 跟随默认蓝色）。 */
+        int c = g_chooser_items[idx].color;
+        g_mux.panes[p].color = (c >= 1 && c <= 8) ? c : 0;
     }
     return p;
 }

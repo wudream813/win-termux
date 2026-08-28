@@ -49,17 +49,18 @@ int g_edit_name_len = 0, g_edit_name_pos = 0;
 char g_edit_cmd[256] = {0};
 int g_edit_cmd_len = 0, g_edit_cmd_pos = 0;
 char g_edit_dir[256] = {0};
+int g_edit_color = 0;
 int g_edit_dir_len = 0, g_edit_dir_pos = 0;
 
 const ChooserItem g_presets[] = {
-    {"cmd", "cmd.exe", ""},
-    {"PowerShell", "powershell.exe", ""},
-    {"Pwsh", "pwsh.exe", ""},
-    {"WSL", "wsl.exe", ""},
-    {"Git Bash", "bash.exe", ""},
-    {"Python", "python -i", ""},
-    {"Node.js", "node", ""},
-    {"自定义命令行", ":custom", ""},
+    {"cmd", "cmd.exe", "", 0},
+    {"PowerShell", "powershell.exe", "", 0},
+    {"Pwsh", "pwsh.exe", "", 0},
+    {"WSL", "wsl.exe", "", 0},
+    {"Git Bash", "bash.exe", "", 0},
+    {"Python", "python -i", "", 0},
+    {"Node.js", "node", "", 0},
+    {"自定义命令行", ":custom", "", 0},
 };
 const int g_preset_count = (int)(sizeof(g_presets) / sizeof(g_presets[0]));
 
@@ -76,14 +77,17 @@ void init_default_config(void) {
     snprintf(g_chooser_items[0].name, sizeof(g_chooser_items[0].name), "cmd");
     snprintf(g_chooser_items[0].cmd, sizeof(g_chooser_items[0].cmd), "cmd.exe");
     g_chooser_items[0].workdir[0] = 0;
+    g_chooser_items[0].color = 0;
 
     snprintf(g_chooser_items[1].name, sizeof(g_chooser_items[1].name), "PowerShell");
     snprintf(g_chooser_items[1].cmd, sizeof(g_chooser_items[1].cmd), "powershell.exe");
     g_chooser_items[1].workdir[0] = 0;
+    g_chooser_items[1].color = 0;
 
     snprintf(g_chooser_items[2].name, sizeof(g_chooser_items[2].name), "自定义命令行");
     snprintf(g_chooser_items[2].cmd, sizeof(g_chooser_items[2].cmd), ":custom");
     g_chooser_items[2].workdir[0] = 0;
+    g_chooser_items[2].color = 0;
 }
 
 enum { SEC_COMPAT = 0, SEC_GENERAL, SEC_MENU, SEC_THEME, SEC_KEYS, SEC_IGNORE };
@@ -217,14 +221,40 @@ void load_config(void) {
             workdir = comma2 + 1;
             while (*workdir == ' ' || *workdir == '\t') workdir++;
         }
+        /* v1.8.9: 目录之后还能再跟一个颜色字段，两种写法都认：
+         *   1 = 名称, cmd.exe, D:\\work, color=3
+         *   1 = 名称, cmd.exe, , 3
+         * 没写就是 0（跟随默认蓝色）。 */
+        int item_color = 0;
+        char *comma3 = comma2 ? strchr(workdir, ',') : NULL;
+        if (comma3) {
+            *comma3 = 0;
+            char *ctext = comma3 + 1;
+            while (*ctext == ' ' || *ctext == '\t') ctext++;
+            trim_tail(ctext);
+            if (_strnicmp(ctext, "color", 5) == 0) {
+                ctext += 5;
+                while (*ctext == ' ' || *ctext == '=' || *ctext == '\t') ctext++;
+            }
+            item_color = atoi(ctext);
+        }
+
         trim_tail(name);
         trim_tail(cmd);
         trim_tail(workdir);
+        if (_strnicmp(workdir, "color", 5) == 0) {   /* 省略了目录，直接写 color=N */
+            const char *ctext = workdir + 5;
+            while (*ctext == ' ' || *ctext == '=' || *ctext == '\t') ctext++;
+            item_color = atoi(ctext);
+            workdir[0] = 0;
+        }
+        if (item_color < 0 || item_color > 8) item_color = 0;
 
         if (name[0] && cmd[0] && parsed_count < MAX_CHOOSER_ITEMS) {
             snprintf(g_chooser_items[parsed_count].name, sizeof(g_chooser_items[0].name), "%s", name);
             snprintf(g_chooser_items[parsed_count].cmd, sizeof(g_chooser_items[0].cmd), "%s", cmd);
             snprintf(g_chooser_items[parsed_count].workdir, sizeof(g_chooser_items[0].workdir), "%s", workdir);
+            g_chooser_items[parsed_count].color = item_color;
             parsed_count++;
         }
     }
@@ -320,13 +350,22 @@ void save_config(void) {
 
     const char *menu_hdr =
         "[menu]\r\n"
-        "# 序号 = 菜单显示名称, 启动命令行, 启动目录(可选)\r\n"
-        "# 特殊命令 \":custom\" 表示打开自定义命令行输入框\r\n";
+        "# 序号 = 菜单显示名称, 启动命令行, 启动目录(可选), color=颜色(可选 1-8)\r\n"
+        "# 特殊命令 \":custom\" 表示打开自定义命令行输入框\r\n"
+        "# color 省略或 0 表示跟随默认蓝色\r\n";
     fwrite(menu_hdr, 1, strlen(menu_hdr), f);
     for (int i = 0; i < g_chooser_item_count; i++) {
+        int color = g_chooser_items[i].color;
+        if (color < 0 || color > 8) color = 0;
+        char color_suffix[24] = {0};
+        if (color > 0) snprintf(color_suffix, sizeof(color_suffix), ", color=%d", color);
         if (g_chooser_items[i].workdir[0]) {
+            len = snprintf(buf, sizeof(buf), "%d = %s, %s, %s%s\r\n", i + 1,
+                           g_chooser_items[i].name, g_chooser_items[i].cmd,
+                           g_chooser_items[i].workdir, color_suffix);
+        } else if (color > 0) {
             len = snprintf(buf, sizeof(buf), "%d = %s, %s, %s\r\n", i + 1,
-                           g_chooser_items[i].name, g_chooser_items[i].cmd, g_chooser_items[i].workdir);
+                           g_chooser_items[i].name, g_chooser_items[i].cmd, color_suffix + 2);
         } else {
             len = snprintf(buf, sizeof(buf), "%d = %s, %s\r\n", i + 1,
                            g_chooser_items[i].name, g_chooser_items[i].cmd);
@@ -358,6 +397,9 @@ void load_item_to_editor(int idx) {
     g_edit_dir_len = (int)strlen(g_edit_dir);
     g_edit_dir_pos = g_edit_dir_len;
 
+    g_edit_color = g_chooser_items[idx].color;
+    if (g_edit_color < 0 || g_edit_color > 8) g_edit_color = 0;
+
     g_settings_field = 0;
 }
 
@@ -370,5 +412,6 @@ void save_editor_to_item(int idx) {
         snprintf(g_chooser_items[idx].cmd, sizeof(g_chooser_items[0].cmd), "%s", g_edit_cmd);
     }
     snprintf(g_chooser_items[idx].workdir, sizeof(g_chooser_items[0].workdir), "%s", g_edit_dir);
+    g_chooser_items[idx].color = (g_edit_color >= 0 && g_edit_color <= 8) ? g_edit_color : 0;
     save_config();
 }

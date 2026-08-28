@@ -24,6 +24,8 @@ RENDER_H = (ROOT / "include/render.h").read_text(encoding="utf-8")
 CONFIG_H = (ROOT / "include/config.h").read_text(encoding="utf-8")
 THEME_C = (ROOT / "src/theme.c").read_text(encoding="utf-8")
 KEYMAP_C = (ROOT / "src/keymap.c").read_text(encoding="utf-8")
+CONFIG_C = (ROOT / "src/config.c").read_text(encoding="utf-8")
+TYPES_H = (ROOT / "include/types.h").read_text(encoding="utf-8")
 
 errors: list[str] = []
 
@@ -152,6 +154,33 @@ check("g_settings_nav <= g_chooser_item_count" in RENDER,
       "只有菜单项详情页显示文本光标，三个分类页不会留下错位光标")
 check("settings_role_row(g_hex_edit_role)" in cursor_block,
       "颜色十六进制编辑时光标落在对应角色行")
+
+print("\n== 6) 菜单项的启动默认颜色 (v1.8.9) ==")
+check("int color;" in TYPES_H, "ChooserItem 必须带 color 字段")
+check("extern int g_edit_color;" in CONFIG_H and "int g_edit_color = 0;" in CONFIG_C,
+      "菜单项编辑器缺少 g_edit_color 状态")
+check("g_edit_color = g_chooser_items[idx].color;" in CONFIG_C and
+      "g_chooser_items[idx].color = (g_edit_color >= 0 && g_edit_color <= 8) ? g_edit_color : 0;" in CONFIG_C,
+      "编辑器与菜单项之间没有双向搬运颜色")
+check('", color=%d"' in CONFIG_C and 'if (_strnicmp(ctext, "color", 5) == 0)' in CONFIG_C,
+      "[menu] 段没有读写 color= 字段")
+check("int item_color_hit(int left, int col);" in RENDER_H and
+      "void render_item_color_row(" in RENDER_H,
+      "颜色选择条的几何/渲染没有在 render.h 公开")
+check("render_item_color_row(out, bs, &pos, 15, main_left, g_edit_color, f3_sel);" in RENDER,
+      "设置页菜单项详情页缺少启动默认颜色选择条")
+check("int act_r = 17;" in RENDER and "r == 17" in INPUT,
+      "详情页操作按钮行没有随颜色行下移到第 17 行")
+check("item_color_hit(main_left, c)" in INPUT,
+      "详情页颜色选择条没有鼠标热区")
+check("(g_settings_field + 1) % 4" in INPUT and "(g_settings_field + 3) % 4" in INPUT,
+      "Tab 没有把颜色行算成第 4 个字段")
+check("g_edit_color = (g_edit_color + 1) % 9" in INPUT and
+      "g_edit_color = (g_edit_color + 8) % 9" in INPUT,
+      "颜色行不支持 ←/→ 循环选色")
+check("g_mux.panes[p].color = (c >= 1 && c <= 8) ? c : 0;" in
+      (ROOT / "src/pane.c").read_text(encoding="utf-8"),
+      "create_pane_from_item 没有把菜单项颜色应用到新标签页")
 
 if errors:
     print(f"\n设置页 UI 验证失败：{len(errors)} 项", file=sys.stderr)

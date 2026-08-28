@@ -43,6 +43,7 @@ extern int g_edit_name_len, g_edit_name_pos;
 extern char g_edit_cmd[256];
 extern int g_edit_cmd_len, g_edit_cmd_pos;
 extern char g_edit_dir[256];
+extern int g_edit_color;   /* 菜单项编辑器里的启动默认颜色 0-8 */
 extern int g_edit_dir_len, g_edit_dir_pos;
 
 extern const ChooserItem g_presets[];

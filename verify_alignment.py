@@ -267,15 +267,20 @@ check("wraparound_pending && cy + 1 < rr" not in RENDER and
       "if (cx >= rc) cx = rc - 1;" in RENDER and
       "terminal_cursor_position" in RENDER,
       "终端输出区域末格光标仍无法显示")
-check("#define PALETTE_EDITOR_H 10" in RENDER and "int action_row = top + 8;" in RENDER,
-      "编辑 panel 子框没有使用压缩后的十行布局")
+# v1.8.9: 多了一行「启动默认颜色」，紧凑布局由 10 行扩到 12 行。
+check("#define PALETTE_EDITOR_H 12" in RENDER and "int action_row = top + 10;" in RENDER,
+      "编辑 panel 子框没有使用 12 行紧凑布局（三输入框 + 颜色行 + 操作行）")
+check("render_item_color_row(out, bs, &pos, color_row, left + 1, g_edit_color" in RENDER,
+      "编辑 panel 子框缺少启动默认颜色选择条")
 check("int parent_h = palette_visible_rows(host_rows) + 5;" in RENDER and
       "for (int r = top + ph; r < top + parent_h; r++)" in RENDER,
       "编辑 panel 子框没有清除紧凑布局下残留的父面板行")
 check("append_padded_utf8(out, bs, &pos, &label_cols, labels[i], label_w);" in RENDER,
       "编辑 panel 子框的标签行没有填充整行背景")
-check("int action_row = top + 8;" in INPUT or "r == top + 8" in INPUT,
-      "编辑 panel 保存按钮热区没有跟随压缩布局")
+check("r == top + 10 && in_box" in INPUT,
+      "编辑 panel 保存按钮热区没有跟随 12 行布局")
+check("item_color_hit(left + 1, c)" in INPUT,
+      "编辑 panel 颜色选择条没有鼠标热区")
 check("\"退出 termux\"" in RENDER, "命令面板仍缺少‘退出 termux’文案")
 check("退出标签页" not in RENDER and
       "退出标签页" not in ROOT.joinpath("README.md").read_text(encoding="utf-8") and

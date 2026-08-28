@@ -24,6 +24,7 @@ CHECKS = (
     "verify_copy_mode.py",
     "verify_config_theme.py",
     "verify_settings_ui.py",
+    "verify_item_color.py",
 )
 
 

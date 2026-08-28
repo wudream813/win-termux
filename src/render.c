@@ -283,6 +283,47 @@ void render_ctx_menu(char *out, int bs, int *posp, int host_rows, int host_cols)
     *posp = pos;
 }
 
+/* ---------------------------------------------------------------------------
+ * v1.8.9: 菜单项的「启动默认颜色」选择条
+ * 第 0 格「默认」宽 6，其后 8 个色块每格宽 3，格子相连。渲染与命中同源。
+ * ------------------------------------------------------------------------- */
+int item_color_hit(int left, int col) {
+    int off = col - left;
+    if (off < 0 || off >= ITEM_COLOR_ROW_W) return -1;
+    if (off < ITEM_COLOR_DEFAULT_W) return 0;
+    return 1 + (off - ITEM_COLOR_DEFAULT_W) / ITEM_COLOR_SWATCH_W;
+}
+
+void render_item_color_row(char *out, int bs, int *posp, int row, int left, int color, int focused) {
+    int pos = *posp;
+    if (color < 0 || color > 8) color = 0;
+    int hover = -1;
+    if (g_mouse_y + 1 == row) hover = item_color_hit(left, g_mouse_x + 1);
+
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH", row, left);
+    for (int i = 0; i <= 8; i++) {
+        int sel = (i == color);
+        int hot = (i == hover);
+        const char *bg;
+        const char *fg;
+        if (i == 0) {
+            bg = sel ? "\x1b[048;2;038;060;088m" : (hot ? "\x1b[048;2;033;038;045m" : "\x1b[048;2;022;027;034m");
+            fg = sel ? "\x1b[038;2;255;255;255;1m" : "\x1b[038;2;139;148;158m";
+            pos += snprintf(out + pos, bs - pos, "%s%s 默认 \x1b[0m", bg, fg);
+            continue;
+        }
+        bg = (sel || hot) ? TAB_COLOR_BG[i] : TAB_COLOR_BG_DIM[i];
+        fg = (sel || hot) ? "\x1b[038;2;013;017;023;1m" : "\x1b[038;2;139;148;158m";
+        pos += snprintf(out + pos, bs - pos, "%s%s%c%d%c\x1b[0m", bg, fg,
+                        sel ? '[' : ' ', i, sel ? ']' : ' ');
+    }
+    /* 焦点在这一行时给个箭头，键盘用户才知道 ←/→ 会作用到哪里。 */
+    pos += snprintf(out + pos, bs - pos, "  %s%s\x1b[0m",
+                    focused ? "\x1b[038;2;121;192;255;1m" : "\x1b[038;2;110;118;129m",
+                    focused ? "左右键选颜色" : "            ");
+    *posp = pos;
+}
+
 static void palette_hline(char *out, int bs, int *posp, int row, int left, int width,
                           const char *prefix, const char *suffix);
 
@@ -915,7 +956,14 @@ void render_settings_panel(char *out, int bs, int *posp, int host_rows, int host
         render_scrollable_input(out, bs, &pos, g_edit_dir, g_edit_dir_len, g_edit_dir_pos, input_w, f2_bg, NULL);
         pos += snprintf(out + pos, bs - pos, "%s \x1b[0m\x1b[048;2;033;038;045m│\x1b[0m", f2_bg);
 
-        int act_r = 14;
+        /* v1.8.9: 第 4 个字段 —— 这个菜单项启动出来的标签页默认用什么颜色。 */
+        int f3_sel = (g_settings_field == 3);
+        pos += snprintf(out + pos, bs - pos,
+                        "\x1b[14;%dH\x1b[038;2;230;237;243;1m4. 启动默认颜色 (Tab Color) "
+                        "\x1b[038;2;139;148;158m[用此项新建标签页时的颜色，默认=蓝]:\x1b[0m", main_left);
+        render_item_color_row(out, bs, &pos, 15, main_left, g_edit_color, f3_sel);
+
+        int act_r = 17;
         int h_apply = (g_mouse_y == act_r - 1 && g_mouse_x >= main_left - 1 && g_mouse_x < main_left + 17);
         int h_imp = (g_mouse_y == act_r - 1 && g_mouse_x >= main_left + 19 && g_mouse_x < main_left + 35);
         int h_del = (g_mouse_y == act_r - 1 && g_mouse_x >= main_left + 37 && g_mouse_x < main_left + 49);
@@ -925,7 +973,7 @@ void render_settings_panel(char *out, int bs, int *posp, int host_rows, int host
         pos += snprintf(out + pos, bs - pos, "%s [从预设库导入] \x1b[0m  ", h_imp ? "\x1b[048;2;031;136;061m\x1b[038;2;255;255;255;1m" : "\x1b[048;2;033;038;045m\x1b[038;2;031;136;061;1m");
         pos += snprintf(out + pos, bs - pos, "%s [删除此项] \x1b[0m", h_del ? "\x1b[048;2;248;081;073m\x1b[038;2;255;255;255;1m" : "\x1b[048;2;033;038;045m\x1b[038;2;248;081;073;1m");
 
-        pos += snprintf(out + pos, bs - pos, "\x1b[16;%dH\x1b[038;2;139;148;158m提示: Tab 切换输入框, Enter 保存应用, Ctrl+P 导入预设, Ctrl+D 删除, Esc 返回\x1b[0m", main_left);
+        pos += snprintf(out + pos, bs - pos, "\x1b[19;%dH\x1b[038;2;139;148;158m提示: Tab 切换字段, ←/→ 选颜色, Enter 保存应用, Ctrl+P 导入预设, Ctrl+D 删除, Esc 返回\x1b[0m", main_left);
     }
 
     if (g_settings_show_presets) {
@@ -1200,7 +1248,7 @@ void render_search_box(char *out, int bs, int *posp, int host_rows, int host_col
 #define PALETTE_MAX_VISIBLE 9
 #define PALETTE_W 72
 #define PALETTE_EDITOR_W 78
-#define PALETTE_EDITOR_H 10
+#define PALETTE_EDITOR_H 12   /* 三个输入框 + 颜色行 + 分隔线 + 操作行 */
 
 typedef struct {
     const char *id;
@@ -1647,10 +1695,37 @@ static void render_palette_editor(char *out, int bs, int *posp, int host_rows, i
         pos += snprintf(out + pos, bs - pos, "%s \x1b[0m\x1b[048;2;033;038;045m│\x1b[0m", field_bg);
     }
 
-    palette_hline(out, bs, &pos, top + 7, left, pw, "├", "┤");
+    /* v1.8.9: 第 4 个字段 —— 启动默认颜色。 */
+    {
+        int label_row = top + 7;
+        int active = (g_mux.palette_field == 3);
+        const char *label = "启动默认颜色 (Tab Color)";
+        int label_cols = 1;
+        pos += snprintf(out + pos, bs - pos,
+                        "\x1b[%d;%dH\x1b[048;2;033;038;045m│\x1b[0m\x1b[048;2;033;038;045m ",
+                        label_row, left);
+        pos += snprintf(out + pos, bs - pos, "%s",
+                        active ? "\x1b[038;2;230;237;243;1m" : "\x1b[038;2;230;237;243m");
+        label_cols++;
+        int label_w = pw - 1 - label_cols;
+        if (label_w < 1) label_w = 1;
+        append_padded_utf8(out, bs, &pos, &label_cols, label, label_w);
+        pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[048;2;033;038;045m│\x1b[0m");
+
+        int color_row = top + 8;
+        pos += snprintf(out + pos, bs - pos,
+                        "\x1b[%d;%dH\x1b[048;2;033;038;045m│\x1b[0m\x1b[048;2;022;027;034m",
+                        color_row, left);
+        int fill = pw - 2;
+        for (int k = 0; k < fill && pos < bs - 8; k++) out[pos++] = ' ';
+        pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[048;2;033;038;045m│\x1b[0m");
+        render_item_color_row(out, bs, &pos, color_row, left + 1, g_edit_color, g_mux.palette_field == 3);
+    }
+
+    palette_hline(out, bs, &pos, top + 9, left, pw, "├", "┤");
     const char *save_hint = " [Enter] 保存并返回上一级";
-    const char *editor_hint = "  Tab 切换字段 · Esc 返回 · Ctrl+S 保存 ";
-    int action_row = top + 8;
+    const char *editor_hint = "  Tab 切换字段 · ←/→ 选颜色 · Esc 返回 · Ctrl+S 保存 ";
+    int action_row = top + 10;
     pos += snprintf(out + pos, bs - pos,
                     "\x1b[%d;%dH\x1b[048;2;033;038;045m│\x1b[0m\x1b[038;2;121;192;255;1m%s"
                     "\x1b[038;2;139;148;158m%s",
@@ -2268,12 +2343,17 @@ void render_screen(void) {
                 buf = g_edit_name; len = g_edit_name_len; text_pos = g_edit_name_pos;
             } else if (g_mux.palette_field == 1) {
                 buf = g_edit_cmd; len = g_edit_cmd_len; text_pos = g_edit_cmd_pos;
-            } else {
+            } else if (g_mux.palette_field == 2) {
                 buf = g_edit_dir; len = g_edit_dir_len; text_pos = g_edit_dir_pos;
             }
-            int scr_off = get_input_screen_offset(buf, len, text_pos, input_w);
-            pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h",
-                            top + 2 + g_mux.palette_field * 2, left + 2 + scr_off);
+            if (!buf) {
+                /* v1.8.9: 颜色选择行没有输入框，藏光标。 */
+                pos += snprintf(out + pos, bs - pos, "\x1b[?25l");
+            } else {
+                int scr_off = get_input_screen_offset(buf, len, text_pos, input_w);
+                pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h",
+                                top + 2 + g_mux.palette_field * 2, left + 2 + scr_off);
+            }
         } else if (g_mux.palette_focus == PALETTE_FOCUS_INPUT) {
             int top, left, pw, ph;
             palette_geom(g_mux.host_rows, g_mux.host_cols, &top, &left, &pw, &ph);
@@ -2337,6 +2417,9 @@ void render_screen(void) {
             } else if (g_settings_field == 2) {
                 int scr_off = get_input_screen_offset(g_edit_dir, g_edit_dir_len, g_edit_dir_pos, input_w);
                 pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", 12, main_left + 2 + scr_off);
+            } else {
+                /* v1.8.9: 颜色选择行不是输入框，别留下闪烁光标。 */
+                pos += snprintf(out + pos, bs - pos, "\x1b[?25l");
             }
         } else {
             pos += snprintf(out + pos, bs - pos, "\x1b[?25l");

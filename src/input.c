@@ -339,16 +339,19 @@ static int palette_add_item_from_source(const ChooserItem *source, int preset_in
         snprintf(g_chooser_items[idx].name, sizeof(g_chooser_items[idx].name), "%s", source->name);
         snprintf(g_chooser_items[idx].cmd, sizeof(g_chooser_items[idx].cmd), "%s", source->cmd);
         snprintf(g_chooser_items[idx].workdir, sizeof(g_chooser_items[idx].workdir), "%s", source->workdir);
+        g_chooser_items[idx].color = (source->color >= 1 && source->color <= 8) ? source->color : 0;
     } else if (preset_index >= 0 && preset_index < g_preset_count) {
         snprintf(g_chooser_items[idx].name, sizeof(g_chooser_items[idx].name), "%s", g_presets[preset_index].name);
         snprintf(g_chooser_items[idx].cmd, sizeof(g_chooser_items[idx].cmd), "%s", g_presets[preset_index].cmd);
         g_chooser_items[idx].workdir[0] = 0;
+        g_chooser_items[idx].color = 0;
         if (strcmp(g_chooser_items[idx].cmd, ":custom") == 0)
             snprintf(g_chooser_items[idx].cmd, sizeof(g_chooser_items[idx].cmd), "cmd.exe");
     } else {
         snprintf(g_chooser_items[idx].name, sizeof(g_chooser_items[idx].name), "新 panel");
         snprintf(g_chooser_items[idx].cmd, sizeof(g_chooser_items[idx].cmd), "cmd.exe");
         g_chooser_items[idx].workdir[0] = 0;
+        g_chooser_items[idx].color = 0;
     }
     return idx;
 }
@@ -591,7 +594,20 @@ static void handle_palette_editor_key(KEY_EVENT_RECORD *ke) {
         return;
     }
     if (vk == VK_TAB) {
-        g_mux.palette_field = is_shift ? (g_mux.palette_field + 2) % 3 : (g_mux.palette_field + 1) % 3;
+        g_mux.palette_field = is_shift ? (g_mux.palette_field + 3) % 4 : (g_mux.palette_field + 1) % 4;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+
+    if (g_mux.palette_field == 3) {
+        /* v1.8.9: 颜色行不是输入框，←/→ 或数字 0-8 直接选色。 */
+        if (vk == VK_LEFT) {
+            g_edit_color = (g_edit_color + 8) % 9;
+        } else if (vk == VK_RIGHT) {
+            g_edit_color = (g_edit_color + 1) % 9;
+        } else if (uc >= '0' && uc <= '8') {
+            g_edit_color = (int)(uc - '0');
+        }
         g_mux.needs_redraw = 1;
         return;
     }
@@ -869,7 +885,22 @@ static void handle_palette_editor_mouse(MOUSE_EVENT_RECORD *me) {
         }
     }
 
-    if (r == top + 8 && in_box) {
+    if (r == top + 8) {   /* v1.8.9: 颜色选择条 */
+        int hit = item_color_hit(left + 1, c);
+        if (hit >= 0) {
+            g_mux.palette_field = 3;
+            g_edit_color = hit;
+            g_mux.needs_redraw = 1;
+            return;
+        }
+        if (in_box) {
+            g_mux.palette_field = 3;
+            g_mux.needs_redraw = 1;
+            return;
+        }
+    }
+
+    if (r == top + 10 && in_box) {
         if (g_mux.palette_edit_idx >= 0 && g_mux.palette_edit_idx < g_chooser_item_count)
             save_editor_to_item(g_mux.palette_edit_idx);
         g_mux.palette_edit_new = 0;
@@ -1551,6 +1582,7 @@ void handle_settings_key(KEY_EVENT_RECORD *ke) {
                     strncpy(g_chooser_items[idx].name, g_presets[i].name, sizeof(g_chooser_items[0].name) - 1);
                     strncpy(g_chooser_items[idx].cmd, g_presets[i].cmd, sizeof(g_chooser_items[0].cmd) - 1);
                     g_chooser_items[idx].workdir[0] = 0;
+                    g_chooser_items[idx].color = 0;
                     save_config();
                 }
                 g_settings_show_presets = 0;
@@ -1577,6 +1609,7 @@ void handle_settings_key(KEY_EVENT_RECORD *ke) {
                     strncpy(g_chooser_items[idx].name, g_presets[i].name, sizeof(g_chooser_items[0].name) - 1);
                     strncpy(g_chooser_items[idx].cmd, g_presets[i].cmd, sizeof(g_chooser_items[0].cmd) - 1);
                     g_chooser_items[idx].workdir[0] = 0;
+                    g_chooser_items[idx].color = 0;
                     save_config();
                 }
                 g_settings_show_presets = 0;
@@ -1698,6 +1731,7 @@ void handle_settings_key(KEY_EVENT_RECORD *ke) {
                 snprintf(g_chooser_items[idx].name, sizeof(g_chooser_items[0].name), "新终端");
                 snprintf(g_chooser_items[idx].cmd, sizeof(g_chooser_items[0].cmd), "cmd.exe");
                 g_chooser_items[idx].workdir[0] = 0;
+                g_chooser_items[idx].color = 0;
                 save_config();
                 g_settings_table_sel = idx;
                 g_settings_nav = idx + 1;
@@ -1741,9 +1775,9 @@ void handle_settings_key(KEY_EVENT_RECORD *ke) {
 
         if (vk == VK_TAB) {
             if (is_shift) {
-                g_settings_field = (g_settings_field + 2) % 3;
+                g_settings_field = (g_settings_field + 3) % 4;
             } else {
-                g_settings_field = (g_settings_field + 1) % 3;
+                g_settings_field = (g_settings_field + 1) % 4;
             }
             g_mux.needs_redraw = 1;
             return;
@@ -1766,6 +1800,21 @@ void handle_settings_key(KEY_EVENT_RECORD *ke) {
         if (vk == VK_RETURN) {
             save_editor_to_item(g_settings_nav - 1);
             g_mux.needs_redraw = 1;
+            return;
+        }
+
+        if (g_settings_field == 3) {
+            /* v1.8.9: 颜色行不是输入框，←/→ 或数字 0-8 直接选色。 */
+            if (vk == VK_LEFT) {
+                g_edit_color = (g_edit_color + 8) % 9;
+                g_mux.needs_redraw = 1;
+            } else if (vk == VK_RIGHT) {
+                g_edit_color = (g_edit_color + 1) % 9;
+                g_mux.needs_redraw = 1;
+            } else if (uc >= '0' && uc <= '8') {
+                g_edit_color = (int)(uc - '0');
+                g_mux.needs_redraw = 1;
+            }
             return;
         }
 
@@ -1896,6 +1945,7 @@ void handle_settings_mouse(MOUSE_EVENT_RECORD *me) {
                         strncpy(g_chooser_items[idx].name, g_presets[i].name, sizeof(g_chooser_items[0].name) - 1);
                         strncpy(g_chooser_items[idx].cmd, g_presets[i].cmd, sizeof(g_chooser_items[0].cmd) - 1);
                         g_chooser_items[idx].workdir[0] = 0;
+                        g_chooser_items[idx].color = 0;
                         save_config();
                     }
                     g_settings_show_presets = 0;
@@ -1931,6 +1981,7 @@ void handle_settings_mouse(MOUSE_EVENT_RECORD *me) {
                 snprintf(g_chooser_items[idx].name, sizeof(g_chooser_items[0].name), "新终端");
                 snprintf(g_chooser_items[idx].cmd, sizeof(g_chooser_items[0].cmd), "cmd.exe");
                 g_chooser_items[idx].workdir[0] = 0;
+                g_chooser_items[idx].color = 0;
                 save_config();
                 g_settings_nav = idx + 1;
                 load_item_to_editor(idx);
@@ -2102,6 +2153,7 @@ void handle_settings_mouse(MOUSE_EVENT_RECORD *me) {
                         snprintf(g_chooser_items[idx].name, sizeof(g_chooser_items[0].name), "新终端");
                         snprintf(g_chooser_items[idx].cmd, sizeof(g_chooser_items[0].cmd), "cmd.exe");
                         g_chooser_items[idx].workdir[0] = 0;
+                        g_chooser_items[idx].color = 0;
                         save_config();
                         g_settings_nav = idx + 1;
                         load_item_to_editor(idx);
@@ -2133,7 +2185,16 @@ void handle_settings_mouse(MOUSE_EVENT_RECORD *me) {
                 g_mux.needs_redraw = 1;
                 return;
             }
-            if (r == 14) {
+            if (r == 15) {   /* v1.8.9: 启动默认颜色选择条 */
+                int hit = item_color_hit(main_left, c);
+                if (hit >= 0) {
+                    g_settings_field = 3;
+                    g_edit_color = hit;
+                    g_mux.needs_redraw = 1;
+                    return;
+                }
+            }
+            if (r == 17) {
                 if (c >= main_left && c < main_left + 18) {
                     save_editor_to_item(item_idx);
                     g_mux.needs_redraw = 1;

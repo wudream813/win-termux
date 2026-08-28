@@ -96,6 +96,7 @@ typedef struct {
     char name[32];
     char cmd[256];
     char workdir[256];
+    int color;          /* 启动默认标签颜色：0 = 跟随默认(蓝)，1-8 = 指定色 */
 } ChooserItem;
 
 typedef struct {
