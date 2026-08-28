@@ -286,6 +286,8 @@ static void palette_open_copy_mode(void) {
     palette_close();
     g_copy_mode = 1;
     g_copy_sel_active = 0;
+    g_copy_quick = 0;
+    g_copy_block = 0;
     g_copy_cx = p->screen.cursor_x;
     g_copy_cy = p->screen.cursor_y;
     g_mux.needs_redraw = 1;
@@ -992,10 +994,19 @@ void handle_search_key(KEY_EVENT_RECORD *ke) {
 }
 
 void copy_range_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs) {
+    copy_selection_to_clipboard(p, sx, sy_abs, ex, ey_abs, 0);
+}
+
+void copy_selection_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs, int block) {
     if (!p) return;
     ScreenBuffer *s = &p->screen;
     if (sy_abs > ey_abs || (sy_abs == ey_abs && sx > ex)) {
         int tx = sx; sx = ex; ex = tx;
+        int ty = sy_abs; sy_abs = ey_abs; ey_abs = ty;
+    }
+    int block_x0 = sx < ex ? sx : ex;
+    int block_x1 = sx > ex ? sx : ex;
+    if (block && sy_abs > ey_abs) {
         int ty = sy_abs; sy_abs = ey_abs; ey_abs = ty;
     }
     int total_lines = ey_abs - sy_abs + 1;
@@ -1008,8 +1019,10 @@ void copy_range_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs) {
 
     EnterCriticalSection(&g_mux.cs);
     for (int abs_y = sy_abs; abs_y <= ey_abs; abs_y++) {
-        int x_start = (abs_y == sy_abs) ? sx : 0;
-        int x_end = (abs_y == ey_abs) ? ex : s->cols - 1;
+        /* A block selection takes the same column window out of every row;
+         * the stream selection runs from the start point to the end point. */
+        int x_start = block ? block_x0 : ((abs_y == sy_abs) ? sx : 0);
+        int x_end = block ? block_x1 : ((abs_y == ey_abs) ? ex : s->cols - 1);
         if (x_start < 0) x_start = 0;
         if (x_end >= s->cols) x_end = s->cols - 1;
 
@@ -1034,6 +1047,9 @@ void copy_range_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs) {
             } else {
                 wbuf[wlen++] = L' ';
             }
+        }
+        if (block) {
+            while (wlen > row_wlen_start && wbuf[wlen - 1] == L' ') wlen--;
         }
         if (abs_y < ey_abs) {
             while (wlen > row_wlen_start && wbuf[wlen - 1] == L' ') wlen--;
@@ -1061,21 +1077,82 @@ void copy_range_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs) {
     free(wbuf);
 }
 
-void handle_copy_mode_key(KEY_EVENT_RECORD *ke) {
-    WORD vk = ke->wVirtualKeyCode; WCHAR uc = ke->uChar.UnicodeChar;
+static void copy_mode_leave(Pane *p) {
+    g_copy_mode = 0;
+    g_copy_sel_active = 0;
+    g_copy_quick = 0;
+    g_copy_block = 0;
+    if (p) p->scroll_offset = 0;
+    g_mux.needs_redraw = 1;
+}
+
+static void copy_mode_yank(Pane *p, ScreenBuffer *s) {
+    if (!g_copy_sel_active) return;
+    int cur_abs_y = screen_to_abs_row(s, g_copy_cy, p->scroll_offset);
+    copy_selection_to_clipboard(p, g_copy_anchor_x, g_copy_anchor_abs_y,
+                                g_copy_cx, cur_abs_y, g_copy_block);
+}
+
+static void copy_mode_anchor_here(Pane *p, ScreenBuffer *s) {
+    g_copy_anchor_x = g_copy_cx;
+    g_copy_anchor_abs_y = screen_to_abs_row(s, g_copy_cy, p->scroll_offset);
+    g_copy_sel_active = 1;
+}
+
+/* Copy mode entered by clicking two points with Shift/Alt is a one-shot
+ * session: Ctrl+C / Enter copy and close, Esc closes, and any other key closes
+ * and is handed back to the pane (that is what the 1 return value means). */
+int handle_copy_mode_key(KEY_EVENT_RECORD *ke) {
+    WORD vk = ke->wVirtualKeyCode;
+    WCHAR uc = ke->uChar.UnicodeChar;
+    DWORD ctrl = ke->dwControlKeyState;
+    int has_ctrl = (ctrl & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0;
+    int has_shift = (ctrl & SHIFT_PRESSED) != 0;
+    int has_alt = (ctrl & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) != 0;
 
     if (g_mux.active_pane < 0 || g_mux.active_pane >= g_mux.pane_count) {
-        g_copy_mode = 0; g_copy_sel_active = 0; g_mux.needs_redraw = 1; return;
+        copy_mode_leave(NULL);
+        return 0;
     }
     Pane *p = &g_mux.panes[g_mux.active_pane];
     ScreenBuffer *s = &p->screen;
 
-    if (vk == VK_ESCAPE || uc == 'q' || uc == 'Q') {
-        g_copy_mode = 0;
-        g_copy_sel_active = 0;
-        p->scroll_offset = 0;
-        g_mux.needs_redraw = 1;
-        return;
+    /* Modifier keys arrive as their own key events; they must never be treated
+     * as "some other key" or the quick session would close instantly. */
+    if (vk == VK_SHIFT || vk == VK_CONTROL || vk == VK_MENU || vk == VK_CAPITAL ||
+        vk == VK_NUMLOCK || vk == VK_SCROLL || vk == VK_LWIN || vk == VK_RWIN) {
+        return 0;
+    }
+
+    if (vk == VK_ESCAPE) {
+        copy_mode_leave(p);
+        return 0;
+    }
+
+    int is_ctrl_c = (has_ctrl && (vk == 'C' || uc == 3));
+    if (is_ctrl_c || vk == VK_RETURN) {
+        copy_mode_yank(p, s);
+        copy_mode_leave(p);
+        return 0;
+    }
+
+    int is_motion = (vk == VK_LEFT || vk == VK_RIGHT || vk == VK_UP || vk == VK_DOWN ||
+                     vk == VK_PRIOR || vk == VK_NEXT || vk == VK_HOME || vk == VK_END);
+
+    /* Shift/Alt reshape the selection: Shift keeps the text-flow selection,
+     * Alt switches to a rectangular block.  Either one starts a selection at
+     * the cursor if none is open yet. */
+    if (is_motion && (has_shift || has_alt)) {
+        if (!g_copy_sel_active) copy_mode_anchor_here(p, s);
+        g_copy_block = has_alt ? 1 : 0;
+    } else if (g_copy_quick) {
+        copy_mode_leave(p);
+        return 1;
+    }
+
+    if (uc == 'q' || uc == 'Q') {
+        copy_mode_leave(p);
+        return 0;
     }
 
     if (uc == '/' || vk == VK_OEM_2) {
@@ -1084,40 +1161,41 @@ void handle_copy_mode_key(KEY_EVENT_RECORD *ke) {
         g_search_pos = 0;
         g_search_buf[0] = 0;
         g_mux.needs_redraw = 1;
-        return;
+        return 0;
     }
 
     if (vk == VK_SPACE || uc == 'v' || uc == 'V') {
         g_copy_sel_active = !g_copy_sel_active;
         if (g_copy_sel_active) {
-            g_copy_anchor_x = g_copy_cx;
-            g_copy_anchor_abs_y = screen_to_abs_row(s, g_copy_cy, p->scroll_offset);
+            copy_mode_anchor_here(p, s);
+            g_copy_block = (uc == 'V');   /* Shift+V 直接开块选 */
         }
         g_mux.needs_redraw = 1;
-        return;
+        return 0;
     }
 
-    if (vk == VK_RETURN || uc == 'y' || uc == 'Y') {
-        if (g_copy_sel_active) {
-            int cur_abs_y = screen_to_abs_row(s, g_copy_cy, p->scroll_offset);
-            copy_range_to_clipboard(p, g_copy_anchor_x, g_copy_anchor_abs_y, g_copy_cx, cur_abs_y);
-        }
-        g_copy_mode = 0;
-        g_copy_sel_active = 0;
-        p->scroll_offset = 0;
+    if (uc == 'b' || uc == 'B') {
+        g_copy_block = !g_copy_block;
+        if (!g_copy_sel_active) copy_mode_anchor_here(p, s);
         g_mux.needs_redraw = 1;
-        return;
+        return 0;
+    }
+
+    if (uc == 'y' || uc == 'Y') {
+        copy_mode_yank(p, s);
+        copy_mode_leave(p);
+        return 0;
     }
 
     if (vk == VK_LEFT || uc == 'h' || uc == 'H') {
         if (g_copy_cx > 0) g_copy_cx--;
         g_mux.needs_redraw = 1;
-        return;
+        return 0;
     }
     if (vk == VK_RIGHT || uc == 'l' || uc == 'L') {
         if (g_copy_cx < s->cols - 1) g_copy_cx++;
         g_mux.needs_redraw = 1;
-        return;
+        return 0;
     }
     if (vk == VK_UP || uc == 'k' || uc == 'K') {
         if (g_copy_cy > 0) {
@@ -1126,7 +1204,7 @@ void handle_copy_mode_key(KEY_EVENT_RECORD *ke) {
             p->scroll_offset++;
         }
         g_mux.needs_redraw = 1;
-        return;
+        return 0;
     }
     if (vk == VK_DOWN || uc == 'j' || uc == 'J') {
         if (g_copy_cy < s->rows - 1) {
@@ -1135,30 +1213,31 @@ void handle_copy_mode_key(KEY_EVENT_RECORD *ke) {
             p->scroll_offset--;
         }
         g_mux.needs_redraw = 1;
-        return;
+        return 0;
     }
     if (vk == VK_PRIOR) {
         p->scroll_offset += s->rows / 2;
         if (p->scroll_offset > s->hist_lines) p->scroll_offset = s->hist_lines;
         g_mux.needs_redraw = 1;
-        return;
+        return 0;
     }
     if (vk == VK_NEXT) {
         p->scroll_offset -= s->rows / 2;
         if (p->scroll_offset < 0) p->scroll_offset = 0;
         g_mux.needs_redraw = 1;
-        return;
+        return 0;
     }
     if (vk == VK_HOME || uc == '0' || uc == '^') {
         g_copy_cx = 0;
         g_mux.needs_redraw = 1;
-        return;
+        return 0;
     }
     if (vk == VK_END || uc == '$') {
         g_copy_cx = s->cols - 1;
         g_mux.needs_redraw = 1;
-        return;
+        return 0;
     }
+    return 0;
 }
 
 /* ---------------------------------------------------------------------------
@@ -2080,6 +2159,8 @@ void action_execute(int action, int arg, DWORD ctrl) {
                 Pane *p = &g_mux.panes[g_mux.active_pane];
                 g_copy_mode = 1;
                 g_copy_sel_active = 0;
+                g_copy_quick = 0;
+                g_copy_block = 0;
                 g_copy_cx = p->screen.cursor_x;
                 g_copy_cy = p->screen.cursor_y;
                 g_mux.needs_redraw = 1;
@@ -2298,8 +2379,9 @@ void handle_key(KEY_EVENT_RECORD *ke) {
         }
     }
     if (g_copy_mode && !g_mux.prefix_mode) {
-        handle_copy_mode_key(ke);
-        return;
+        /* A quick Shift/Alt click session forwards the key that closed it, so
+         * typing straight after selecting does not lose a character. */
+        if (!handle_copy_mode_key(ke)) return;
     }
 
     if (!key_input_modal_active() && keymap_is_prefix(vk, ctrl, uc)) {
@@ -3137,6 +3219,46 @@ void handle_mouse(MOUSE_EVENT_RECORD *me) {
     } else {
         g_sb_dragging = 0;
         g_sb_grab_offset = 0;
+    }
+
+    /* Shift/Alt + click marks two corners of a selection and drops straight
+     * into copy mode: Shift keeps the text-flow selection, Alt makes it a
+     * rectangular block.  This deliberately runs before the drag-select and
+     * before mouse_tracking forwarding, so it also works inside full-screen
+     * apps that grabbed the mouse. */
+    if (!p->is_settings && my >= 1 && !g_sb_dragging &&
+        (me->dwEventFlags == 0 || me->dwEventFlags == DOUBLE_CLICK ||
+         (me->dwEventFlags == MOUSE_MOVED && g_copy_mode && g_copy_quick)) &&
+        (me->dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED)) {
+        int quick_shift = (me->dwControlKeyState & SHIFT_PRESSED) != 0;
+        int quick_alt = (me->dwControlKeyState & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) != 0;
+        if (quick_shift || quick_alt || (g_copy_mode && g_copy_quick)) {
+            int click_x = mx;
+            if (click_x < 0) click_x = 0;
+            if (click_x > s->cols - 1) click_x = s->cols - 1;
+            int click_y = my - 1;
+            if (click_y > s->rows - 1) click_y = s->rows - 1;
+            if (!g_copy_mode || !g_copy_quick) {
+                /* First corner. */
+                g_copy_mode = 1;
+                g_copy_quick = 1;
+                g_copy_cx = click_x;
+                g_copy_cy = click_y;
+                g_copy_anchor_x = click_x;
+                g_copy_anchor_abs_y = screen_to_abs_row(s, click_y, p->scroll_offset);
+                g_copy_sel_active = 1;
+                g_copy_block = quick_alt ? 1 : 0;
+            } else {
+                /* Second corner: only the end point moves. */
+                g_copy_cx = click_x;
+                g_copy_cy = click_y;
+                if (quick_alt) g_copy_block = 1;
+                else if (quick_shift) g_copy_block = 0;
+            }
+            g_mouse_selecting = 0;
+            g_mux.needs_redraw = 1;
+            return;
+        }
     }
 
     if (!s->mouse_tracking && !p->is_settings && my >= 1 && !g_sb_dragging) {

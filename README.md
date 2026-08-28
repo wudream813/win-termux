@@ -34,7 +34,8 @@ Windows 终端复用器（Terminal Multiplexer）—— 模块化 C 架构，基
 | `Ctrl+B :` | 打开命令面板 (Command Palette) |
 | `Ctrl+B c` | 新建默认 pane |
 | `Ctrl+B +` | 新建 pane 菜单（选已配置项目 / 自定义命令行） |
-| `Ctrl+B [` | 进入复制模式（方向键/hjkl移动、Space/v选区、Enter/y复制、Esc退出） |
+| `Ctrl+B [` | 进入复制模式（方向键/hjkl 移动、Space/v 选区、`Shift+方向` 行选、`Alt+方向` 块选、`b` 切换行/块、Enter/`Ctrl+C`/y 复制、Esc 退出） |
+| `Shift+点击两点` | 直接进入复制模式并选中两点之间（行选）；`Alt+点击两点` 为矩形框选。`Ctrl+C`/Enter 复制并关闭，Esc 退出，其它键退出并把该键发给终端 |
 | `Ctrl+B /` | 搜索滚动历史（n/N 跳转匹配，Esc 退出） |
 | `Ctrl+B s` | 打开图形化设置页面 (`termux.ini`) |
 | `Ctrl+B r` | 热重载配置文件 (`termux.ini`) |

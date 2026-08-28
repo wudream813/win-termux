@@ -1088,7 +1088,7 @@ static const PaletteStaticItem g_palette_operation_items[] = {
     { "color",              "修改颜色",           "修改当前标签页的主题颜色",         "",           PALETTE_ACTION_COLOR,              0, 4, 4 },
     { "search-history",     "搜索历史",           "搜索当前终端的滚动历史",           "",           PALETTE_ACTION_SEARCH,             0, 5, 5 },
     { "switch-panel",       "切换 panel",         "按编号或标题选择并切换 panel",     "Enter 进入", PALETTE_ACTION_SWITCH_PANEL,       0, 6, 6 },
-    { "copy-mode",          "进入复制模式",       "移动光标、选择终端文本并复制",     "",           PALETTE_ACTION_COPY_MODE,          0, 7, 7 },
+    { "copy-mode",          "进入复制模式",       "移动光标、行选/块选终端文本并复制",     "",           PALETTE_ACTION_COPY_MODE,          0, 7, 7 },
     { "reload",             "热重载",             "重新加载 termux.ini 配置文件",      "",           PALETTE_ACTION_RELOAD,             0, 8, 5 },
     { "open-settings-page", "打开设置页面",       "进入图形化设置页面",               "Enter 打开", PALETTE_ACTION_GRAPHICAL_SETTINGS, 0, 9, 4 },
     { "settings-command-panel", "打开设置命令面板", "切换到设置命令面板",           "Enter 进入", PALETTE_ACTION_OPEN_SETTINGS,     0, 10, 6 },
@@ -1671,7 +1671,7 @@ static const HelpShortcut g_help_shortcuts[] = {
     {ACT_COMMAND_PALETTE, NULL,         "命令面板（操作 / 设置两类）"},
     {ACT_NEW_PANE,        NULL,         "新建默认 pane"},
     {ACT_NEW_PANE_MENU,   NULL,         "新建 pane 菜单 (选择/自定义命令行)"},
-    {ACT_COPY_MODE,       NULL,         "进入复制模式 (方向键/Space选择/Enter复制)"},
+    {ACT_COPY_MODE,       NULL,         "进入复制模式 (Shift/Alt+方向选择, Enter/Ctrl+C 复制)"},
     {ACT_SEARCH,          NULL,         "搜索滚动历史 (n/N 跳转匹配, Esc 退出)"},
     {ACT_NEXT_PANE,       NULL,         "下一个 pane"},
     {ACT_PREV_PANE,       NULL,         "上一个 pane"},
@@ -1899,12 +1899,17 @@ void render_screen(void) {
                 }
             }
 
-            int sel_active = 0, sel_min_abs_y = 0, sel_max_abs_y = 0, sel_min_x = 0, sel_max_x = 0;
+            int sel_active = 0, sel_block = 0, sel_min_abs_y = 0, sel_max_abs_y = 0, sel_min_x = 0, sel_max_x = 0;
             if (g_copy_mode && g_copy_sel_active) {
                 int cur_abs_y = screen_to_abs_row(s, g_copy_cy, vo);
                 sel_min_abs_y = g_copy_anchor_abs_y < cur_abs_y ? g_copy_anchor_abs_y : cur_abs_y;
                 sel_max_abs_y = g_copy_anchor_abs_y > cur_abs_y ? g_copy_anchor_abs_y : cur_abs_y;
-                if (g_copy_anchor_abs_y == cur_abs_y) {
+                if (g_copy_block) {
+                    /* Rectangular selection: the same column range on every row. */
+                    sel_block = 1;
+                    sel_min_x = g_copy_anchor_x < g_copy_cx ? g_copy_anchor_x : g_copy_cx;
+                    sel_max_x = g_copy_anchor_x > g_copy_cx ? g_copy_anchor_x : g_copy_cx;
+                } else if (g_copy_anchor_abs_y == cur_abs_y) {
                     sel_min_x = g_copy_anchor_x < g_copy_cx ? g_copy_anchor_x : g_copy_cx;
                     sel_max_x = g_copy_anchor_x > g_copy_cx ? g_copy_anchor_x : g_copy_cx;
                 } else if (g_copy_anchor_abs_y < cur_abs_y) {
@@ -1958,7 +1963,11 @@ void render_screen(void) {
 
                     if (sel_active) {
                         int in_sel = 0;
-                        if (cur_cell_abs_y > sel_min_abs_y && cur_cell_abs_y < sel_max_abs_y) in_sel = 1;
+                        if (sel_block) {
+                            in_sel = (cur_cell_abs_y >= sel_min_abs_y && cur_cell_abs_y <= sel_max_abs_y &&
+                                      x >= sel_min_x && x <= sel_max_x);
+                        }
+                        else if (cur_cell_abs_y > sel_min_abs_y && cur_cell_abs_y < sel_max_abs_y) in_sel = 1;
                         else if (sel_min_abs_y == sel_max_abs_y && cur_cell_abs_y == sel_min_abs_y) in_sel = (x >= sel_min_x && x <= sel_max_x);
                         else if (cur_cell_abs_y == sel_min_abs_y) in_sel = (x >= sel_min_x);
                         else if (cur_cell_abs_y == sel_max_abs_y) in_sel = (x <= sel_max_x);
@@ -2050,8 +2059,9 @@ void render_screen(void) {
 
             if (g_copy_mode) {
                 int badge_x = (g_mux.host_cols > 65) ? (g_mux.host_cols - 60) : 1;
-                pos += snprintf(out + pos, bs - pos, "\x1b[2;%dH\x1b[048;2;210;153;034m\x1b[038;2;013;017;023;1m [复制模式] \x1b[0m\x1b[048;2;033;038;045m\x1b[038;2;230;237;243m %s | Enter/y 复制, Space/v 选区, Esc 退出 \x1b[0m",
-                                badge_x, g_copy_sel_active ? "已开启选区" : "移动光标");
+                pos += snprintf(out + pos, bs - pos, "\x1b[2;%dH\x1b[048;2;210;153;034m\x1b[038;2;013;017;023;1m [复制模式] \x1b[0m\x1b[048;2;033;038;045m\x1b[038;2;230;237;243m %s | Enter/Ctrl+C 复制, Shift/Alt+方向改选区, Esc 退出 \x1b[0m",
+                                badge_x, g_copy_sel_active ? (g_copy_block ? "块选区" : "行选区")
+                                                          : (g_copy_quick ? "点选区" : "移动光标"));
             } else if (g_search_active && g_search_match_count > 0 && !g_search_mode) {
                 int bot_r = ui_bottom_row(g_mux.host_rows);
                 pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[048;2;033;038;045m\x1b[038;2;210;153;034;1m [搜索: \"%s\" (%d/%d)] \x1b[0m\x1b[048;2;022;027;034m\x1b[038;2;230;237;243m n 下一个, N 上一个, Esc 退出 \x1b[0m\x1b[K",
