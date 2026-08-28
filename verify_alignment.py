@@ -168,10 +168,13 @@ check("g_mux.palette_page = settings_active ? PALETTE_PAGE_SETTINGS : PALETTE_PA
       "Ctrl+B : 没有按当前页面直达设置/操作命令面板")
 operation_items = RENDER[RENDER.find("g_palette_operation_items"):RENDER.find("g_palette_setting_items")]
 setting_items = RENDER[RENDER.find("g_palette_setting_items"):RENDER.find("g_palette_startup_items")]
-check("\"open-settings-page\"" in setting_items and "PALETTE_ACTION_GRAPHICAL_SETTINGS" in setting_items,
-      "设置命令面板没有默认的图形化设置入口")
-check("graphical-settings" not in operation_items and "图形化设置" not in operation_items,
-      "图形化设置入口仍错误地出现在操作命令面板")
+check("\"open-settings-page\"" in operation_items and "PALETTE_ACTION_GRAPHICAL_SETTINGS" in operation_items,
+      "操作命令面板没有图形化设置入口")
+check("\"open-settings-page\"" not in setting_items and
+      "PALETTE_ACTION_GRAPHICAL_SETTINGS" not in setting_items,
+      "图形化设置入口仍错误地出现在设置命令面板")
+check("\"about\"" in setting_items and "PALETTE_ACTION_OPEN_ABOUT" in setting_items,
+      "设置命令面板没有关于入口")
 check("settings-command-panel" in operation_items and "PALETTE_ACTION_OPEN_SETTINGS" in operation_items,
       "操作命令面板没有打开设置命令面板入口")
 check("operations-command-panel" in setting_items and "PALETTE_ACTION_OPEN_OPERATIONS" in setting_items,
@@ -203,6 +206,28 @@ check("palette_push_page(PALETTE_PAGE_MENU_SETTINGS);" in INPUT,
       "菜单项设置没有进入子面板")
 check("out->action = PALETTE_ACTION_EDIT_PANEL;" in RENDER,
       "菜单项子面板没有把条目连接到编辑子框")
+menu_info_start = RENDER.find("if (page == PALETTE_PAGE_MENU_SETTINGS)")
+menu_info_end = RENDER.find("    return 0;", menu_info_start)
+menu_info = RENDER[menu_info_start:menu_info_end]
+check("return g_chooser_item_count;" in RENDER[RENDER.find("case PALETTE_PAGE_MENU_SETTINGS"):RENDER.find("default:", RENDER.find("case PALETTE_PAGE_MENU_SETTINGS"))],
+      "菜单项设置仍包含添加 panel 伪条目")
+check('out->id = "add-panel"' not in menu_info and "添加 panel 条目" not in menu_info,
+      "菜单项设置仍提供添加 panel 条目")
+check("filtered[fi], fi + 1" in RENDER and "item->number" not in RENDER[RENDER.find("static void render_palette_item_row"):RENDER.find("static void render_palette_editor")],
+      "命令面板序号没有按照当前过滤结果动态编号")
+check("palette_move_menu_item" in INPUT and "g_mux.palette_query_len > 0" in INPUT and
+      "!g_mux.palette_query_len" in INPUT,
+      "菜单项搜索期间没有禁用位置修改")
+check("palette_delete_menu_item" in INPUT and "g_chooser_item_count--" in INPUT,
+      "菜单项设置缺少删除 panel 条目操作")
+check("static int key_input_modal_active" in INPUT and
+      "!key_input_modal_active()" in INPUT and
+      "g_mux.prefix_mode = 0;" in INPUT,
+      "文本输入模态仍可被全局 Ctrl+B 前缀打断")
+check("wraparound_pending && cy + 1 < rr" not in RENDER and
+      "if (cx >= rc) cx = rc - 1;" in RENDER and
+      "terminal_cursor_position" in RENDER,
+      "终端输出区域末格光标仍无法显示")
 check("#define PALETTE_EDITOR_H 10" in RENDER and "int action_row = top + 8;" in RENDER,
       "编辑 panel 子框没有使用压缩后的十行布局")
 check("int parent_h = palette_visible_rows(host_rows) + 5;" in RENDER and

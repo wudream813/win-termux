@@ -383,6 +383,13 @@ void execute_palette_command(int item_index) {
             open_settings_pane();
             g_mux.needs_redraw = 1;
             break;
+        case PALETTE_ACTION_OPEN_ABOUT: {
+            palette_close();
+            int ni = create_about_pane();
+            if (ni >= 0) switch_pane(ni);
+            g_mux.needs_redraw = 1;
+            break;
+        }
         case PALETTE_ACTION_MENU_SETTINGS:
             palette_push_page(PALETTE_PAGE_MENU_SETTINGS);
             break;
@@ -553,6 +560,48 @@ static void handle_palette_editor_key(KEY_EVENT_RECORD *ke) {
     g_mux.needs_redraw = 1;
 }
 
+static int palette_move_menu_item(const int *filtered, int count, int selected, int delta) {
+    if (g_mux.palette_page != PALETTE_PAGE_MENU_SETTINGS || g_mux.palette_query_len > 0 ||
+        !filtered || selected < 0 || selected >= count || delta == 0)
+        return 0;
+
+    int item_index = filtered[selected];
+    int target = item_index + delta;
+    if (item_index < 0 || item_index >= g_chooser_item_count || target < 0 ||
+        target >= g_chooser_item_count)
+        return 0;
+
+    ChooserItem moved = g_chooser_items[item_index];
+    g_chooser_items[item_index] = g_chooser_items[target];
+    g_chooser_items[target] = moved;
+    save_config();
+    g_mux.palette_sel = selected + delta;
+    if (g_mux.palette_sel < 0) g_mux.palette_sel = 0;
+    if (g_mux.palette_sel >= count) g_mux.palette_sel = count - 1;
+    g_mux.needs_redraw = 1;
+    return 1;
+}
+
+static int palette_delete_menu_item(const int *filtered, int count, int selected) {
+    if (g_mux.palette_page != PALETTE_PAGE_MENU_SETTINGS || !filtered ||
+        selected < 0 || selected >= count)
+        return 0;
+
+    int item_index = filtered[selected];
+    if (item_index < 0 || item_index >= g_chooser_item_count || g_chooser_item_count <= 1)
+        return 0;
+
+    for (int i = item_index; i + 1 < g_chooser_item_count; i++)
+        g_chooser_items[i] = g_chooser_items[i + 1];
+    g_chooser_item_count--;
+    save_config();
+    if (g_mux.palette_sel >= g_chooser_item_count) g_mux.palette_sel = g_chooser_item_count - 1;
+    if (g_mux.palette_sel < 0) g_mux.palette_sel = 0;
+    if (g_mux.palette_scroll > g_mux.palette_sel) g_mux.palette_scroll = g_mux.palette_sel;
+    g_mux.needs_redraw = 1;
+    return 1;
+}
+
 void handle_palette_key(KEY_EVENT_RECORD *ke) {
     if (g_mux.palette_page == PALETTE_PAGE_PANEL_EDITOR) {
         handle_palette_editor_key(ke);
@@ -604,6 +653,24 @@ void handle_palette_key(KEY_EVENT_RECORD *ke) {
     if (vk == VK_RIGHT && count > 0 && g_mux.palette_sel >= 0 && g_mux.palette_sel < count) {
         execute_palette_command(filtered[g_mux.palette_sel]);
         return;
+    }
+    if (g_mux.palette_page == PALETTE_PAGE_MENU_SETTINGS) {
+        int has_ctrl = (ctrl & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0;
+        int is_up = (uc == 'u' || uc == 'U' || vk == 'U');
+        int is_down = (uc == 'd' || uc == 'D' || vk == 'D');
+        int is_delete = (uc == 'x' || uc == 'X' || vk == 'X');
+        if (!has_ctrl && !g_mux.palette_query_len && (is_up || is_down)) {
+            /* A filtered list is a view, not a reorderable source.  Keep
+             * U/D as ordinary search characters once a query is present. */
+            palette_move_menu_item(filtered, count, g_mux.palette_sel, is_up ? -1 : 1);
+            return;
+        }
+        if (is_delete && (has_ctrl || !g_mux.palette_query_len)) {
+            /* Plain X is the compact no-query command; Ctrl+X keeps delete
+             * reachable while preserving X as a search character. */
+            palette_delete_menu_item(filtered, count, g_mux.palette_sel);
+            return;
+        }
     }
     if (vk == VK_BACK) {
         buf_backspace(g_mux.palette_query, &g_mux.palette_query_len, &g_mux.palette_query_pos);
@@ -1707,6 +1774,15 @@ void handle_prefix(WORD vk, DWORD ctrl, WCHAR uc) {
     }
 }
 
+static int key_input_modal_active(void) {
+    if (g_mux.rename_mode || g_mux.custom_cmd_mode) return 1;
+    if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count &&
+        g_mux.panes[g_mux.active_pane].active && g_mux.panes[g_mux.active_pane].is_settings &&
+        (g_settings_nav >= 1 || g_settings_show_presets))
+        return 1;
+    return 0;
+}
+
 void handle_key(KEY_EVENT_RECORD *ke) {
     if (g_hover_preview_active || g_hover_chooser_active || g_hover_settings_name_active || g_hover_settings_cmd_active) {
         g_hover_preview_active = 0;
@@ -1767,7 +1843,7 @@ void handle_key(KEY_EVENT_RECORD *ke) {
         return;
     }
 
-    if (g_search_active && !g_mux.prefix_mode && !g_copy_mode) {
+    if (g_search_active && !g_mux.prefix_mode && !g_copy_mode && !key_input_modal_active()) {
         if (vk == VK_ESCAPE) {
             g_search_active = 0;
             g_mux.needs_redraw = 1;
@@ -1784,21 +1860,32 @@ void handle_key(KEY_EVENT_RECORD *ke) {
     }
 
     if (g_mux.prefix_mode) {
-        if (vk == VK_SHIFT || vk == 0x10 || vk == 0xA0 || vk == 0xA1 ||
-            vk == VK_CONTROL || vk == 0x11 || vk == 0xA2 || vk == 0xA3 ||
-            vk == VK_MENU || vk == 0x12 || vk == 0xA4 || vk == 0xA5 ||
-            vk == VK_CAPITAL || vk == VK_NUMLOCK || vk == VK_SCROLL) {
+        if (key_input_modal_active()) {
+            /* A pending global prefix must never leak into a text editor.
+             * Consume the prefix and let the current key reach the modal
+             * editor instead of opening a new pane/popup on the next key. */
+            g_mux.prefix_mode = 0;
+        } else {
+            if (vk == VK_SHIFT || vk == 0x10 || vk == 0xA0 || vk == 0xA1 ||
+                vk == VK_CONTROL || vk == 0x11 || vk == 0xA2 || vk == 0xA3 ||
+                vk == VK_MENU || vk == 0x12 || vk == 0xA4 || vk == 0xA5 ||
+                vk == VK_CAPITAL || vk == VK_NUMLOCK || vk == VK_SCROLL) {
+                return;
+            }
+            handle_prefix(vk, ctrl, uc);
             return;
         }
-        handle_prefix(vk, ctrl, uc);
-        return;
     }
     if (g_copy_mode && !g_mux.prefix_mode) {
         handle_copy_mode_key(ke);
         return;
     }
 
-    if ((uc == 0x02) || (vk == 'B' && is_ctrl && !is_alt && !is_shift)) { g_mux.prefix_mode = 1; return; }
+    if (!key_input_modal_active() &&
+        ((uc == 0x02) || (vk == 'B' && is_ctrl && !is_alt && !is_shift))) {
+        g_mux.prefix_mode = 1;
+        return;
+    }
 
     if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active && g_mux.panes[g_mux.active_pane].is_settings) {
         handle_settings_key(ke);

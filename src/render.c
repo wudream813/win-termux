@@ -660,26 +660,27 @@ static const PaletteStaticItem g_palette_root_items[] = {
 };
 
 static const PaletteStaticItem g_palette_operation_items[] = {
-    { "new-terminal",  "新建终端",       "选择已配置终端，支持搜索",       "Enter 进入", PALETTE_ACTION_OPEN_NEW_TERMINAL, 0, 1, 1 },
-    { "custom-command", "启动自定义命令行", "输入并启动任意自定义命令行",       "",           PALETTE_ACTION_START_CUSTOM,       0, 2, 2 },
-    { "rename",         "修改标题",       "修改当前标签页显示标题",           "",           PALETTE_ACTION_RENAME,             0, 3, 3 },
-    { "color",          "修改颜色",       "修改当前标签页的主题颜色",         "",           PALETTE_ACTION_COLOR,              0, 4, 4 },
-    { "search-history", "搜索历史",       "搜索当前终端的滚动历史",           "",           PALETTE_ACTION_SEARCH,             0, 5, 5 },
-    { "switch-panel",   "切换 panel",     "按编号或标题选择并切换 panel",     "Enter 进入", PALETTE_ACTION_SWITCH_PANEL,       0, 6, 6 },
-    { "copy-mode",      "进入复制模式",   "移动光标、选择终端文本并复制",     "",           PALETTE_ACTION_COPY_MODE,          0, 7, 7 },
-    { "reload",         "热重载",         "重新加载 termux.ini 配置文件",      "",           PALETTE_ACTION_RELOAD,             0, 8, 5 },
-    { "settings-command-panel", "打开设置命令面板", "切换到设置命令面板",           "Enter 进入", PALETTE_ACTION_OPEN_SETTINGS,     0, 9, 6 },
-    { "close-panel",    "关闭当前 panel", "关闭当前活动 panel",                "",           PALETTE_ACTION_CLOSE_PANEL,       0, 10, 7 },
-    { "quit",           "退出 termux",     "退出整个 termux 程序并关闭所有会话", "",           PALETTE_ACTION_QUIT,              0, 11, 8 },
+    { "new-terminal",       "新建终端",           "选择已配置终端，支持搜索",       "Enter 进入", PALETTE_ACTION_OPEN_NEW_TERMINAL, 0, 1, 1 },
+    { "custom-command",    "启动自定义命令行",   "输入并启动任意自定义命令行",       "",           PALETTE_ACTION_START_CUSTOM,       0, 2, 2 },
+    { "rename",             "修改标题",           "修改当前标签页显示标题",           "",           PALETTE_ACTION_RENAME,             0, 3, 3 },
+    { "color",              "修改颜色",           "修改当前标签页的主题颜色",         "",           PALETTE_ACTION_COLOR,              0, 4, 4 },
+    { "search-history",     "搜索历史",           "搜索当前终端的滚动历史",           "",           PALETTE_ACTION_SEARCH,             0, 5, 5 },
+    { "switch-panel",       "切换 panel",         "按编号或标题选择并切换 panel",     "Enter 进入", PALETTE_ACTION_SWITCH_PANEL,       0, 6, 6 },
+    { "copy-mode",          "进入复制模式",       "移动光标、选择终端文本并复制",     "",           PALETTE_ACTION_COPY_MODE,          0, 7, 7 },
+    { "reload",             "热重载",             "重新加载 termux.ini 配置文件",      "",           PALETTE_ACTION_RELOAD,             0, 8, 5 },
+    { "open-settings-page", "打开设置页面",       "进入图形化设置页面",               "Enter 打开", PALETTE_ACTION_GRAPHICAL_SETTINGS, 0, 9, 4 },
+    { "settings-command-panel", "打开设置命令面板", "切换到设置命令面板",           "Enter 进入", PALETTE_ACTION_OPEN_SETTINGS,     0, 10, 6 },
+    { "close-panel",        "关闭当前 panel",     "关闭当前活动 panel",                "",           PALETTE_ACTION_CLOSE_PANEL,       0, 11, 7 },
+    { "quit",               "退出 termux",       "退出整个 termux 程序并关闭所有会话", "",           PALETTE_ACTION_QUIT,              0, 12, 8 },
 };
 
 static const PaletteStaticItem g_palette_setting_items[] = {
-    { "open-settings-page", "打开设置页面", "进入图形化设置页面",             "Enter 打开", PALETTE_ACTION_GRAPHICAL_SETTINGS, 0, 1, 4 },
-    { "operations-command-panel", "打开操作命令面板", "切换到操作命令面板",       "Enter 进入", PALETTE_ACTION_OPEN_OPERATIONS,   0, 2, 1 },
-    { "default-startup",    "修改默认启动项", "选择启动时显示终端或帮助页面",     "Enter 进入", PALETTE_ACTION_DEFAULT_STARTUP,     0, 3, 6 },
-    { "open-ini",           "打开设置文件 (.ini)", "使用系统默认编辑器打开 termux.ini", "",           PALETTE_ACTION_OPEN_INI,          0, 4, 6 },
-    { "add-panel",          "添加 panel 条目", "选择预设或自定义并继续编辑",       "Enter 进入", PALETTE_ACTION_ADD_PANEL,         0, 5, 2 },
-    { "menu-settings",      "菜单项设置",     "在子面板中选择并编辑 panel 条目",       "Enter 进入", PALETTE_ACTION_MENU_SETTINGS,     0, 6, 4 },
+    { "operations-command-panel", "打开操作命令面板", "切换到操作命令面板",       "Enter 进入", PALETTE_ACTION_OPEN_OPERATIONS,   0, 1, 1 },
+    { "default-startup",    "修改默认启动项", "选择启动时显示终端或帮助页面",     "Enter 进入", PALETTE_ACTION_DEFAULT_STARTUP,     0, 2, 6 },
+    { "open-ini",           "打开设置文件 (.ini)", "使用系统默认编辑器打开 termux.ini", "",           PALETTE_ACTION_OPEN_INI,          0, 3, 6 },
+    { "add-panel",          "添加 panel 条目", "选择预设或自定义并继续编辑",       "Enter 进入", PALETTE_ACTION_ADD_PANEL,         0, 4, 2 },
+    { "menu-settings",      "菜单项设置",     "在子面板中选择并编辑 panel 条目",       "Enter 进入", PALETTE_ACTION_MENU_SETTINGS,     0, 5, 4 },
+    { "about",              "关于",           "查看版本、作者与系统信息",           "Enter 打开", PALETTE_ACTION_OPEN_ABOUT,       0, 6, 7 },
 };
 
 static const PaletteStaticItem g_palette_startup_items[] = {
@@ -787,8 +788,10 @@ int palette_item_count(int page) {
         case PALETTE_PAGE_ADD_PANEL:
             return g_preset_count;
         case PALETTE_PAGE_MENU_SETTINGS:
-            /* Existing menu items plus one child entry for adding a new item. */
-            return g_chooser_item_count + 1;
+            /* Menu item settings edits existing entries only.  Adding a new
+             * entry remains available from the settings command panel, not
+             * from this management subpanel. */
+            return g_chooser_item_count;
         default:
             return 0;
     }
@@ -863,17 +866,6 @@ int palette_item_info(int page, int item_index, PaletteItemInfo *out) {
             out->value = item_index;
             out->number = item_index + 1;
             out->color = (item_index % 8) + 1;
-            return 1;
-        }
-        if (item_index == g_chooser_item_count) {
-            out->id = "add-panel";
-            out->title = "添加 panel 条目";
-            out->desc = "选择预设或自定义命令并进入编辑子框";
-            out->shortcut = "Enter 进入";
-            out->action = PALETTE_ACTION_ADD_PANEL;
-            out->value = 0;
-            out->number = item_index + 1;
-            out->color = 2;
             return 1;
         }
     }
@@ -1002,15 +994,15 @@ static void palette_hline(char *out, int bs, int *posp, int row, int left, int w
 }
 
 static void render_palette_item_row(char *out, int bs, int *posp, int row, int left, int width,
-                                    int page, int item_index, int selected, int hovered,
+                                    int page, int item_index, int display_number, int selected, int hovered,
                                     const PaletteItemInfo *item) {
     int pos = *posp;
     const char *bg = (selected || hovered) ? "\x1b[48;2;38;60;88m" : "\x1b[48;2;22;27;34m";
     const char *fg = selected ? "\x1b[38;2;255;255;255;1m" : "\x1b[38;2;230;237;243m";
     char tag[16];
     int tagw;
-    if (item && item->number > 0) {
-        snprintf(tag, sizeof(tag), "[%d]", item->number);
+    if (display_number > 0) {
+        snprintf(tag, sizeof(tag), "[%d]", display_number);
         tagw = utf8_cols(tag, (int)strlen(tag));
     } else {
         snprintf(tag, sizeof(tag), "   ");
@@ -1188,7 +1180,7 @@ void render_command_palette(char *out, int bs, int *posp, int host_rows, int hos
             int mouse_col = g_mouse_x + 1;
             int hovered = (mouse_row == row && mouse_col >= left && mouse_col < left + pw);
             render_palette_item_row(out, bs, &pos, row, left, pw, g_mux.palette_page,
-                                    filtered[fi], fi == g_mux.palette_sel, hovered, &item);
+                                    filtered[fi], fi + 1, fi == g_mux.palette_sel, hovered, &item);
         } else {
             pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m\x1b[48;2;22;27;34m", row, left);
             cols = 1;
@@ -1204,6 +1196,11 @@ void render_command_palette(char *out, int bs, int *posp, int host_rows, int hos
 
     int footer = top + 3 + visible;
     const char *footer_hint = " [Enter] 执行/进入 · Esc 返回";
+    if (g_mux.palette_page == PALETTE_PAGE_MENU_SETTINGS) {
+        footer_hint = g_mux.palette_query_len
+            ? " [Enter] 编辑 · Ctrl+X 删除 · 搜索中：U/D 调整位置不可用"
+            : " [Enter] 编辑 · U/D 调整位置 · X 删除 · Esc 返回";
+    }
     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m\x1b[38;2;139;148;158m%s\x1b[0m", footer, left, footer_hint);
     cols = 1 + utf8_cols(footer_hint, (int)strlen(footer_hint));
     while (cols < pw - 1 && pos < bs - 8) { out[pos++] = ' '; cols++; }
@@ -1301,6 +1298,31 @@ static const struct {
     {  38,  44,  52,  11, 14, 17,   26,  30,  38 },
     {  30,  35,  42,  10, 13, 16,   20,  24,  30 }
 };
+
+static int terminal_cursor_position(const ScreenBuffer *s, int scroll_offset,
+                                     int host_rows, int host_cols, int *out_row, int *out_col) {
+    if (!s || scroll_offset != 0 || !s->cursor_visible || host_rows < 1 || host_cols < 1)
+        return 0;
+
+    int rr = s->rows < host_rows ? s->rows : host_rows;
+    int rc = s->cols < host_cols ? s->cols : host_cols;
+    if (rr <= 0 || rc <= 0) return 0;
+
+    int cx = s->cursor_x;
+    int cy = s->cursor_y;
+    /* VT auto-wrap is delayed until the next character.  During that
+     * pending state the cursor still belongs to the last cell that was
+     * written; moving it to the next row made the terminal output cursor
+     * disappear from the rightmost cell. */
+    if (cx >= rc) cx = rc - 1;
+    if (cx < 0) cx = 0;
+    if (cy < 0) cy = 0;
+    if (cy >= rr) cy = rr - 1;
+
+    if (out_row) *out_row = cy + 2;
+    if (out_col) *out_col = cx + 1;
+    return 1;
+}
 
 void render_screen(void) {
     EnterCriticalSection(&g_mux.cs);
@@ -1654,20 +1676,10 @@ void render_screen(void) {
         Pane *pane = &g_mux.panes[g_mux.active_pane];
         ScreenBuffer *s = &pane->screen;
         int vo = pane->scroll_offset;
-        int rr = s->rows < g_mux.host_rows ? s->rows : g_mux.host_rows;
-        int rc = s->cols < g_mux.host_cols ? s->cols : g_mux.host_cols;
-        if (vo == 0 && s->cursor_visible) {
-            int cx = s->cursor_x;
-            int cy = s->cursor_y;
-            if (s->wraparound_pending && cy + 1 < rr) {
-                cy++;
-                cx = 0;
-            }
-            if (cy + 1 <= rr && cx + 1 <= rc) {
-                pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", cy + 2, cx + 1);
-            } else {
-                pos += snprintf(out + pos, bs - pos, "\x1b[?25l");
-            }
+        int cursor_row = 0, cursor_col = 0;
+        if (terminal_cursor_position(s, vo, g_mux.host_rows, g_mux.host_cols,
+                                     &cursor_row, &cursor_col)) {
+            pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", cursor_row, cursor_col);
         } else {
             pos += snprintf(out + pos, bs - pos, "\x1b[?25l");
         }
