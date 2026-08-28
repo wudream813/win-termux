@@ -283,46 +283,64 @@ void render_ctx_menu(char *out, int bs, int *posp, int host_rows, int host_cols)
     *posp = pos;
 }
 
+static void render_color_picker_cell(char *out, int bs, int *posp,
+                                     const char *bg, const char *fg, char ch) {
+    int pos = *posp;
+    pos += snprintf(out + pos, bs - pos, "%s%s%c", bg, fg, ch);
+    *posp = pos;
+}
+
+static void render_color_picker_row(char *out, int bs, int *posp, int row,
+                                    int left, int base_color) {
+    int pos = *posp;
+    const char *panel_bg = "\x1b[48;2;33;38;45m";
+    const char *normal_fg = "\x1b[38;2;13;17;23;1m";
+    const char *hover_fg = "\x1b[38;2;255;255;255;1m";
+    int mouse_row = row - 1; /* rendered row is ANSI 1-based */
+
+    pos += snprintf(out + pos, bs - pos,
+                    "\x1b[%d;%dH%s│", row, left, panel_bg);
+    render_color_picker_cell(out, bs, &pos, panel_bg, normal_fg, ' ');
+
+    for (int i = 0; i < 4; i++) {
+        int color = base_color + i;
+        const char *swatch_bg = TAB_COLOR_BG[color];
+        int hovered = (g_mouse_y == mouse_row &&
+                       g_mouse_x >= left + 1 + i * 4 &&
+                       g_mouse_x < left + 5 + i * 4);
+        for (int w = 0; w < 4; w++) {
+            char ch = (w == 2) ? (char)('0' + color) : ' ';
+            const char *fg = (w == 2 && hovered) ? hover_fg : normal_fg;
+            render_color_picker_cell(out, bs, &pos, swatch_bg, fg, ch);
+        }
+    }
+
+    /* Every remaining interior cell is explicitly panel background.  This
+     * prevents the last swatch's background from leaking into the padding and
+     * makes the visible row state unambiguous one cell at a time. */
+    int interior_cols = 2 + 4 * 4;
+    while (interior_cols < CP_W - 1) {
+        render_color_picker_cell(out, bs, &pos, panel_bg, normal_fg, ' ');
+        interior_cols++;
+    }
+    pos += snprintf(out + pos, bs - pos, "%s│\x1b[0m", panel_bg);
+    *posp = pos;
+}
+
 void render_color_picker(char *out, int bs, int *posp, int host_rows, int host_cols) {
     (void)host_rows;
     int pos = *posp;
     int top = 2;
     int ax = (g_pop_anchor_x >= 0) ? g_pop_anchor_x : g_mouse_x;
     int left = popup_left_1based(ax, CP_W, host_cols);
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m┌─ 选择颜色 ─────────────────┐\x1b[0m", top, left);
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m\x1b[48;2;33;38;45m ", top + 1, left);
-    int row_cols = 2; /* left border + the initial interior space */
-    for (int i = 1; i <= 4; i++) {
-        /* Swatch background occupies ANSI columns left+2..left+5;
-         * convert those 1-based columns to 0-based mouse columns. */
-        int h = (g_mouse_y == top && g_mouse_x >= left + 1 + (i-1)*4 && g_mouse_x < left + 5 + (i-1)*4);
-        pos += snprintf(out + pos, bs - pos, "%s  \x1b[38;2;%s;1m%d\x1b[0m%s ",
-                        TAB_COLOR_BG[i], h ? "255;255;255" : "13;17;23", i, TAB_COLOR_BG[i]);
-        row_cols += 4;
-    }
-    pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m ");
-    row_cols++;
-    while (row_cols < CP_W - 1 && pos < bs - 8) {
-        out[pos++] = ' ';
-        row_cols++;
-    }
-    pos += snprintf(out + pos, bs - pos, "│\x1b[0m");
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m\x1b[48;2;33;38;45m ", top + 2, left);
-    row_cols = 2;
-    for (int i = 5; i <= 8; i++) {
-        int h = (g_mouse_y == top + 1 && g_mouse_x >= left + 1 + (i-5)*4 && g_mouse_x < left + 5 + (i-5)*4);
-        pos += snprintf(out + pos, bs - pos, "%s  \x1b[38;2;%s;1m%d\x1b[0m%s ",
-                        TAB_COLOR_BG[i], h ? "255;255;255" : "13;17;23", i, TAB_COLOR_BG[i]);
-        row_cols += 4;
-    }
-    pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m ");
-    row_cols++;
-    while (row_cols < CP_W - 1 && pos < bs - 8) {
-        out[pos++] = ' ';
-        row_cols++;
-    }
-    pos += snprintf(out + pos, bs - pos, "│\x1b[0m");
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m└────────────────────────────┘\x1b[0m", top + 3, left);
+    pos += snprintf(out + pos, bs - pos,
+                    "\x1b[%d;%dH\x1b[38;2;255;255;255m\x1b[48;2;31;111;235m┌─ 选择颜色 ─────────────────┐\x1b[0m",
+                    top, left);
+    render_color_picker_row(out, bs, &pos, top + 1, left, 1);
+    render_color_picker_row(out, bs, &pos, top + 2, left, 5);
+    pos += snprintf(out + pos, bs - pos,
+                    "\x1b[%d;%dH\x1b[48;2;33;38;45m└────────────────────────────┘\x1b[0m",
+                    top + 3, left);
     *posp = pos;
 }
 
@@ -490,7 +508,7 @@ void render_settings_panel(char *out, int bs, int *posp, int host_rows, int host
                         main_left, opt0_style, opt1_style);
 
         pos += snprintf(out + pos, bs - pos, "\x1b[7;%dH\x1b[38;2;121;192;255;1m■ [+] 新建菜单项顺序与管理 ([+] Menu Order)\x1b[0m", main_left);
-        pos += snprintf(out + pos, bs - pos, "\x1b[8;%dH\x1b[38;2;139;148;158m按 ↑/↓ 选择行，U/D 调顺序，Enter/[改] 编辑，X/[删] 移除：\x1b[0m", main_left);
+        pos += snprintf(out + pos, bs - pos, "\x1b[8;%dH\x1b[38;2;139;148;158m按 ↑/↓ 选择行，Ctrl+↑/↓ 调顺序，Enter/[改] 编辑，X/[删] 移除：\x1b[0m", main_left);
 
         pos += snprintf(out + pos, bs - pos, "\x1b[9;%dH\x1b[38;2;121;192;255;1m   序号  显示名称        启动命令行                       操作\x1b[0m", main_left);
 
@@ -546,7 +564,7 @@ void render_settings_panel(char *out, int bs, int *posp, int host_rows, int host
         }
 
         int hint_r = btn_r + 2 <= host_rows ? btn_r + 2 : host_rows;
-        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[38;2;139;148;158m提示: ↑/↓ 选择, Enter 编辑, U/D 调序, X 删除, + 新建, P 预设, Ctrl+S 保存, Esc 退出\x1b[0m", hint_r, main_left);
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[38;2;139;148;158m提示: ↑/↓ 选择, Ctrl+↑/↓ 调序, Enter 编辑, X 删除, + 新建, P 预设, Ctrl+S 保存, Esc 退出\x1b[0m", hint_r, main_left);
     } else {
         int item_idx = g_settings_nav - 1;
         pos += snprintf(out + pos, bs - pos, "\x1b[3;%dH\x1b[38;2;121;192;255;1m■ 菜单项详细配置: [%d] %s\x1b[0m",
@@ -638,7 +656,7 @@ void render_search_box(char *out, int bs, int *posp, int host_rows, int host_col
     *posp = pos;
 }
 
-#define PALETTE_MAX_VISIBLE 8
+#define PALETTE_MAX_VISIBLE 9
 #define PALETTE_W 72
 #define PALETTE_EDITOR_W 78
 #define PALETTE_EDITOR_H 10
@@ -670,8 +688,9 @@ static const PaletteStaticItem g_palette_operation_items[] = {
     { "reload",             "热重载",             "重新加载 termux.ini 配置文件",      "",           PALETTE_ACTION_RELOAD,             0, 8, 5 },
     { "open-settings-page", "打开设置页面",       "进入图形化设置页面",               "Enter 打开", PALETTE_ACTION_GRAPHICAL_SETTINGS, 0, 9, 4 },
     { "settings-command-panel", "打开设置命令面板", "切换到设置命令面板",           "Enter 进入", PALETTE_ACTION_OPEN_SETTINGS,     0, 10, 6 },
-    { "close-panel",        "关闭当前 panel",     "关闭当前活动 panel",                "",           PALETTE_ACTION_CLOSE_PANEL,       0, 11, 7 },
-    { "quit",               "退出 termux",       "退出整个 termux 程序并关闭所有会话", "",           PALETTE_ACTION_QUIT,              0, 12, 8 },
+    { "about",              "关于",               "查看版本、作者与系统信息",         "Enter 打开", PALETTE_ACTION_OPEN_ABOUT,         0, 11, 7 },
+    { "close-panel",        "关闭当前 panel",     "关闭当前活动 panel",                "",           PALETTE_ACTION_CLOSE_PANEL,       0, 12, 7 },
+    { "quit",               "退出 termux",       "退出整个 termux 程序并关闭所有会话", "",           PALETTE_ACTION_QUIT,              0, 13, 8 },
 };
 
 static const PaletteStaticItem g_palette_setting_items[] = {
@@ -680,7 +699,6 @@ static const PaletteStaticItem g_palette_setting_items[] = {
     { "open-ini",           "打开设置文件 (.ini)", "使用系统默认编辑器打开 termux.ini", "",           PALETTE_ACTION_OPEN_INI,          0, 3, 6 },
     { "add-panel",          "添加 panel 条目", "选择预设或自定义并继续编辑",       "Enter 进入", PALETTE_ACTION_ADD_PANEL,         0, 4, 2 },
     { "menu-settings",      "菜单项设置",     "在子面板中选择并编辑 panel 条目",       "Enter 进入", PALETTE_ACTION_MENU_SETTINGS,     0, 5, 4 },
-    { "about",              "关于",           "查看版本、作者与系统信息",           "Enter 打开", PALETTE_ACTION_OPEN_ABOUT,       0, 6, 7 },
 };
 
 static const PaletteStaticItem g_palette_startup_items[] = {
@@ -1164,9 +1182,11 @@ void render_command_palette(char *out, int bs, int *posp, int host_rows, int hos
 
     int input_w = pw - 6;
     if (input_w < 8) input_w = 8;
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m\x1b[48;2;22;27;34m > ", top + 1, left);
-    render_scrollable_input(out, bs, &pos, g_mux.palette_query, g_mux.palette_query_len, g_mux.palette_query_pos, input_w, "\x1b[48;2;22;27;34m", NULL);
-    pos += snprintf(out + pos, bs - pos, "\x1b[48;2;22;27;34m \x1b[0m\x1b[48;2;33;38;45m│\x1b[0m");
+    const char *palette_input_bg = g_mux.palette_focus == PALETTE_FOCUS_INPUT
+        ? "\x1b[48;2;38;60;88m" : "\x1b[48;2;22;27;34m";
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m%s > ", top + 1, left, palette_input_bg);
+    render_scrollable_input(out, bs, &pos, g_mux.palette_query, g_mux.palette_query_len, g_mux.palette_query_pos, input_w, palette_input_bg, NULL);
+    pos += snprintf(out + pos, bs - pos, "%s \x1b[0m\x1b[48;2;33;38;45m│\x1b[0m", palette_input_bg);
 
     palette_hline(out, bs, &pos, top + 2, left, pw, "├", "┤");
 
@@ -1180,7 +1200,7 @@ void render_command_palette(char *out, int bs, int *posp, int host_rows, int hos
             int mouse_col = g_mouse_x + 1;
             int hovered = (mouse_row == row && mouse_col >= left && mouse_col < left + pw);
             render_palette_item_row(out, bs, &pos, row, left, pw, g_mux.palette_page,
-                                    filtered[fi], fi + 1, fi == g_mux.palette_sel, hovered, &item);
+                                    filtered[fi], vi + 1, fi == g_mux.palette_sel, hovered, &item);
         } else {
             pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m\x1b[48;2;22;27;34m", row, left);
             cols = 1;
@@ -1195,16 +1215,28 @@ void render_command_palette(char *out, int bs, int *posp, int host_rows, int hos
     }
 
     int footer = top + 3 + visible;
-    const char *footer_hint = " [Enter] 执行/进入 · Esc 返回";
+    const char *focus_label = g_mux.palette_focus == PALETTE_FOCUS_LIST ? "选择" : "输入";
+    const char *digit_label = g_mux.palette_focus == PALETTE_FOCUS_LIST ? "选当前" : "搜索";
+    char footer_hint[192];
     if (g_mux.palette_page == PALETTE_PAGE_MENU_SETTINGS) {
-        footer_hint = g_mux.palette_query_len
-            ? " [Enter] 编辑 · Ctrl+X 删除 · 搜索中：U/D 调整位置不可用"
-            : " [Enter] 编辑 · U/D 调整位置 · X 删除 · Esc 返回";
+        snprintf(footer_hint, sizeof(footer_hint),
+                 g_mux.palette_query_len
+                     ? " [焦点:%s] Tab切换 · 数字:%s · Enter编辑 · Ctrl+X删 · 搜索禁调序"
+                     : " [焦点:%s] Tab切换 · 数字:%s · Enter编辑 · Ctrl+↑/↓调序 · X删",
+                 focus_label, digit_label);
+    } else {
+        snprintf(footer_hint, sizeof(footer_hint),
+                 " [焦点:%s] Tab切换 · 数字:%s · Enter执行/进入 · Esc返回",
+                 focus_label, digit_label);
     }
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m\x1b[38;2;139;148;158m%s\x1b[0m", footer, left, footer_hint);
-    cols = 1 + utf8_cols(footer_hint, (int)strlen(footer_hint));
-    while (cols < pw - 1 && pos < bs - 8) { out[pos++] = ' '; cols++; }
-    pos += snprintf(out + pos, bs - pos, "\x1b[48;2;33;38;45m│\x1b[0m");
+    pos += snprintf(out + pos, bs - pos,
+                    "\x1b[%d;%dH\x1b[48;2;33;38;45m│\x1b[0m\x1b[48;2;33;38;45m\x1b[38;2;139;148;158m",
+                    footer, left);
+    int footer_cols = 0;
+    int footer_inner = pw > 2 ? pw - 2 : 0;
+    if (footer_inner > 0)
+        append_padded_utf8(out, bs, &pos, &footer_cols, footer_hint, footer_inner);
+    pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[48;2;33;38;45m│\x1b[0m");
     palette_hline(out, bs, &pos, top + ph - 1, left, pw, "└", "┘");
     *posp = pos;
 }
@@ -1619,13 +1651,15 @@ void render_screen(void) {
             int scr_off = get_input_screen_offset(buf, len, text_pos, input_w);
             pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h",
                             top + 2 + g_mux.palette_field * 2, left + 2 + scr_off);
-        } else {
+        } else if (g_mux.palette_focus == PALETTE_FOCUS_INPUT) {
             int top, left, pw, ph;
             palette_geom(g_mux.host_rows, g_mux.host_cols, &top, &left, &pw, &ph);
             int input_w = pw - 6;
             if (input_w < 8) input_w = 8;
             int scr_off = get_input_screen_offset(g_mux.palette_query, g_mux.palette_query_len, g_mux.palette_query_pos, input_w);
             pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", top + 1, left + 4 + scr_off);
+        } else {
+            pos += snprintf(out + pos, bs - pos, "\x1b[?25l");
         }
     } else if (g_copy_mode) {
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", g_copy_cy + 2, g_copy_cx + 1);

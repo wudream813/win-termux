@@ -4,9 +4,10 @@
 
 The reorder/delete helpers are compiled from src/input.c with a deliberately
 small harness.  The surrounding assertions then pin the production palette
-wiring: the management subpanel contains existing entries only, reorder is
-blocked while filtering, numbering is based on filtered rank, and text input
-cannot hand Ctrl+B through to the global prefix handler.
+wiring: the management subpanel contains existing entries only, Ctrl+Up/Down
+reorder is blocked while filtering, U/D remain query characters, numbering is
+based on the visible window, and text input cannot hand Ctrl+B through to the
+global prefix handler.
 """
 
 from pathlib import Path
@@ -145,8 +146,10 @@ def main() -> int:
     check('"open-settings-page"' not in setting_items and
           "PALETTE_ACTION_GRAPHICAL_SETTINGS" not in setting_items,
           "设置命令面板仍包含图形化设置入口")
-    check('"about"' in setting_items and "PALETTE_ACTION_OPEN_ABOUT" in setting_items,
-          "设置命令面板没有关于入口")
+    check('"about"' in operation_items and "PALETTE_ACTION_OPEN_ABOUT" in operation_items,
+          "关于没有放入操作命令面板")
+    check('"about"' not in setting_items and "PALETTE_ACTION_OPEN_ABOUT" not in setting_items,
+          "设置命令面板仍包含关于入口")
     check("case PALETTE_ACTION_OPEN_ABOUT" in INPUT and "create_about_pane()" in INPUT,
           "关于入口没有连接到独立 About panel")
     check("return g_chooser_item_count;" in RENDER[RENDER.find("case PALETTE_PAGE_MENU_SETTINGS"):RENDER.find("default:", RENDER.find("case PALETTE_PAGE_MENU_SETTINGS"))],
@@ -154,8 +157,8 @@ def main() -> int:
     check('out->id = "add-panel"' not in menu_info and
           'out->title = "添加 panel 条目"' not in menu_info,
           "菜单项设置子面板仍显示添加 panel 条目")
-    check("filtered[fi], fi + 1" in RENDER,
-          "命令面板序号没有绑定过滤结果排名")
+    check("filtered[fi], vi + 1" in RENDER and "#define PALETTE_MAX_VISIBLE 9" in RENDER,
+          "命令面板序号没有绑定当前可见窗口或可见上限不是 9")
     check("item->number" not in row,
           "命令面板行渲染仍读取静态 item->number")
     check("g_mux.palette_query_len > 0" in HELPERS and

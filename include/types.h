@@ -105,6 +105,16 @@ typedef struct {
 } SearchMatch;
 
 typedef struct {
+    int page;
+    int selection;
+    int scroll;
+    int query_len;
+    int query_pos;
+    int focus;
+    char query[64];
+} PaletteViewState;
+
+typedef struct {
     Pane panes[MAX_PANES];
     int pane_count, active_pane;
     volatile LONG running;
@@ -137,13 +147,14 @@ typedef struct {
     int settings_edit_cmd_pos;
     int palette_mode;
     int palette_page;
-    int palette_stack[PALETTE_STACK_MAX];
+    PaletteViewState palette_stack[PALETTE_STACK_MAX];
     int palette_stack_len;
     int palette_sel;
     char palette_query[64];
     int palette_query_len;
     int palette_query_pos;
     int palette_scroll;
+    int palette_focus;
     int palette_field;
     int palette_edit_idx;
     int palette_edit_new;

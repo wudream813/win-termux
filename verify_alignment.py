@@ -100,8 +100,9 @@ check("┌─ 自定义命令行 ───────────────�
       "自定义命令标题仍保留一列过宽的旧字符串")
 
 # ---- 4) Color swatches: render, hover and hit-test are the same 4 cells ----
-check("g_mouse_x >= left + 1 + (i-1)*4" in RENDER,
-      "颜色选择器 hover 没有把 ANSI 列转换为 0-based 鼠标列")
+check("g_mouse_x >= left + 1 + i * 4" in RENDER and
+      "int mouse_row = row - 1" in RENDER,
+      "颜色选择器 hover 没有把 ANSI 列/行转换为 0-based 鼠标坐标")
 for left in (1, 7, 41, 91):
     for row in (0, 1):
         for k in range(4):
@@ -173,8 +174,10 @@ check("\"open-settings-page\"" in operation_items and "PALETTE_ACTION_GRAPHICAL_
 check("\"open-settings-page\"" not in setting_items and
       "PALETTE_ACTION_GRAPHICAL_SETTINGS" not in setting_items,
       "图形化设置入口仍错误地出现在设置命令面板")
-check("\"about\"" in setting_items and "PALETTE_ACTION_OPEN_ABOUT" in setting_items,
-      "设置命令面板没有关于入口")
+check("\"about\"" in operation_items and "PALETTE_ACTION_OPEN_ABOUT" in operation_items,
+      "操作命令面板没有关于入口")
+check("\"about\"" not in setting_items and "PALETTE_ACTION_OPEN_ABOUT" not in setting_items,
+      "设置命令面板仍包含关于入口")
 check("settings-command-panel" in operation_items and "PALETTE_ACTION_OPEN_SETTINGS" in operation_items,
       "操作命令面板没有打开设置命令面板入口")
 check("operations-command-panel" in setting_items and "PALETTE_ACTION_OPEN_OPERATIONS" in setting_items,
@@ -197,11 +200,16 @@ check("out->color = (g_mux.panes[i].color >= 0 && g_mux.panes[i].color <= 8)" in
       "切换 panel 的默认颜色没有按蓝色处理")
 check("if (color < 0 || color > 8) color = 0;" in RENDER,
       "panel 颜色无效值没有回退到默认蓝色")
-check(RENDER.count('"\\x1b[48;2;33;38;45m ");') >= 2,
-      "颜色选择器末尾间隙仍被上一块颜色错误填充")
-check("top + 1, left);" in RENDER and "top + 2, left);" in RENDER and
-      "\\x1b[0m\\x1b[48;2;33;38;45m ",
-      "颜色选择器首个空白格没有使用面板背景填充")
+check("render_color_picker_cell" in RENDER and "render_color_picker_row" in RENDER,
+      "颜色选择器没有使用逐单元格渲染辅助函数")
+check("int interior_cols = 2 + 4 * 4;" in RENDER and
+      "while (interior_cols < CP_W - 1)" in RENDER,
+      "颜色选择器没有显式封闭右侧面板背景填充")
+check("const char *swatch_bg = TAB_COLOR_BG[color];" in RENDER and
+      "render_color_picker_cell(out, bs, &pos, swatch_bg" in RENDER,
+      "颜色选择器色块背景没有逐单元格绑定到对应颜色")
+check('"\\x1b[0m\\x1b[48;2;33;38;45m "' not in RENDER,
+      "颜色选择器仍使用旧的额外背景空格切换")
 check("palette_push_page(PALETTE_PAGE_MENU_SETTINGS);" in INPUT,
       "菜单项设置没有进入子面板")
 check("out->action = PALETTE_ACTION_EDIT_PANEL;" in RENDER,
@@ -213,11 +221,17 @@ check("return g_chooser_item_count;" in RENDER[RENDER.find("case PALETTE_PAGE_ME
       "菜单项设置仍包含添加 panel 伪条目")
 check('out->id = "add-panel"' not in menu_info and "添加 panel 条目" not in menu_info,
       "菜单项设置仍提供添加 panel 条目")
-check("filtered[fi], fi + 1" in RENDER and "item->number" not in RENDER[RENDER.find("static void render_palette_item_row"):RENDER.find("static void render_palette_editor")],
-      "命令面板序号没有按照当前过滤结果动态编号")
+check("filtered[fi], vi + 1" in RENDER and
+      "#define PALETTE_MAX_VISIBLE 9" in RENDER and
+      "item->number" not in RENDER[RENDER.find("static void render_palette_item_row"):RENDER.find("static void render_palette_editor")],
+      "命令面板序号没有按照当前可见窗口动态编号")
 check("palette_move_menu_item" in INPUT and "g_mux.palette_query_len > 0" in INPUT and
-      "!g_mux.palette_query_len" in INPUT,
-      "菜单项搜索期间没有禁用位置修改")
+      "!g_mux.palette_query_len" in INPUT and
+      "g_mux.palette_focus == PALETTE_FOCUS_LIST && has_ctrl" in INPUT,
+      "菜单项搜索期间没有禁用位置修改或排序未绑定 Ctrl+方向键")
+check("g_settings_nav == 0 && is_ctrl" in INPUT and
+      "U/D 调顺序" not in RENDER and "U/D 调序" not in RENDER,
+      "菜单项设置仍显示或处理旧的 U/D 排序快捷键")
 check("palette_delete_menu_item" in INPUT and "g_chooser_item_count--" in INPUT,
       "菜单项设置缺少删除 panel 条目操作")
 check("static int key_input_modal_active" in INPUT and

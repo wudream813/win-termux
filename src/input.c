@@ -139,6 +139,7 @@ static void palette_reset_query(void) {
     g_mux.palette_query_len = 0;
     g_mux.palette_query_pos = 0;
     g_mux.palette_query[0] = 0;
+    g_mux.palette_focus = PALETTE_FOCUS_INPUT;
 }
 
 static void palette_close(void) {
@@ -150,14 +151,23 @@ static void palette_close(void) {
     g_mux.palette_query_len = 0;
     g_mux.palette_query_pos = 0;
     g_mux.palette_query[0] = 0;
+    g_mux.palette_focus = PALETTE_FOCUS_INPUT;
     g_mux.palette_field = 0;
     g_mux.palette_edit_idx = -1;
     g_mux.palette_edit_new = 0;
 }
 
 static void palette_push_page(int page) {
-    if (g_mux.palette_stack_len < PALETTE_STACK_MAX)
-        g_mux.palette_stack[g_mux.palette_stack_len++] = g_mux.palette_page;
+    if (g_mux.palette_stack_len < PALETTE_STACK_MAX) {
+        PaletteViewState *saved = &g_mux.palette_stack[g_mux.palette_stack_len++];
+        saved->page = g_mux.palette_page;
+        saved->selection = g_mux.palette_sel;
+        saved->scroll = g_mux.palette_scroll;
+        saved->query_len = g_mux.palette_query_len;
+        saved->query_pos = g_mux.palette_query_pos;
+        saved->focus = g_mux.palette_focus;
+        memcpy(saved->query, g_mux.palette_query, sizeof(saved->query));
+    }
     g_mux.palette_page = page;
     palette_reset_query();
     g_mux.needs_redraw = 1;
@@ -176,8 +186,15 @@ static void palette_switch_domain(int page) {
 
 static void palette_pop_page(void) {
     if (g_mux.palette_stack_len > 0) {
-        g_mux.palette_page = g_mux.palette_stack[--g_mux.palette_stack_len];
-        palette_reset_query();
+        PaletteViewState *saved = &g_mux.palette_stack[--g_mux.palette_stack_len];
+        g_mux.palette_page = saved->page;
+        g_mux.palette_sel = saved->selection;
+        g_mux.palette_scroll = saved->scroll;
+        g_mux.palette_query_len = saved->query_len;
+        g_mux.palette_query_pos = saved->query_pos;
+        g_mux.palette_focus = saved->focus;
+        memcpy(g_mux.palette_query, saved->query, sizeof(g_mux.palette_query));
+        g_mux.palette_query[sizeof(g_mux.palette_query) - 1] = 0;
     } else {
         palette_close();
     }
@@ -614,7 +631,14 @@ void handle_palette_key(KEY_EVENT_RECORD *ke) {
     int filtered[64];
     int count = palette_filter_cmds(g_mux.palette_page, filtered, 64, g_mux.palette_query);
     int visible = palette_visible_rows(g_mux.host_rows);
+    int has_ctrl = (ctrl & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0;
 
+    if (vk == VK_TAB) {
+        g_mux.palette_focus = (g_mux.palette_focus == PALETTE_FOCUS_LIST)
+            ? PALETTE_FOCUS_INPUT : PALETTE_FOCUS_LIST;
+        g_mux.needs_redraw = 1;
+        return;
+    }
     if (vk == VK_ESCAPE) {
         palette_pop_page();
         return;
@@ -624,98 +648,123 @@ void handle_palette_key(KEY_EVENT_RECORD *ke) {
             execute_palette_command(filtered[g_mux.palette_sel]);
         return;
     }
-    if (vk == VK_UP || (vk == 'P' && (ctrl & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)))) {
+    if (g_mux.palette_page == PALETTE_PAGE_MENU_SETTINGS &&
+        g_mux.palette_focus == PALETTE_FOCUS_LIST && has_ctrl &&
+        (vk == VK_UP || vk == VK_DOWN)) {
+        g_mux.palette_focus = PALETTE_FOCUS_LIST;
+        palette_move_menu_item(filtered, count, g_mux.palette_sel, vk == VK_UP ? -1 : 1);
+        return;
+    }
+    if (g_mux.palette_focus == PALETTE_FOCUS_LIST &&
+        (vk == VK_UP || (vk == 'P' && has_ctrl))) {
+        g_mux.palette_focus = PALETTE_FOCUS_LIST;
         if (g_mux.palette_sel > 0) g_mux.palette_sel--;
         g_mux.needs_redraw = 1;
         return;
     }
-    if (vk == VK_DOWN || (vk == 'N' && (ctrl & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)))) {
+    if (g_mux.palette_focus == PALETTE_FOCUS_LIST &&
+        (vk == VK_DOWN || (vk == 'N' && has_ctrl))) {
+        g_mux.palette_focus = PALETTE_FOCUS_LIST;
         if (g_mux.palette_sel < count - 1) g_mux.palette_sel++;
         g_mux.needs_redraw = 1;
         return;
     }
-    if (vk == VK_PRIOR) {
+    if (vk == VK_PRIOR && g_mux.palette_focus == PALETTE_FOCUS_LIST) {
+        g_mux.palette_focus = PALETTE_FOCUS_LIST;
         g_mux.palette_sel -= visible;
         if (g_mux.palette_sel < 0) g_mux.palette_sel = 0;
         g_mux.needs_redraw = 1;
         return;
     }
-    if (vk == VK_NEXT) {
+    if (vk == VK_NEXT && g_mux.palette_focus == PALETTE_FOCUS_LIST) {
+        g_mux.palette_focus = PALETTE_FOCUS_LIST;
         g_mux.palette_sel += visible;
         if (g_mux.palette_sel >= count) g_mux.palette_sel = count > 0 ? count - 1 : 0;
         g_mux.needs_redraw = 1;
         return;
     }
-    if (vk == VK_LEFT && !g_mux.palette_query_len && g_mux.palette_page != PALETTE_PAGE_ROOT) {
+    if (vk == VK_LEFT && g_mux.palette_focus == PALETTE_FOCUS_LIST &&
+        !g_mux.palette_query_len && g_mux.palette_page != PALETTE_PAGE_ROOT) {
         palette_pop_page();
         return;
     }
-    if (vk == VK_RIGHT && count > 0 && g_mux.palette_sel >= 0 && g_mux.palette_sel < count) {
+    if (vk == VK_RIGHT && g_mux.palette_focus == PALETTE_FOCUS_LIST &&
+        count > 0 && g_mux.palette_sel >= 0 && g_mux.palette_sel < count) {
         execute_palette_command(filtered[g_mux.palette_sel]);
         return;
     }
-    if (g_mux.palette_page == PALETTE_PAGE_MENU_SETTINGS) {
-        int has_ctrl = (ctrl & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0;
-        int is_up = (uc == 'u' || uc == 'U' || vk == 'U');
-        int is_down = (uc == 'd' || uc == 'D' || vk == 'D');
+    if (g_mux.palette_page == PALETTE_PAGE_MENU_SETTINGS &&
+        g_mux.palette_focus == PALETTE_FOCUS_LIST) {
         int is_delete = (uc == 'x' || uc == 'X' || vk == 'X');
-        if (!has_ctrl && !g_mux.palette_query_len && (is_up || is_down)) {
-            /* A filtered list is a view, not a reorderable source.  Keep
-             * U/D as ordinary search characters once a query is present. */
-            palette_move_menu_item(filtered, count, g_mux.palette_sel, is_up ? -1 : 1);
-            return;
-        }
         if (is_delete && (has_ctrl || !g_mux.palette_query_len)) {
             /* Plain X is the compact no-query command; Ctrl+X keeps delete
-             * reachable while preserving X as a search character. */
+             * reachable while preserving X as a search character.  U/D are
+             * never consumed here, so they remain searchable characters. */
+            g_mux.palette_focus = PALETTE_FOCUS_LIST;
             palette_delete_menu_item(filtered, count, g_mux.palette_sel);
             return;
         }
     }
-    if (vk == VK_BACK) {
+    if (vk == VK_BACK && g_mux.palette_focus == PALETTE_FOCUS_INPUT) {
         buf_backspace(g_mux.palette_query, &g_mux.palette_query_len, &g_mux.palette_query_pos);
         g_mux.palette_sel = 0;
         g_mux.palette_scroll = 0;
         g_mux.needs_redraw = 1;
         return;
     }
-    if (vk == VK_DELETE) {
+    if (vk == VK_DELETE && g_mux.palette_focus == PALETTE_FOCUS_INPUT) {
         buf_delete(g_mux.palette_query, &g_mux.palette_query_len, &g_mux.palette_query_pos);
         g_mux.palette_sel = 0;
         g_mux.palette_scroll = 0;
         g_mux.needs_redraw = 1;
         return;
     }
-    if (vk == VK_HOME) {
+    if (vk == VK_HOME && g_mux.palette_focus == PALETTE_FOCUS_INPUT) {
         g_mux.palette_query_pos = 0;
         g_mux.needs_redraw = 1;
         return;
     }
-    if (vk == VK_END) {
+    if (vk == VK_END && g_mux.palette_focus == PALETTE_FOCUS_INPUT) {
         g_mux.palette_query_pos = g_mux.palette_query_len;
         g_mux.needs_redraw = 1;
         return;
     }
-    if (vk == VK_LEFT) {
+    if (vk == VK_LEFT && g_mux.palette_focus == PALETTE_FOCUS_INPUT) {
         g_mux.palette_query_pos = utf8_prev_grapheme(g_mux.palette_query, g_mux.palette_query_pos);
         g_mux.needs_redraw = 1;
         return;
     }
-    if (vk == VK_RIGHT) {
+    if (vk == VK_RIGHT && g_mux.palette_focus == PALETTE_FOCUS_INPUT) {
         g_mux.palette_query_pos = utf8_next_grapheme(g_mux.palette_query, g_mux.palette_query_len, g_mux.palette_query_pos);
         g_mux.needs_redraw = 1;
         return;
     }
-    if (!g_mux.palette_query_len &&
-        ((uc >= '1' && uc <= '9') || (vk >= '1' && vk <= '9') || (vk >= VK_NUMPAD1 && vk <= VK_NUMPAD9))) {
+    if (g_mux.palette_focus == PALETTE_FOCUS_LIST &&
+        ((uc >= '1' && uc <= '9') || (vk >= '1' && vk <= '9') ||
+         (vk >= VK_NUMPAD1 && vk <= VK_NUMPAD9))) {
         int number = (uc >= '1' && uc <= '9') ? uc - '0' :
                      ((vk >= '1' && vk <= '9') ? vk - '0' : vk - VK_NUMPAD1 + 1);
-        if (number >= 1 && number <= count) {
-            g_mux.palette_sel = number - 1;
-            execute_palette_command(filtered[g_mux.palette_sel]);
+        int row = g_mux.palette_scroll + number - 1;
+        int visible_count = count - g_mux.palette_scroll;
+        if (visible_count > visible) visible_count = visible;
+        if (number >= 1 && number <= visible_count && row >= 0 && row < count) {
+            g_mux.palette_sel = row;
+            execute_palette_command(filtered[row]);
             return;
         }
+        return;
     }
+
+    if (g_mux.palette_focus != PALETTE_FOCUS_INPUT)
+        return;
+
+    /* Some Windows layouts report numpad digits through the virtual-key code
+     * without a Unicode character.  In the input field they must still be
+     * ordinary searchable digits; result focus handled them above. */
+    if (!uc && !has_ctrl && vk >= '1' && vk <= '9')
+        uc = (WCHAR)vk;
+    if (!uc && !has_ctrl && vk >= VK_NUMPAD1 && vk <= VK_NUMPAD9)
+        uc = (WCHAR)('1' + (vk - VK_NUMPAD1));
 
     if (uc) {
         char u8[8];
@@ -784,6 +833,7 @@ void handle_palette_mouse(MOUSE_EVENT_RECORD *me) {
         int filtered[64];
         int count = palette_filter_cmds(g_mux.palette_page, filtered, 64, g_mux.palette_query);
         int step = palette_visible_rows(g_mux.host_rows) > 1 ? 2 : 1;
+        g_mux.palette_focus = PALETTE_FOCUS_LIST;
         if (direction > 0) {
             g_mux.palette_sel -= step;
             if (g_mux.palette_sel < 0) g_mux.palette_sel = 0;
@@ -802,7 +852,14 @@ void handle_palette_mouse(MOUSE_EVENT_RECORD *me) {
     int row_end = row_start + visible;
     int in_box = (r >= top && r < top + ph && c >= left && c < left + pw);
 
+    if (r == top + 1 && c > left && c < left + pw - 1) {
+        g_mux.palette_focus = PALETTE_FOCUS_INPUT;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+
     if (r >= row_start && r < row_end && c >= left && c < left + pw) {
+        g_mux.palette_focus = PALETTE_FOCUS_LIST;
         int filtered[64];
         int count = palette_filter_cmds(g_mux.palette_page, filtered, 64, g_mux.palette_query);
         int fi = g_mux.palette_scroll + r - row_start;
@@ -1163,6 +1220,21 @@ void handle_settings_key(KEY_EVENT_RECORD *ke) {
         return;
     }
 
+    if (g_settings_nav == 0 && is_ctrl &&
+        (vk == VK_UP || vk == VK_DOWN)) {
+        int i = g_settings_table_sel;
+        int target = i + (vk == VK_UP ? -1 : 1);
+        if (i >= 0 && target >= 0 && target < g_chooser_item_count) {
+            ChooserItem tmp = g_chooser_items[i];
+            g_chooser_items[i] = g_chooser_items[target];
+            g_chooser_items[target] = tmp;
+            g_settings_table_sel = target;
+            save_config();
+        }
+        g_mux.needs_redraw = 1;
+        return;
+    }
+
     if ((is_ctrl || is_alt) && vk == VK_UP) {
         if (g_settings_nav > 0) {
             g_settings_nav--;
@@ -1212,32 +1284,6 @@ void handle_settings_key(KEY_EVENT_RECORD *ke) {
         if (vk == VK_DOWN) {
             if (g_settings_table_sel < g_chooser_item_count - 1) g_settings_table_sel++;
             g_mux.needs_redraw = 1;
-            return;
-        }
-
-        if (uc == 'u' || uc == 'U' || (is_shift && vk == VK_UP)) {
-            int i = g_settings_table_sel;
-            if (i > 0 && i < g_chooser_item_count) {
-                ChooserItem tmp = g_chooser_items[i];
-                g_chooser_items[i] = g_chooser_items[i - 1];
-                g_chooser_items[i - 1] = tmp;
-                g_settings_table_sel = i - 1;
-                save_config();
-                g_mux.needs_redraw = 1;
-            }
-            return;
-        }
-
-        if (uc == 'd' || uc == 'D' || (is_shift && vk == VK_DOWN)) {
-            int i = g_settings_table_sel;
-            if (i >= 0 && i < g_chooser_item_count - 1) {
-                ChooserItem tmp = g_chooser_items[i];
-                g_chooser_items[i] = g_chooser_items[i + 1];
-                g_chooser_items[i + 1] = tmp;
-                g_settings_table_sel = i + 1;
-                save_config();
-                g_mux.needs_redraw = 1;
-            }
             return;
         }
 
@@ -1775,7 +1821,7 @@ void handle_prefix(WORD vk, DWORD ctrl, WCHAR uc) {
 }
 
 static int key_input_modal_active(void) {
-    if (g_mux.rename_mode || g_mux.custom_cmd_mode) return 1;
+    if (g_mux.palette_mode || g_mux.rename_mode || g_mux.custom_cmd_mode) return 1;
     if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count &&
         g_mux.panes[g_mux.active_pane].active && g_mux.panes[g_mux.active_pane].is_settings &&
         (g_settings_nav >= 1 || g_settings_show_presets))

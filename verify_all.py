@@ -18,6 +18,7 @@ CHECKS = (
     "verify_input_layout.py",
     "verify_cursor_render.py",
     "verify_menu_settings.py",
+    "verify_palette_interaction.py",
     "verify_alignment.py",
 )
 

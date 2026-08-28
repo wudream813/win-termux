@@ -31,6 +31,11 @@ enum {
     PALETTE_PAGE_PANEL_EDITOR
 };
 
+enum {
+    PALETTE_FOCUS_INPUT = 0,
+    PALETTE_FOCUS_LIST = 1
+};
+
 typedef enum {
     PALETTE_ACTION_NONE = 0,
     PALETTE_ACTION_OPEN_OPERATIONS,
