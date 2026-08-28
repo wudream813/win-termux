@@ -129,6 +129,8 @@ int settings_keys_visible(int host_rows);
 int settings_keys_row_at(int host_rows, int entry);
 int settings_keys_entry_at(int host_rows, int row);
 void render_search_box(char *out, int bs, int *posp, int host_rows, int host_cols);
+/* 搜索输入框（右上角紧凑框）的几何，渲染与光标共用。 */
+void search_box_layout(int host_cols, int *row, int *left, int *input_col, int *input_w);
 void render_confirm_exit(char *out, int bs, int *posp, int host_rows, int host_cols);
 /* 顶栏右侧状态徽章（复制模式 / 搜索）。折叠时只有徽章本体与按钮，鼠标悬停
  * 才向左展开提示文字，所以按钮列不会随提示出现而漂移。 */

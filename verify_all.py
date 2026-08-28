@@ -25,6 +25,7 @@ CHECKS = (
     "verify_config_theme.py",
     "verify_settings_ui.py",
     "verify_item_color.py",
+    "verify_search_box.py",
 )
 
 

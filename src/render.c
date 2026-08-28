@@ -1105,26 +1105,28 @@ void render_status_badge(char *out, int bs, int *posp, int host_cols) {
     *posp = pos;
 }
 
-#define SEARCH_PREFIX_COLS 9
-#define SEARCH_SUFFIX_COLS 24
+/* v1.8.10: 搜索输入框不再占用整条底行 —— 那等于凭空吃掉一行终端内容。
+ * 现在它和搜索状态徽章一样，是贴右上角的一个紧凑小框，宽度固定、右对齐，
+ * 渲染与光标定位共用 search_box_layout()。 */
+#define SEARCH_BOX_PREFIX_COLS 6    /* " 搜索 " */
+#define SEARCH_BOX_INPUT_COLS  24
+#define SEARCH_BOX_SUFFIX_COLS 12   /* " Enter/Esc " + 右侧留白 */
+#define SEARCH_BOX_COLS (SEARCH_BOX_PREFIX_COLS + SEARCH_BOX_INPUT_COLS + SEARCH_BOX_SUFFIX_COLS)
 
-static int search_input_width(int host_cols) {
-    int width = host_cols - SEARCH_PREFIX_COLS - SEARCH_SUFFIX_COLS;
-    if (width < 1) width = 1;
-    return width;
-}
-
-static int ui_bottom_row(int host_rows) {
-    /* host_rows is the ConPTY content height; the search/status line belongs
-     * to the real window bottom, not to host_rows - 1.  Re-query the window
-     * here so a resize event cannot leave the prompt one row too high. */
-    int row = g_mux.total_host_rows;
-    CONSOLE_SCREEN_BUFFER_INFO csbi;
-    if (g_mux.hOut && GetConsoleScreenBufferInfo(g_mux.hOut, &csbi)) {
-        row = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+void search_box_layout(int host_cols, int *row, int *left, int *input_col, int *input_w) {
+    int w = SEARCH_BOX_COLS;
+    if (w > host_cols) w = host_cols;
+    int l = host_cols - w + 1;
+    if (l < 1) l = 1;
+    int iw = SEARCH_BOX_INPUT_COLS;
+    if (w < SEARCH_BOX_COLS) {
+        iw = w - SEARCH_BOX_PREFIX_COLS - SEARCH_BOX_SUFFIX_COLS;
+        if (iw < 1) iw = 1;
     }
-    if (row < host_rows + 1) row = host_rows + 1;
-    return row;
+    if (row) *row = BADGE_ROW;
+    if (left) *left = l;
+    if (input_col) *input_col = l + SEARCH_BOX_PREFIX_COLS;
+    if (input_w) *input_w = iw;
 }
 
 #define CONFIRM_W 34
@@ -1231,17 +1233,17 @@ void render_confirm_exit(char *out, int bs, int *posp, int host_rows, int host_c
 
 void render_search_box(char *out, int bs, int *posp, int host_rows, int host_cols) {
     int pos = *posp;
-    int r = ui_bottom_row(host_rows);
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[048;2;033;038;045m\x1b[038;2;121;192;255;1m [搜索] \x1b[0m\x1b[048;2;022;027;034m\x1b[038;2;255;255;255m ", r);
-    int box_w = search_input_width(host_cols);
-    render_scrollable_input(out, bs, &pos, g_search_buf, g_search_len, g_search_pos, box_w, "\x1b[048;2;022;027;034m", NULL);
-    pos += snprintf(out + pos, bs - pos, "\x1b[048;2;022;027;034m \x1b[0m\x1b[048;2;033;038;045m\x1b[038;2;139;148;158m [Enter 查找, Esc 退出] \x1b[0m");
-    int used_cols = SEARCH_PREFIX_COLS + box_w + SEARCH_SUFFIX_COLS;
-    while (used_cols < host_cols - 1 && pos < bs - 8) {
-        out[pos++] = ' ';
-        used_cols++;
-    }
-    pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[K");
+    int row, left, input_col, box_w;
+    (void)host_rows;
+    search_box_layout(host_cols, &row, &left, &input_col, &box_w);
+
+    pos += snprintf(out + pos, bs - pos,
+                    "\x1b[%d;%dH\x1b[048;2;033;038;045m\x1b[038;2;121;192;255;1m 搜索 \x1b[0m", row, left);
+    pos += snprintf(out + pos, bs - pos, "\x1b[048;2;022;027;034m\x1b[038;2;255;255;255m");
+    render_scrollable_input(out, bs, &pos, g_search_buf, g_search_len, g_search_pos, box_w,
+                            "\x1b[048;2;022;027;034m", NULL);
+    pos += snprintf(out + pos, bs - pos,
+                    "\x1b[0m\x1b[048;2;033;038;045m\x1b[038;2;139;148;158m Enter/Esc  \x1b[0m");
     *posp = pos;
 }
 
@@ -2330,9 +2332,10 @@ void render_screen(void) {
     }
 
     if (g_search_mode) {
-        int box_w = search_input_width(g_mux.host_cols);
+        int row, left, input_col, box_w;
+        search_box_layout(g_mux.host_cols, &row, &left, &input_col, &box_w);
         int scr_off = get_input_screen_offset(g_search_buf, g_search_len, g_search_pos, box_w);
-        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", ui_bottom_row(g_mux.host_rows), SEARCH_PREFIX_COLS + scr_off);
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h", row, input_col + scr_off);
     } else if (g_mux.palette_mode) {
         if (g_mux.palette_page == PALETTE_PAGE_PANEL_EDITOR) {
             int top, left, input_w;

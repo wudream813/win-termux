@@ -154,16 +154,22 @@ check("top + 2 + g_mux.palette_field * 2" in RENDER,
       "命令面板编辑器光标没有落在输入行")
 check("int input_row = top + 2 + field * 2" in INPUT,
       "命令面板编辑器输入框点击行与渲染不一致")
-check("#define SEARCH_PREFIX_COLS 9" in RENDER and "#define SEARCH_SUFFIX_COLS 24" in RENDER,
-      "搜索框没有使用真实的前缀/后缀列宽")
-check("int box_w = search_input_width(host_cols);" in RENDER,
-      "搜索框和光标没有共享同一个输入宽度公式")
-check("int box_w = search_input_width(g_mux.host_cols);" in RENDER,
-      "搜索框光标未使用共享输入宽度公式")
-check("ui_bottom_row(g_mux.host_rows), SEARCH_PREFIX_COLS + scr_off" in RENDER,
-      "搜索框光标起点没有与输入框前缀列宽对齐")
-check("return row;" in RENDER and "row = csbi.srWindow.Bottom - csbi.srWindow.Top + 1" in RENDER,
-      "搜索底栏没有读取实际控制台窗口最低行")
+# v1.8.10: 搜索输入框不再占用整条底行，改成贴右上角的紧凑小框。
+check("ui_bottom_row" not in RENDER,
+      "搜索输入框又回到了会吃掉一行终端内容的底栏")
+check("#define SEARCH_BOX_COLS (SEARCH_BOX_PREFIX_COLS + SEARCH_BOX_INPUT_COLS + SEARCH_BOX_SUFFIX_COLS)" in RENDER,
+      "搜索小框没有把前缀/输入/后缀宽度合成同一个常量")
+_search_box = RENDER[RENDER.index("void render_search_box("):]
+_search_box = _search_box[:_search_box.index("\n}\n")]
+check("search_box_layout(host_cols, &row, &left, &input_col, &box_w);" in _search_box,
+      "搜索小框没有使用共享几何 search_box_layout()")
+check("*row = BADGE_ROW;" in RENDER,
+      "搜索小框没有和状态徽章同处右上角那一行")
+check("\\x1b[K" not in _search_box and "while (used_cols" not in _search_box,
+      "搜索小框仍然在把整行铺满（那就等于又占掉一整行）")
+check("search_box_layout(g_mux.host_cols, &row, &left, &input_col, &box_w);" in RENDER and
+      "\"\\x1b[%d;%dH\\x1b[?25h\", row, input_col + scr_off" in RENDER,
+      "搜索光标没有落在小框的输入列上")
 
 # ---- 8) Requested interaction/text guards ----
 check("g_mux.palette_page = settings_active ? PALETTE_PAGE_SETTINGS : PALETTE_PAGE_OPERATIONS;" in INPUT,
