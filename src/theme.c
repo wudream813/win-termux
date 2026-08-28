@@ -249,6 +249,21 @@ const char *theme_name_at(int idx) {
     return g_builtin_themes[idx].name;
 }
 
+int theme_role_is_overridden(int role) {
+    if (role < 0 || role >= TH_ROLE_COUNT) return 0;
+    return g_override_set[role] ? 1 : 0;
+}
+
+void theme_clear_overrides(void) {
+    memset(g_override_set, 0, sizeof(g_override_set));
+    memset(g_override_val, 0, sizeof(g_override_val));
+}
+
+void theme_clear_role_override(int role) {
+    if (role < 0 || role >= TH_ROLE_COUNT) return;
+    g_override_set[role] = 0;
+}
+
 int theme_has_overrides(void) {
     for (int i = 0; i < TH_ROLE_COUNT; i++) if (g_override_set[i]) return 1;
     return 0;

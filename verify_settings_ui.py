@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+"""图形化设置页三个新分类（外观 / 键位 / 行为）的结构验证。
+
+这几页的渲染与鼠标命中共用同一批常量和几何函数，所以最有价值的检查不是在
+Python 里把公式再抄一遍（那正是容易和 C 实现漂移的做法），而是卡住
+「两边必须用同一个符号」这条约束：
+
+1. input.c 的命中测试不得出现写死的行号 / 列号，必须引用 render.h 的常量
+   或 settings_*() 几何函数；
+2. 每个可交互元素都要同时存在于渲染与命中两侧；
+3. 各页的行号布局不能互相压行（例如再加一套内置主题就会顶到语义色标题）。
+"""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+RENDER = (ROOT / "src/render.c").read_text(encoding="utf-8")
+INPUT = (ROOT / "src/input.c").read_text(encoding="utf-8")
+RENDER_H = (ROOT / "include/render.h").read_text(encoding="utf-8")
+CONFIG_H = (ROOT / "include/config.h").read_text(encoding="utf-8")
+THEME_C = (ROOT / "src/theme.c").read_text(encoding="utf-8")
+KEYMAP_C = (ROOT / "src/keymap.c").read_text(encoding="utf-8")
+
+errors: list[str] = []
+
+
+def check(cond: bool, msg: str) -> None:
+    if cond:
+        print(f"  [ok] {msg}")
+    else:
+        errors.append(msg)
+        print(f"  [FAIL] {msg}")
+
+
+def const(name: str) -> int:
+    m = re.search(rf"#define\s+{name}\s+(\d+)", RENDER_H)
+    if not m:
+        errors.append(f"render.h 缺少常量 {name}")
+        return -1
+    return int(m.group(1))
+
+
+def func_body(src: str, signature: str) -> str:
+    start = src.index(signature)
+    depth = 0
+    i = src.index("{", start)
+    for j in range(i, len(src)):
+        if src[j] == "{":
+            depth += 1
+        elif src[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[start:j + 1]
+    raise AssertionError(f"未找到 {signature} 的函数体")
+
+
+print("== 1) 布局常量互不压行 ==")
+theme_row0 = const("SETTINGS_THEME_ROW0")
+role_row0 = const("SETTINGS_ROLE_ROW0")
+role_rows = const("SETTINGS_ROLE_ROWS")
+keys_row0 = const("SETTINGS_KEYS_ROW0")
+behavior_row0 = const("SETTINGS_BEHAVIOR_ROW0")
+edit_col = const("SETTINGS_KEYS_EDIT_COL")
+reset_col = const("SETTINGS_KEYS_RESET_COL")
+minus_col = const("SETTINGS_SB_MINUS_COL")
+plus_col = const("SETTINGS_SB_PLUS_COL")
+
+theme_count = len(re.findall(r'\{"[\w-]+", \{', THEME_C.split("const ThemeDef g_builtin_themes[] = {", 1)[1]
+                             .split("\n};", 1)[0]))
+role_count = len(re.findall(r'"[a-z_]+"', re.search(
+    r"static const char \*const g_role_names\[TH_ROLE_COUNT\] = \{(.*?)\};", THEME_C, re.S).group(1)))
+action_count = len(re.findall(r"\{ACT_\w+,\s*\"[a-z-]+\"", KEYMAP_C))
+
+check(theme_row0 + theme_count - 1 < role_row0 - 2,
+      f"{theme_count} 个内置主题（行 {theme_row0}..{theme_row0 + theme_count - 1}）没有顶到语义色标题（行 {role_row0 - 2}）")
+check(role_count == role_rows * 2,
+      f"{role_count} 个语义角色正好排成 2 列 × {role_rows} 行")
+check(keys_row0 > 5, "键位表格从表头下一行开始")
+check(behavior_row0 > 4, "行为页开关行不覆盖标题与说明")
+check(edit_col < reset_col and reset_col + 6 < 80, "[改] / [复位] 按钮列不重叠且不越出常见窗口宽度")
+check(minus_col + 4 <= plus_col, "scrollback 的 [-] / 数值 / [+] 不重叠")
+
+print("\n== 2) 命中测试不得写死几何 ==")
+mouse_body = func_body(INPUT, "void handle_settings_mouse(MOUSE_EVENT_RECORD *me)")
+new_pages = mouse_body.split("if (g_settings_nav == SETTINGS_NAV_APPEARANCE)", 1)[1] \
+                      .split("if (g_settings_nav == 0)", 1)[0]
+for sym in ("settings_theme_row(", "settings_role_row(", "settings_role_col(",
+            "settings_keys_entry_at(", "SETTINGS_KEYS_EDIT_COL", "SETTINGS_KEYS_RESET_COL",
+            "SETTINGS_BEHAVIOR_ROW0", "SETTINGS_SB_MINUS_COL", "SETTINGS_SB_PLUS_COL"):
+    check(sym in new_pages, f"命中测试通过 {sym} 复用渲染侧几何")
+literal_rows = re.findall(r"r == (\d+)", new_pages)
+check(not literal_rows, f"命中测试没有写死行号（发现 {literal_rows}）")
+check("settings_sidebar_extra_rows(" in mouse_body and "settings_sidebar_extra_rows(" in RENDER,
+      "侧栏三个新入口的行号由 settings_sidebar_extra_rows() 单点提供")
+
+print("\n== 3) 渲染与交互一一对应 ==")
+appearance = func_body(RENDER, "static void render_settings_appearance(")
+keys = func_body(RENDER, "static void render_settings_keys(")
+behavior = func_body(RENDER, "static void render_settings_behavior(")
+
+check("theme_name_at(i)" in appearance and "theme_index()" in appearance,
+      "外观页列出全部内置主题并标出当前主题")
+check("theme_role_name(role)" in appearance and "theme_role_is_overridden(role)" in appearance,
+      "外观页列出 16 个语义角色并标记已自定义项")
+check("g_hex_edit_active" in appearance and "g_hex_edit_active" in INPUT,
+      "语义色十六进制编辑在渲染与输入两侧都实现")
+check("keymap_describe(action" in keys and "keymap_action_is_overridden(action)" in keys,
+      "键位页显示实时键位与自定义标记")
+check("keymap_prefix_text()" in keys, "键位页第一行是可改的前缀键")
+check("g_key_capture_active" in keys and "handle_key_capture" in INPUT,
+      "键位录制在渲染与输入两侧都实现")
+check(all(k in behavior for k in ("mouse", "copy_on_select", "confirm_on_exit", "scrollback")),
+      "行为页覆盖四个 [general] 开关")
+
+key_handlers = ("handle_settings_appearance_key", "handle_settings_keys_key", "handle_settings_behavior_key")
+for h in key_handlers:
+    check(h in INPUT, f"存在键盘处理函数 {h}")
+check(INPUT.count("settings_leave_subpage()") >= 3, "三个分类页都能用 Esc 返回")
+check("save_config();" in func_body(INPUT, "static void settings_behavior_toggle(int idx)"),
+      "行为开关改动会落盘")
+check("save_config();" in func_body(INPUT, "static void handle_key_capture(WORD vk, DWORD ctrl, WCHAR uc)"),
+      "键位录制结果会落盘")
+
+print("\n== 4) 导航模型 ==")
+for nav in ("SETTINGS_NAV_APPEARANCE", "SETTINGS_NAV_KEYS", "SETTINGS_NAV_BEHAVIOR"):
+    check(nav in CONFIG_H and nav in RENDER and nav in INPUT,
+          f"{nav} 在配置 / 渲染 / 输入三侧一致定义")
+check("settings_nav_at(" in INPUT and "settings_nav_index_of(" in INPUT,
+      "Ctrl+↑/↓ 通过统一的侧栏顺序遍历，包含新分类页")
+check("keymap_action_at(" in keys and "settings_keys_rows()" in keys and
+      "keymap_action_count()" in RENDER,
+      f"键位表格按动作表（当前 {action_count} 项）动态生成，不写死条目")
+
+if errors:
+    print(f"\n设置页 UI 验证失败：{len(errors)} 项", file=sys.stderr)
+    raise SystemExit(1)
+print("\n设置页 UI 验证通过。")

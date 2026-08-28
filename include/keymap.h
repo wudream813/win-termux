@@ -76,6 +76,18 @@ int keymap_lookup(WORD vk, DWORD ctrl, WCHAR uc, int *arg);
 /* 生成可读键位文本，例如 "Ctrl+B c"。out 至少 32 字节。 */
 void keymap_describe(int action, char *out, int out_size);
 
+/* 动作表遍历（图形化设置页的键位表格用） */
+int keymap_action_count(void);
+int keymap_action_at(int idx);
+int keymap_action_is_overridden(int action);
+
+/* 解除某个动作的用户绑定，恢复默认键位。 */
+int keymap_unbind(const char *action_name);
+
+/* 把一次真实按键事件转成可写入 [keys] 的文本（"C-b" / "F2" / "t"）。
+ * 纯修饰键等无法绑定的按键返回 0。 */
+int keymap_key_text_from_event(WORD vk, DWORD ctrl, WCHAR uc, char *out, int out_size);
+
 /* 用户是否覆盖过键位（保存配置时需要原样写回 [keys] 段）。 */
 int keymap_has_user_bindings(void);
 int keymap_user_binding_count(void);

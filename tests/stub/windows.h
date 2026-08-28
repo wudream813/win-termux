@@ -42,7 +42,10 @@ typedef long LONG;
 #define VK_CONTROL 0x11
 #define VK_MENU    0x12
 #define VK_ESCAPE  0x1B
+#define VK_CAPITAL 0x14
 #define VK_SPACE   0x20
+#define VK_NUMLOCK 0x90
+#define VK_SCROLL  0x91
 #define VK_PRIOR   0x21
 #define VK_NEXT    0x22
 #define VK_END     0x23

@@ -1,4 +1,5 @@
 #include "input.h"
+#include <ctype.h>
 
 void do_scroll(int d) {
     if (g_mux.active_pane < 0 || g_mux.active_pane >= g_mux.pane_count) return;
@@ -1130,11 +1131,224 @@ void handle_copy_mode_key(KEY_EVENT_RECORD *ke) {
     }
 }
 
+/* ---------------------------------------------------------------------------
+ * 设置页新增分类的键盘处理：外观 / 键位 / 行为
+ * ------------------------------------------------------------------------- */
+
+static void settings_leave_subpage(void) {
+    g_key_capture_active = 0;
+    g_hex_edit_active = 0;
+    g_hex_edit_role = -1;
+    g_settings_nav = SETTINGS_NAV_STARTUP;
+    g_mux.needs_redraw = 1;
+}
+
+static void settings_hex_edit_begin(int role) {
+    int r, g, b;
+    theme_role_rgb(role, &r, &g, &b);
+    snprintf(g_hex_edit_buf, sizeof(g_hex_edit_buf), "%02x%02x%02x", r, g, b);
+    g_hex_edit_len = (int)strlen(g_hex_edit_buf);
+    g_hex_edit_role = role;
+    g_hex_edit_active = 1;
+}
+
+static int is_hex_char(WCHAR uc) {
+    return (uc >= '0' && uc <= '9') || (uc >= 'a' && uc <= 'f') || (uc >= 'A' && uc <= 'F');
+}
+
+/* 十六进制输入框（外观页的语义色编辑） */
+static void handle_hex_edit_key(WORD vk, WCHAR uc) {
+    if (vk == VK_ESCAPE) {
+        g_hex_edit_active = 0;
+        g_hex_edit_role = -1;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_BACK) {
+        if (g_hex_edit_len > 0) g_hex_edit_buf[--g_hex_edit_len] = 0;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_RETURN) {
+        if (g_hex_edit_len == 6 && g_hex_edit_role >= 0)
+            theme_set_role_hex(theme_role_name(g_hex_edit_role), g_hex_edit_buf);
+        theme_apply();
+        save_config();
+        g_hex_edit_active = 0;
+        g_hex_edit_role = -1;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (is_hex_char(uc) && g_hex_edit_len < 6) {
+        g_hex_edit_buf[g_hex_edit_len++] = (char)tolower((unsigned char)uc);
+        g_hex_edit_buf[g_hex_edit_len] = 0;
+        g_mux.needs_redraw = 1;
+    }
+}
+
+/* 键位录制：下一次真实按键即为新键位 */
+static void handle_key_capture(WORD vk, DWORD ctrl, WCHAR uc) {
+    if (vk == VK_ESCAPE) {
+        g_key_capture_active = 0;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    char text[24];
+    if (!keymap_key_text_from_event(vk, ctrl, uc, text, sizeof(text))) return;
+
+    if (g_settings_keys_sel == 0) {
+        keymap_set_prefix(text);
+    } else {
+        int action = keymap_action_at(g_settings_keys_sel - 1);
+        const char *name = keymap_action_name(action);
+        keymap_unbind(name);          /* 覆盖式重绑，避免同一动作堆多个键位 */
+        keymap_bind(name, text);
+    }
+    save_config();
+    g_key_capture_active = 0;
+    g_mux.needs_redraw = 1;
+}
+
+static void settings_appearance_activate(void) {
+    int tc = theme_count();
+    if (g_settings_theme_sel < tc) {
+        theme_set_by_name(theme_name_at(g_settings_theme_sel));
+        theme_apply();
+        save_config();
+    } else {
+        settings_hex_edit_begin(g_settings_theme_sel - tc);
+    }
+    g_mux.needs_redraw = 1;
+}
+
+static void handle_settings_appearance_key(WORD vk, WCHAR uc, BOOL is_ctrl) {
+    int tc = theme_count();
+    int total = tc + TH_ROLE_COUNT;
+
+    if (vk == VK_ESCAPE) { settings_leave_subpage(); return; }
+    if (vk == VK_UP) {
+        if (g_settings_theme_sel > 0) g_settings_theme_sel--;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_DOWN) {
+        if (g_settings_theme_sel < total - 1) g_settings_theme_sel++;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_LEFT || vk == VK_RIGHT) {
+        if (g_settings_theme_sel >= tc) {
+            int role = g_settings_theme_sel - tc;
+            int target = vk == VK_RIGHT ? role + SETTINGS_ROLE_ROWS : role - SETTINGS_ROLE_ROWS;
+            if (target >= 0 && target < TH_ROLE_COUNT) g_settings_theme_sel = tc + target;
+        }
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_RETURN || vk == VK_SPACE) { settings_appearance_activate(); return; }
+    if (is_ctrl && (vk == 'R' || uc == 0x12)) {
+        theme_clear_overrides();
+        theme_apply();
+        save_config();
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (uc == 'r' || uc == 'R') {
+        if (g_settings_theme_sel >= tc) {
+            theme_clear_role_override(g_settings_theme_sel - tc);
+            theme_apply();
+            save_config();
+            g_mux.needs_redraw = 1;
+        }
+        return;
+    }
+}
+
+static void settings_keys_reset_entry(int entry) {
+    if (entry == 0) keymap_set_prefix("C-b");
+    else keymap_unbind(keymap_action_name(keymap_action_at(entry - 1)));
+    save_config();
+    g_mux.needs_redraw = 1;
+}
+
+static void handle_settings_keys_key(WORD vk, WCHAR uc, BOOL is_ctrl) {
+    int total = settings_keys_rows();
+    if (vk == VK_ESCAPE) { settings_leave_subpage(); return; }
+    if (vk == VK_UP) {
+        if (g_settings_keys_sel > 0) g_settings_keys_sel--;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_DOWN) {
+        if (g_settings_keys_sel < total - 1) g_settings_keys_sel++;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_RETURN) {
+        g_key_capture_active = 1;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (is_ctrl && (vk == 'R' || uc == 0x12)) {
+        keymap_set_prefix("C-b");
+        for (int i = 0; i < keymap_action_count(); i++)
+            keymap_unbind(keymap_action_name(keymap_action_at(i)));
+        save_config();
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (uc == 'r' || uc == 'R') { settings_keys_reset_entry(g_settings_keys_sel); return; }
+}
+
+static void settings_behavior_toggle(int idx) {
+    if (idx == 0) g_mouse_enabled = !g_mouse_enabled;
+    else if (idx == 1) g_copy_on_select = !g_copy_on_select;
+    else if (idx == 2) g_confirm_on_exit = !g_confirm_on_exit;
+    save_config();
+    g_mux.needs_redraw = 1;
+}
+
+static void settings_scrollback_step(int delta) {
+    int n = g_scrollback_lines + delta;
+    if (n < 200) n = 200;
+    if (n > 500000) n = 500000;
+    g_scrollback_lines = n;
+    save_config();
+    g_mux.needs_redraw = 1;
+}
+
+static void handle_settings_behavior_key(WORD vk, WCHAR uc) {
+    if (vk == VK_ESCAPE) { settings_leave_subpage(); return; }
+    if (vk == VK_UP) {
+        if (g_settings_behavior_sel > 0) g_settings_behavior_sel--;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_DOWN) {
+        if (g_settings_behavior_sel < 3) g_settings_behavior_sel++;
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    if (vk == VK_LEFT || vk == VK_RIGHT) {
+        if (g_settings_behavior_sel == 3) settings_scrollback_step(vk == VK_RIGHT ? 1000 : -1000);
+        else settings_behavior_toggle(g_settings_behavior_sel);
+        return;
+    }
+    if (vk == VK_RETURN || vk == VK_SPACE || uc == ' ') {
+        if (g_settings_behavior_sel < 3) settings_behavior_toggle(g_settings_behavior_sel);
+        return;
+    }
+}
+
 void handle_settings_key(KEY_EVENT_RECORD *ke) {
     WORD vk = ke->wVirtualKeyCode; DWORD ctrl = ke->dwControlKeyState; WCHAR uc = ke->uChar.UnicodeChar;
     BOOL is_ctrl = (ctrl & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0;
     BOOL is_shift = (ctrl & SHIFT_PRESSED) != 0;
     BOOL is_alt = (ctrl & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) != 0;
+
+    /* 录制键位 / 编辑十六进制时独占键盘 */
+    if (g_key_capture_active) { handle_key_capture(vk, ctrl, uc); return; }
+    if (g_hex_edit_active) { handle_hex_edit_key(vk, uc); return; }
 
     if (g_settings_show_presets) {
         if (vk == VK_ESCAPE) {
@@ -1208,7 +1422,7 @@ void handle_settings_key(KEY_EVENT_RECORD *ke) {
     }
 
     if ((vk == 'S' && is_ctrl) || (uc == 0x13)) {
-        if (g_settings_nav >= 1) {
+        if (g_settings_nav >= 1 && g_settings_nav <= g_chooser_item_count) {
             save_editor_to_item(g_settings_nav - 1);
         } else {
             save_config();
@@ -1239,22 +1453,20 @@ void handle_settings_key(KEY_EVENT_RECORD *ke) {
         return;
     }
 
-    if ((is_ctrl || is_alt) && vk == VK_UP) {
-        if (g_settings_nav > 0) {
-            g_settings_nav--;
-            if (g_settings_nav >= 1) load_item_to_editor(g_settings_nav - 1);
+    if ((is_ctrl || is_alt) && (vk == VK_UP || vk == VK_DOWN)) {
+        int idx = settings_nav_index_of(g_settings_nav) + (vk == VK_UP ? -1 : 1);
+        if (idx >= 0 && idx < settings_nav_order_count()) {
+            g_settings_nav = settings_nav_at(idx);
+            if (g_settings_nav >= 1 && g_settings_nav <= g_chooser_item_count)
+                load_item_to_editor(g_settings_nav - 1);
             g_mux.needs_redraw = 1;
-            return;
         }
+        return;
     }
-    if ((is_ctrl || is_alt) && vk == VK_DOWN) {
-        if (g_settings_nav < g_chooser_item_count) {
-            g_settings_nav++;
-            load_item_to_editor(g_settings_nav - 1);
-            g_mux.needs_redraw = 1;
-            return;
-        }
-    }
+
+    if (g_settings_nav == SETTINGS_NAV_APPEARANCE) { handle_settings_appearance_key(vk, uc, is_ctrl); return; }
+    if (g_settings_nav == SETTINGS_NAV_KEYS) { handle_settings_keys_key(vk, uc, is_ctrl); return; }
+    if (g_settings_nav == SETTINGS_NAV_BEHAVIOR) { handle_settings_behavior_key(vk, uc); return; }
 
     if (g_settings_nav == 0) {
         if (vk == VK_ESCAPE) {
@@ -1335,6 +1547,11 @@ void handle_settings_key(KEY_EVENT_RECORD *ke) {
             g_mux.needs_redraw = 1;
             return;
         }
+
+        /* 三个分类页的快捷入口：F2 外观 / F3 键位 / F4 行为，字母 K / B 同义 */
+        if (vk == VK_F2) { g_settings_nav = SETTINGS_NAV_APPEARANCE; g_mux.needs_redraw = 1; return; }
+        if (vk == VK_F3 || uc == 'k' || uc == 'K') { g_settings_nav = SETTINGS_NAV_KEYS; g_mux.needs_redraw = 1; return; }
+        if (vk == VK_F4 || uc == 'b' || uc == 'B') { g_settings_nav = SETTINGS_NAV_BEHAVIOR; g_mux.needs_redraw = 1; return; }
 
         if ((uc >= '1' && uc <= '9') || (vk >= '1' && vk <= '9') || (vk >= VK_NUMPAD1 && vk <= VK_NUMPAD9)) {
             int num = (uc >= '1' && uc <= '9') ? (uc - '0') : ((vk >= '1' && vk <= '9') ? (vk - '0') : (vk - VK_NUMPAD1 + 1));
@@ -1561,6 +1778,18 @@ void handle_settings_mouse(MOUSE_EVENT_RECORD *me) {
             g_mux.needs_redraw = 1;
             return;
         }
+        {
+            int app_r, keys_r, beh_r;
+            settings_sidebar_extra_rows(&app_r, &keys_r, &beh_r);
+            if (r == app_r || r == keys_r || r == beh_r) {
+                g_key_capture_active = 0;
+                g_hex_edit_active = 0;
+                g_settings_nav = (r == app_r) ? SETTINGS_NAV_APPEARANCE
+                               : (r == keys_r) ? SETTINGS_NAV_KEYS : SETTINGS_NAV_BEHAVIOR;
+                g_mux.needs_redraw = 1;
+                return;
+            }
+        }
         if (r == host_rows) {
             if (g_settings_nav >= 1) {
                 save_editor_to_item(g_settings_nav - 1);
@@ -1573,6 +1802,62 @@ void handle_settings_mouse(MOUSE_EVENT_RECORD *me) {
     }
 
     if (c >= main_left) {
+        if (g_settings_nav == SETTINGS_NAV_APPEARANCE) {
+            int tc = theme_count();
+            for (int i = 0; i < tc; i++) {
+                if (r == settings_theme_row(i)) {
+                    g_settings_theme_sel = i;
+                    theme_set_by_name(theme_name_at(i));
+                    theme_apply();
+                    save_config();
+                    g_mux.needs_redraw = 1;
+                    return;
+                }
+            }
+            for (int role = 0; role < TH_ROLE_COUNT; role++) {
+                int row = settings_role_row(role);
+                int col = settings_role_col(main_left, role);
+                if (r == row && c >= col && c < col + SETTINGS_ROLE_COL_W - 1) {
+                    g_settings_theme_sel = tc + role;
+                    settings_hex_edit_begin(role);
+                    g_mux.needs_redraw = 1;
+                    return;
+                }
+            }
+            return;
+        }
+        if (g_settings_nav == SETTINGS_NAV_KEYS) {
+            int entry = settings_keys_entry_at(host_rows, r);
+            if (entry >= 0) {
+                g_settings_keys_sel = entry;
+                if (c >= main_left + SETTINGS_KEYS_RESET_COL && c < main_left + SETTINGS_KEYS_RESET_COL + 6) {
+                    settings_keys_reset_entry(entry);
+                } else if (c >= main_left + SETTINGS_KEYS_EDIT_COL && c < main_left + SETTINGS_KEYS_RESET_COL) {
+                    g_key_capture_active = 1;
+                }
+                g_mux.needs_redraw = 1;
+            }
+            return;
+        }
+        if (g_settings_nav == SETTINGS_NAV_BEHAVIOR) {
+            for (int i = 0; i < 3; i++) {
+                if (r == SETTINGS_BEHAVIOR_ROW0 + i) {
+                    g_settings_behavior_sel = i;
+                    settings_behavior_toggle(i);
+                    return;
+                }
+            }
+            if (r == SETTINGS_BEHAVIOR_ROW0 + 3) {
+                g_settings_behavior_sel = 3;
+                if (c >= main_left + SETTINGS_SB_MINUS_COL && c < main_left + SETTINGS_SB_MINUS_COL + 3)
+                    settings_scrollback_step(-1000);
+                else if (c >= main_left + SETTINGS_SB_PLUS_COL && c < main_left + SETTINGS_SB_PLUS_COL + 3)
+                    settings_scrollback_step(1000);
+                g_mux.needs_redraw = 1;
+                return;
+            }
+            return;
+        }
         if (g_settings_nav == 0) {
             if (r == 5) {
                 if (c >= main_left && c < main_left + 26) {
@@ -1869,9 +2154,12 @@ void handle_prefix(WORD vk, DWORD ctrl, WCHAR uc) {
 static int key_input_modal_active(void) {
     if (g_mux.palette_mode || g_mux.rename_mode || g_mux.custom_cmd_mode) return 1;
     if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count &&
-        g_mux.panes[g_mux.active_pane].active && g_mux.panes[g_mux.active_pane].is_settings &&
-        (g_settings_nav >= 1 || g_settings_show_presets))
-        return 1;
+        g_mux.panes[g_mux.active_pane].active && g_mux.panes[g_mux.active_pane].is_settings) {
+        /* 文本编辑（菜单项详情 / 颜色十六进制）与键位录制期间独占键盘，
+         * 否则外观 / 键位 / 行为页仍然允许全局 Ctrl+B 前缀。 */
+        if (g_settings_show_presets || g_key_capture_active || g_hex_edit_active) return 1;
+        if (g_settings_nav >= 1 && g_settings_nav <= g_chooser_item_count) return 1;
+    }
     return 0;
 }
 

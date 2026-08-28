@@ -14,6 +14,35 @@ int g_confirm_on_exit = 0;
 int g_settings_show_presets = 0;
 int g_preset_sel = 0;
 
+int g_settings_theme_sel = 0;
+int g_settings_keys_sel = 0;
+int g_settings_keys_scroll = 0;
+int g_settings_behavior_sel = 0;
+int g_key_capture_active = 0;
+char g_hex_edit_buf[8] = {0};
+int g_hex_edit_len = 0, g_hex_edit_active = 0, g_hex_edit_role = -1;
+
+/* 侧栏顺序：启动 → 各菜单项 → 外观 → 键位 → 行为 */
+int settings_nav_order_count(void) { return g_chooser_item_count + 4; }
+
+int settings_nav_at(int idx) {
+    if (idx <= 0) return SETTINGS_NAV_STARTUP;
+    if (idx <= g_chooser_item_count) return idx;              /* 菜单项详情 */
+    switch (idx - g_chooser_item_count) {
+        case 1: return SETTINGS_NAV_APPEARANCE;
+        case 2: return SETTINGS_NAV_KEYS;
+        default: return SETTINGS_NAV_BEHAVIOR;
+    }
+}
+
+int settings_nav_index_of(int nav) {
+    if (nav == SETTINGS_NAV_APPEARANCE) return g_chooser_item_count + 1;
+    if (nav == SETTINGS_NAV_KEYS) return g_chooser_item_count + 2;
+    if (nav == SETTINGS_NAV_BEHAVIOR) return g_chooser_item_count + 3;
+    if (nav >= 1 && nav <= g_chooser_item_count) return nav;
+    return 0;
+}
+
 char g_edit_name[32] = {0};
 int g_edit_name_len = 0, g_edit_name_pos = 0;
 char g_edit_cmd[256] = {0};

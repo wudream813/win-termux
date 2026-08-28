@@ -324,6 +324,76 @@ void keymap_describe(int action, char *out, int out_size) {
     else snprintf(out, out_size, "%s %s", prefix, key);
 }
 
+int keymap_action_count(void) { return g_action_count; }
+
+int keymap_action_at(int idx) {
+    if (idx < 0 || idx >= g_action_count) return ACT_NONE;
+    return g_actions[idx].action;
+}
+
+int keymap_action_is_overridden(int action) {
+    if (action <= ACT_NONE || action >= ACT_COUNT) return 0;
+    return g_action_overridden[action] ? 1 : 0;
+}
+
+int keymap_unbind(const char *action_name) {
+    int action = keymap_action_id(action_name);
+    if (action == ACT_NONE) return 0;
+    int w = 0;
+    for (int i = 0; i < g_user_count; i++) {
+        if (g_user[i].bind.action == action) continue;
+        if (w != i) g_user[w] = g_user[i];
+        w++;
+    }
+    int removed = g_user_count - w;
+    g_user_count = w;
+    g_action_overridden[action] = 0;
+    return removed > 0;
+}
+
+int keymap_key_text_from_event(WORD vk, DWORD ctrl, WCHAR uc, char *out, int out_size) {
+    if (!out || out_size < 8) return 0;
+    /* 纯修饰键与锁定键不能作为绑定 */
+    if (vk == VK_SHIFT || vk == VK_CONTROL || vk == VK_MENU ||
+        vk == 0xA0 || vk == 0xA1 || vk == 0xA2 || vk == 0xA3 || vk == 0xA4 || vk == 0xA5 ||
+        vk == VK_CAPITAL || vk == VK_NUMLOCK || vk == VK_SCROLL) return 0;
+
+    int is_ctrl = (ctrl & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0;
+    int is_alt = (ctrl & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) != 0;
+    int is_shift = (ctrl & SHIFT_PRESSED) != 0;
+
+    char mods[8] = {0};
+    int m = 0;
+    if (is_ctrl) { mods[m++] = 'C'; mods[m++] = '-'; }
+    if (is_alt)  { mods[m++] = 'M'; mods[m++] = '-'; }
+
+    char key[24] = {0};
+    if (vk >= VK_F1 && vk <= VK_F24) {
+        snprintf(key, sizeof(key), "F%d", vk - VK_F1 + 1);
+    } else if (vk >= VK_NUMPAD0 && vk <= VK_NUMPAD9) {
+        snprintf(key, sizeof(key), "%c", (char)('0' + (vk - VK_NUMPAD0)));
+    } else if ((vk >= 'A' && vk <= 'Z') || (vk >= '0' && vk <= '9')) {
+        char c = (char)vk;
+        if (c >= 'A' && c <= 'Z') {
+            if (is_shift && !is_ctrl && !is_alt) { mods[m++] = 'S'; mods[m++] = '-'; }
+            c = (char)(c - 'A' + 'a');
+        }
+        snprintf(key, sizeof(key), "%c", c);
+    } else {
+        for (int i = 0; i < g_named_key_count; i++) {
+            if (g_named_keys[i].vk == vk) { snprintf(key, sizeof(key), "%s", g_named_keys[i].name); break; }
+        }
+        if (!key[0] && uc >= 0x20 && uc < 0x7F) snprintf(key, sizeof(key), "%c", (char)uc);
+    }
+    if (!key[0]) return 0;
+    mods[m] = 0;
+    snprintf(out, out_size, "%s%s", mods, key);
+
+    /* 回读一次，确保生成的文本一定能被解析回来 */
+    KeySpec probe;
+    return keymap_parse_key(out, &probe);
+}
+
 int keymap_has_user_bindings(void) { return g_user_count > 0; }
 int keymap_user_binding_count(void) { return g_user_count; }
 

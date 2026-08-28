@@ -78,6 +78,9 @@ int theme_count(void);
 const char *theme_name_at(int idx);
 /* 存在 [theme] 覆盖项时为 1（保存配置时需要原样写回）。 */
 int theme_has_overrides(void);
+int theme_role_is_overridden(int role);
+void theme_clear_overrides(void);
+void theme_clear_role_override(int role);
 void theme_get_override(int role, char *out_hex, int out_size);
 
 #endif /* WIN_TERMUX_THEME_H */

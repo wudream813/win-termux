@@ -217,6 +217,70 @@ static void test_keymap_describe(void) {
     keymap_init();
 }
 
+static void test_keymap_capture(void) {
+    printf("keymap: 图形化设置页的键位录制与复位\n");
+    keymap_init();
+    char text[24];
+
+    check(keymap_key_text_from_event('K', 0, 'k', text, sizeof(text)) == 1 && strcmp(text, "k") == 0,
+          "普通字母录成 \"k\"");
+    check(keymap_key_text_from_event('B', LEFT_CTRL_PRESSED, 2, text, sizeof(text)) == 1 && strcmp(text, "C-b") == 0,
+          "Ctrl+B 录成 \"C-b\"");
+    check(keymap_key_text_from_event('W', LEFT_ALT_PRESSED, 'w', text, sizeof(text)) == 1 && strcmp(text, "M-w") == 0,
+          "Alt+W 录成 \"M-w\"");
+    check(keymap_key_text_from_event('T', SHIFT_PRESSED, 'T', text, sizeof(text)) == 1 && strcmp(text, "S-t") == 0,
+          "Shift+T 录成 \"S-t\"");
+    check(keymap_key_text_from_event(VK_F2, 0, 0, text, sizeof(text)) == 1 && strcmp(text, "F2") == 0,
+          "F2 录成 \"F2\"");
+    check(keymap_key_text_from_event(VK_PRIOR, 0, 0, text, sizeof(text)) == 1 && strcmp(text, "pgup") == 0,
+          "PgUp 录成命名键");
+    check(keymap_key_text_from_event(VK_SHIFT, SHIFT_PRESSED, 0, text, sizeof(text)) == 0,
+          "纯修饰键不能作为键位");
+    check(keymap_key_text_from_event(VK_CONTROL, LEFT_CTRL_PRESSED, 0, text, sizeof(text)) == 0,
+          "Ctrl 单独按下不能作为键位");
+
+    /* 录制到的文本必须能被 keymap_bind 直接接受（设置页就是这么用的） */
+    int arg = 0;
+    keymap_key_text_from_event(VK_F2, 0, 0, text, sizeof(text));
+    check(keymap_bind("new-pane", text) == 1, "录制结果可直接绑定");
+    check(keymap_lookup(VK_F2, 0, 0, &arg) == ACT_NEW_PANE, "绑定后 F2 生效");
+    check(keymap_action_is_overridden(ACT_NEW_PANE) == 1, "设置页可据此显示“自定义”标记");
+
+    check(keymap_unbind("new-pane") == 1, "复位按钮解除绑定");
+    check(keymap_lookup(VK_F2, 0, 0, &arg) == ACT_NONE, "复位后 F2 失效");
+    check(keymap_lookup('C', 0, 'c', &arg) == ACT_NEW_PANE, "复位后默认键位恢复");
+    check(keymap_action_is_overridden(ACT_NEW_PANE) == 0, "自定义标记同时清除");
+    check(keymap_unbind("no-such-action") == 0, "复位未知动作返回 0");
+
+    check(keymap_action_count() >= 17, "动作表可供设置页遍历");
+    check(keymap_action_at(0) != ACT_NONE && keymap_action_at(-1) == ACT_NONE, "动作遍历边界安全");
+    keymap_init();
+}
+
+static void test_theme_clear(void) {
+    printf("theme: 设置页的复位按钮\n");
+    theme_init();
+    theme_set_role_hex("accent", "#ff0000");
+    theme_set_role_hex("panel", "#001122");
+    theme_apply();
+    check(theme_role_is_overridden(TH_ACCENT) == 1, "单项覆盖状态可查询");
+
+    theme_clear_role_override(TH_ACCENT);
+    theme_apply();
+    check(theme_role_is_overridden(TH_ACCENT) == 0, "单项复位");
+    check(theme_role_is_overridden(TH_BG2) == 1, "其它覆盖项不受影响");
+
+    theme_clear_overrides();
+    theme_apply();
+    check(theme_has_overrides() == 0, "一键清除全部自定义颜色");
+
+    char buf[64];
+    snprintf(buf, sizeof(buf), "\x1b[048;2;033;038;045mX");
+    theme_remap(buf, (int)strlen(buf));
+    check(strstr(buf, "033;038;045") != NULL, "清除后回到默认主题的 identity 行为");
+    theme_init();
+}
+
 static void test_keymap_actions(void) {
     printf("keymap: 动作名表完整\n");
     for (int a = ACT_SEND_PREFIX; a < ACT_COUNT; a++) {
@@ -238,6 +302,8 @@ int main(void) {
     test_keymap_parse();
     test_keymap_rebind();
     test_keymap_describe();
+    test_keymap_capture();
+    test_theme_clear();
     test_keymap_actions();
 
     printf("\n%d checks, %d failed\n", g_checks, g_failed);

@@ -9,6 +9,12 @@
 extern ChooserItem g_chooser_items[MAX_CHOOSER_ITEMS];
 extern int g_chooser_item_count;
 
+/* 侧栏导航：0 = 启动页，1..N = 菜单项详情页，下面三个是新增的分类页 */
+#define SETTINGS_NAV_STARTUP    0
+#define SETTINGS_NAV_APPEARANCE 100
+#define SETTINGS_NAV_KEYS       101
+#define SETTINGS_NAV_BEHAVIOR   102
+
 extern int g_settings_nav;
 extern int g_settings_field;
 extern int g_settings_table_sel;
@@ -21,6 +27,15 @@ extern int g_copy_on_select;      /* 拖选松开后是否自动复制 */
 extern int g_confirm_on_exit;     /* 退出 termux 前是否二次确认 */
 extern int g_settings_show_presets;
 extern int g_preset_sel;
+
+/* 外观页 / 键位页 / 行为页的光标与编辑状态 */
+extern int g_settings_theme_sel;    /* 0..theme_count-1 = 主题行；之后 = 语义色行 */
+extern int g_settings_keys_sel;     /* 0 = 前缀键行；1..N = 动作行 */
+extern int g_settings_keys_scroll;
+extern int g_settings_behavior_sel;
+extern int g_key_capture_active;    /* 1 = 正在等待用户按下新键位 */
+extern char g_hex_edit_buf[8];      /* 语义色十六进制输入 */
+extern int g_hex_edit_len, g_hex_edit_active, g_hex_edit_role;
 
 extern char g_edit_name[32];
 extern int g_edit_name_len, g_edit_name_pos;
@@ -36,6 +51,11 @@ void init_default_config(void);
 void load_config(void);
 void save_config(void);
 int config_parse_bool(const char *val, int fallback);
+
+/* 侧栏导航顺序（含新增分类页），供键盘 Ctrl+↑/↓ 循环使用 */
+int settings_nav_order_count(void);
+int settings_nav_at(int idx);
+int settings_nav_index_of(int nav);
 void open_config_file(void);
 void load_item_to_editor(int idx);
 void save_editor_to_item(int idx);

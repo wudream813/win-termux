@@ -10,6 +10,19 @@
 #include "keymap.h"
 
 #define SETTINGS_SIDEBAR_W 22
+
+/* 设置页三个新分类的固定行号（渲染与鼠标命中共用） */
+#define SETTINGS_THEME_ROW0     5
+#define SETTINGS_ROLE_ROW0      13
+#define SETTINGS_ROLE_ROWS      8
+#define SETTINGS_ROLE_COL_W     34
+#define SETTINGS_KEYS_ROW0      6
+#define SETTINGS_BEHAVIOR_ROW0  6
+/* 相对 main_left 的按钮列偏移，渲染时用绝对定位写出，鼠标按同样的偏移命中 */
+#define SETTINGS_KEYS_EDIT_COL  58
+#define SETTINGS_KEYS_RESET_COL 63
+#define SETTINGS_SB_MINUS_COL   22
+#define SETTINGS_SB_PLUS_COL    33
 #define RENAME_W 30
 #define RENAME_H 3
 #define CMD_BOX_W 38
@@ -91,6 +104,14 @@ void render_color_picker(char *out, int bs, int *posp, int host_rows, int host_c
 void render_settings_presets(char *out, int bs, int *posp, int host_rows, int host_cols);
 void presets_geom(int host_rows, int host_cols, int *top, int *left, int *w, int *h, int *max_nw, int *max_cw);
 void render_settings_panel(char *out, int bs, int *posp, int host_rows, int host_cols);
+void settings_sidebar_extra_rows(int *appearance_r, int *keys_r, int *behavior_r);
+int settings_theme_row(int idx);
+int settings_role_row(int role);
+int settings_role_col(int main_left, int role);
+int settings_keys_rows(void);
+int settings_keys_visible(int host_rows);
+int settings_keys_row_at(int host_rows, int entry);
+int settings_keys_entry_at(int host_rows, int row);
 void render_search_box(char *out, int bs, int *posp, int host_rows, int host_cols);
 void render_confirm_exit(char *out, int bs, int *posp, int host_rows, int host_cols);
 void confirm_exit_geom(int host_rows, int host_cols, int *top, int *left, int *w, int *h);
