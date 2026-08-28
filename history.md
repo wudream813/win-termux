@@ -6,6 +6,12 @@
 
 ## 版本更新记录
 
+### v1.8.11
+- **修复 alt 屏改大小丢真彩色（BUG-8）**：`screen_resize()` 迁移备用屏幕（vim / htop / less 等全屏程序用的那块）时，`cells` / `fg_rgb` / `bg_rgb` 三个数组都按列数整块搬，唯独 `alt_rgb_valid` 只搬了每行第 0 列 —— 结果一改窗口大小，除最左一列外整屏真彩色标记被清零，颜色瞬间退化成 16 色。现在四个并行数组一起搬。
+- **修复搜索当前项被滚出后乱跳（BUG-9）**：搜索命中项被新输出挤出滚动缓冲时，如果用户正停留的那一条被剔除，光标以前会弹到**最新**的一条（`new_count - 1`），浏览位置从最老一端直接跳到最新一端。剔除总是发生在最老的一端，因此现在落到存活项的 index 0，也就是「原当前项之后最近的一条」，继续按 `n` 就能顺着往下走。
+- **并行数组搬运统一收口**：BUG-4 与 BUG-8 都是「四个数组漏搬一个」的同一类错误。新增 `line_free()` / `line_fill_blank()` / `line_alloc()`（任一分配失败整行回滚）/ `line_copy()` / `alt_row_copy()` 五个静态辅助函数，`screen_ensure_line`、`screen_scroll_up` / `screen_scroll_down`、`screen_resize`、`screen_free` 里所有分配、清空、行搬运、释放站点全部改走它们，`cells`、`fg_rgb`、`bg_rgb`、`rgb_valid` 从此不可能再各写各的。
+- **验证**：新增 `verify_screen_state.py`（从真源码抽取 `screen_resize` / `screen_scroll_up` 及五个辅助函数，用 ASAN + UBSan 编译执行，断言 alt 屏 16×6 → 24×6 后 96 个 cell 的真彩色标记一个不少、断言当前项被剔除后落到最近的存活项且未被剔除时原样跟随平移），并入 `verify_all.py`（现 20 项）；两条断言都做过变异验证（把修复改回旧写法即报错）。`verify_ringbuf_asan.py` 同步抽取新的辅助函数。单元测试 260 checks / 0 failed，gcc / g++ 双 `-Werror` 编译通过。
+
 ### v1.8.10
 - **修复「搜索多占一行」**：搜索输入框以前是铺满整条底行的（`ui_bottom_row()` 取窗口最低行），而窗口一共只有 `host_rows + 1` 行、最后一行本来就是终端内容 —— 一按 `Ctrl+B /` 就凭空吃掉一行输出。现在输入框和搜索状态徽章一样，是贴右上角的紧凑小框（前缀 6 列 + 输入 24 列 + 提示 12 列 = 42 列，右对齐），只画第 2 行，终端内容一行不少。`ui_bottom_row()` / `SEARCH_PREFIX_COLS` / `search_input_width()` 全部删除，渲染与光标定位共用新的 `search_box_layout()`。
 - **验证**：新增 `verify_search_box.py`（抠出真实 `render_search_box()` 编译执行，断言只写第 2 行、绝不碰最后一行、宽度恒定且右边界贴住窗口右缘、光标落在输入区内，覆盖空串/长关键词/中文/窄窗口 5 组样例），并入 `verify_all.py`（现 19 项）；`verify_alignment.py` 把「不得再出现 ui_bottom_row / 不得铺满整行」写成硬断言。

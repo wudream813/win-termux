@@ -13,6 +13,7 @@ CHECKS = (
     "verify_color8.py",
     "verify_emoji.py",
     "verify_ringbuf_asan.py",
+    "verify_screen_state.py",
     "verify_search.py",
     "verify_palette_search.py",
     "verify_input_layout.py",

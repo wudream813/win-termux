@@ -1,34 +1,76 @@
 #include "screen.h"
 #include "config.h"
 
+/* ---------------------------------------------------------------------------
+ * 一行的四个并行数组：cells / fg_rgb / bg_rgb / rgb_valid
+ *
+ * 它们必须永远一起分配、一起搬运、一起清空。历史上已经两次栽在「改了前三个、
+ * 漏掉最后一个」上（v1.5.0 的 screen_scroll_up 漏拷 rgb_valid、v1.8.10 的
+ * screen_resize alt 屏迁移只搬了每行第 0 列）。所有搬运统一收口到下面这几个
+ * 辅助函数，以后再加第五个并行数组也只需要改这里。
+ * ------------------------------------------------------------------------- */
+static void line_free(ScreenLine *ln) {
+    free(ln->cells);
+    free(ln->fg_rgb);
+    free(ln->bg_rgb);
+    free(ln->rgb_valid);
+    ln->cells = NULL;
+    ln->fg_rgb = NULL;
+    ln->bg_rgb = NULL;
+    ln->rgb_valid = NULL;
+}
+
+/* 把一整行填成空白（不碰分配状态）。 */
+static void line_fill_blank(ScreenLine *ln, int n, WORD attr) {
+    if (!ln->cells) return;
+    for (int j = 0; j < n; j++) {
+        ln->cells[j].Char.UnicodeChar = L' ';
+        ln->cells[j].Attributes = attr;
+        if (ln->fg_rgb) ln->fg_rgb[j] = RGB565_WHITE;
+        if (ln->bg_rgb) ln->bg_rgb[j] = RGB565_BLACK;
+        if (ln->rgb_valid) ln->rgb_valid[j] = 0;
+    }
+}
+
+/* 分配一行并填成空白；任一数组失败就整行回滚并返回 0。 */
+static int line_alloc(ScreenLine *ln, int n, WORD attr) {
+    ln->cells = (CHAR_INFO *)malloc(n * sizeof(CHAR_INFO));
+    ln->fg_rgb = (WORD *)malloc(n * sizeof(WORD));
+    ln->bg_rgb = (WORD *)malloc(n * sizeof(WORD));
+    ln->rgb_valid = (unsigned char *)calloc(n, 1);
+    if (!ln->cells || !ln->fg_rgb || !ln->bg_rgb || !ln->rgb_valid) {
+        line_free(ln);
+        return 0;
+    }
+    line_fill_blank(ln, n, attr);
+    return 1;
+}
+
+/* 逐行搬运：四个数组各拷 n 个元素。 */
+static void line_copy(ScreenLine *dst, const ScreenLine *src, int n) {
+    if (!dst->cells || !src->cells || n <= 0) return;
+    memcpy(dst->cells, src->cells, n * sizeof(CHAR_INFO));
+    if (dst->fg_rgb && src->fg_rgb) memcpy(dst->fg_rgb, src->fg_rgb, n * sizeof(WORD));
+    if (dst->bg_rgb && src->bg_rgb) memcpy(dst->bg_rgb, src->bg_rgb, n * sizeof(WORD));
+    if (dst->rgb_valid && src->rgb_valid) memcpy(dst->rgb_valid, src->rgb_valid, n * sizeof(unsigned char));
+}
+
+/* alt 屏是扁平数组，按「行起点下标」搬运同样的四份数据。 */
+static void alt_row_copy(CHAR_INFO *dc, WORD *dfr, WORD *dbr, unsigned char *dv, int di,
+                         const CHAR_INFO *sc, const WORD *sfr, const WORD *sbr, const unsigned char *sv, int si,
+                         int n) {
+    if (n <= 0) return;
+    if (dc && sc) memcpy(&dc[di], &sc[si], n * sizeof(CHAR_INFO));
+    if (dfr && sfr) memcpy(&dfr[di], &sfr[si], n * sizeof(WORD));
+    if (dbr && sbr) memcpy(&dbr[di], &sbr[si], n * sizeof(WORD));
+    if (dv && sv) memcpy(&dv[di], &sv[si], n * sizeof(unsigned char));
+}
+
 int screen_ensure_line(ScreenBuffer *s, int pr) {
     if (!s->lines || pr < 0 || pr >= s->total_lines) return 0;
     if (s->lines[pr].cells) return 1;
 
-    s->lines[pr].cells = (CHAR_INFO *)malloc(s->cols * sizeof(CHAR_INFO));
-    s->lines[pr].fg_rgb = (WORD *)malloc(s->cols * sizeof(WORD));
-    s->lines[pr].bg_rgb = (WORD *)malloc(s->cols * sizeof(WORD));
-    s->lines[pr].rgb_valid = (unsigned char *)calloc(s->cols, 1);
-
-    if (!s->lines[pr].cells || !s->lines[pr].fg_rgb || !s->lines[pr].bg_rgb || !s->lines[pr].rgb_valid) {
-        free(s->lines[pr].cells);
-        free(s->lines[pr].fg_rgb);
-        free(s->lines[pr].bg_rgb);
-        free(s->lines[pr].rgb_valid);
-        s->lines[pr].cells = NULL;
-        s->lines[pr].fg_rgb = NULL;
-        s->lines[pr].bg_rgb = NULL;
-        s->lines[pr].rgb_valid = NULL;
-        return 0;
-    }
-
-    for (int j = 0; j < s->cols; j++) {
-        s->lines[pr].cells[j].Char.UnicodeChar = L' ';
-        s->lines[pr].cells[j].Attributes = s->current_attr ? s->current_attr : 0x07;
-        s->lines[pr].fg_rgb[j] = RGB565_WHITE;
-        s->lines[pr].bg_rgb[j] = RGB565_BLACK;
-    }
-    return 1;
+    return line_alloc(&s->lines[pr], s->cols, s->current_attr ? s->current_attr : 0x07);
 }
 
 int screen_init(ScreenBuffer *s, int cols, int rows) {
@@ -78,12 +120,7 @@ int screen_init(ScreenBuffer *s, int cols, int rows) {
 
 void screen_free(ScreenBuffer *s) {
     if (s->lines) {
-        for (int i = 0; i < s->total_lines; i++) {
-            free(s->lines[i].cells);
-            free(s->lines[i].fg_rgb);
-            free(s->lines[i].bg_rgb);
-            free(s->lines[i].rgb_valid);
-        }
+        for (int i = 0; i < s->total_lines; i++) line_free(&s->lines[i]);
         free(s->lines);
         s->lines = NULL;
     }
@@ -165,14 +202,9 @@ void screen_scroll_up(ScreenBuffer *s, int top, int bottom, int count) {
 
     if (s->in_alt_screen) {
         for (int i = top; i <= bottom - count; i++) {
-            memcpy(&s->alt_buffer[i * s->cols], &s->alt_buffer[(i + count) * s->cols], s->cols * sizeof(CHAR_INFO));
-            if (s->alt_fg_rgb) {
-                memcpy(&s->alt_fg_rgb[i * s->cols], &s->alt_fg_rgb[(i + count) * s->cols], s->cols * sizeof(WORD));
-                memcpy(&s->alt_bg_rgb[i * s->cols], &s->alt_bg_rgb[(i + count) * s->cols], s->cols * sizeof(WORD));
-            }
-            if (s->alt_rgb_valid) {
-                memcpy(&s->alt_rgb_valid[i * s->cols], &s->alt_rgb_valid[(i + count) * s->cols], s->cols * sizeof(unsigned char));
-            }
+            alt_row_copy(s->alt_buffer, s->alt_fg_rgb, s->alt_bg_rgb, s->alt_rgb_valid, i * s->cols,
+                         s->alt_buffer, s->alt_fg_rgb, s->alt_bg_rgb, s->alt_rgb_valid, (i + count) * s->cols,
+                         s->cols);
         }
         for (int i = bottom - count + 1; i <= bottom; i++)
             for (int j = 0; j < s->cols; j++)
@@ -205,7 +237,16 @@ void screen_scroll_up(ScreenBuffer *s, int top, int bottom, int count) {
                     }
                 }
                 g_search_match_count = new_count;
-                g_search_match_cur = (new_cur >= 0) ? new_cur : (new_count > 0 ? new_count - 1 : -1);
+                /* BUG-9 (v1.8.11): 当前停留的匹配被滚出缓冲时，以前会跳到「最新」的
+                 * 那一条，浏览位置从最老一端直接弹到最新一端。剔除总是从最老的一端
+                 * 发生，所以存活项里的 index 0 恰好就是「原当前项之后最近的一条」。 */
+                if (new_cur >= 0) {
+                    g_search_match_cur = new_cur;
+                } else if (new_count > 0) {
+                    g_search_match_cur = 0;
+                } else {
+                    g_search_match_cur = -1;
+                }
                 if (g_search_match_count == 0) {
                     g_search_active = 0;
                 }
@@ -215,13 +256,7 @@ void screen_scroll_up(ScreenBuffer *s, int top, int bottom, int count) {
         for (int c = 0; c < count; c++) {
             int pr = screen_phys_row(s, s->rows + c);
             if (s->lines && s->lines[pr].cells) {
-                for (int j = 0; j < s->cols; j++) {
-                    s->lines[pr].cells[j].Char.UnicodeChar = L' ';
-                    s->lines[pr].cells[j].Attributes = s->current_attr;
-                    s->lines[pr].fg_rgb[j] = RGB565_WHITE;
-                    s->lines[pr].bg_rgb[j] = RGB565_BLACK;
-                    s->lines[pr].rgb_valid[j] = 0;
-                }
+                line_fill_blank(&s->lines[pr], s->cols, s->current_attr);
             }
         }
         s->scroll_top = (s->scroll_top + count) % s->total_lines;
@@ -232,30 +267,15 @@ void screen_scroll_up(ScreenBuffer *s, int top, int bottom, int count) {
             int src_pr = screen_phys_row(s, i + count);
             if (s->lines && s->lines[src_pr].cells) {
                 screen_ensure_line(s, dst_pr);
-                memcpy(s->lines[dst_pr].cells, s->lines[src_pr].cells, s->cols * sizeof(CHAR_INFO));
-                memcpy(s->lines[dst_pr].fg_rgb, s->lines[src_pr].fg_rgb, s->cols * sizeof(WORD));
-                memcpy(s->lines[dst_pr].bg_rgb, s->lines[src_pr].bg_rgb, s->cols * sizeof(WORD));
-                memcpy(s->lines[dst_pr].rgb_valid, s->lines[src_pr].rgb_valid, s->cols * sizeof(unsigned char));
+                line_copy(&s->lines[dst_pr], &s->lines[src_pr], s->cols);
             } else if (s->lines && s->lines[dst_pr].cells) {
-                for (int j = 0; j < s->cols; j++) {
-                    s->lines[dst_pr].cells[j].Char.UnicodeChar = L' ';
-                    s->lines[dst_pr].cells[j].Attributes = s->current_attr;
-                    s->lines[dst_pr].fg_rgb[j] = RGB565_WHITE;
-                    s->lines[dst_pr].bg_rgb[j] = RGB565_BLACK;
-                    s->lines[dst_pr].rgb_valid[j] = 0;
-                }
+                line_fill_blank(&s->lines[dst_pr], s->cols, s->current_attr);
             }
         }
         for (int i = bottom - count + 1; i <= bottom; i++) {
             int pr = screen_phys_row(s, i);
             if (s->lines && s->lines[pr].cells) {
-                for (int j = 0; j < s->cols; j++) {
-                    s->lines[pr].cells[j].Char.UnicodeChar = L' ';
-                    s->lines[pr].cells[j].Attributes = s->current_attr;
-                    s->lines[pr].fg_rgb[j] = RGB565_WHITE;
-                    s->lines[pr].bg_rgb[j] = RGB565_BLACK;
-                    s->lines[pr].rgb_valid[j] = 0;
-                }
+                line_fill_blank(&s->lines[pr], s->cols, s->current_attr);
             }
         }
     }
@@ -270,14 +290,9 @@ void screen_scroll_down(ScreenBuffer *s, int top, int bottom, int count) {
 
     if (s->in_alt_screen) {
         for (int i = bottom; i >= top + count; i--) {
-            memcpy(&s->alt_buffer[i * s->cols], &s->alt_buffer[(i - count) * s->cols], s->cols * sizeof(CHAR_INFO));
-            if (s->alt_fg_rgb) {
-                memcpy(&s->alt_fg_rgb[i * s->cols], &s->alt_fg_rgb[(i - count) * s->cols], s->cols * sizeof(WORD));
-                memcpy(&s->alt_bg_rgb[i * s->cols], &s->alt_bg_rgb[(i - count) * s->cols], s->cols * sizeof(WORD));
-            }
-            if (s->alt_rgb_valid) {
-                memcpy(&s->alt_rgb_valid[i * s->cols], &s->alt_rgb_valid[(i - count) * s->cols], s->cols * sizeof(unsigned char));
-            }
+            alt_row_copy(s->alt_buffer, s->alt_fg_rgb, s->alt_bg_rgb, s->alt_rgb_valid, i * s->cols,
+                         s->alt_buffer, s->alt_fg_rgb, s->alt_bg_rgb, s->alt_rgb_valid, (i - count) * s->cols,
+                         s->cols);
         }
         for (int i = top; i < top + count && i <= bottom; i++) {
             for (int j = 0; j < s->cols; j++)
@@ -301,13 +316,7 @@ void screen_scroll_down(ScreenBuffer *s, int top, int bottom, int count) {
         for (int c = 0; c < count; c++) {
             int pr = screen_phys_row(s, c);
             if (s->lines && s->lines[pr].cells) {
-                for (int j = 0; j < s->cols; j++) {
-                    s->lines[pr].cells[j].Char.UnicodeChar = L' ';
-                    s->lines[pr].cells[j].Attributes = s->current_attr;
-                    s->lines[pr].fg_rgb[j] = RGB565_WHITE;
-                    s->lines[pr].bg_rgb[j] = RGB565_BLACK;
-                    s->lines[pr].rgb_valid[j] = 0;
-                }
+                line_fill_blank(&s->lines[pr], s->cols, s->current_attr);
             }
         }
     } else {
@@ -316,30 +325,15 @@ void screen_scroll_down(ScreenBuffer *s, int top, int bottom, int count) {
             int src_pr = screen_phys_row(s, i - count);
             if (s->lines && s->lines[src_pr].cells) {
                 screen_ensure_line(s, dst_pr);
-                memcpy(s->lines[dst_pr].cells, s->lines[src_pr].cells, s->cols * sizeof(CHAR_INFO));
-                memcpy(s->lines[dst_pr].fg_rgb, s->lines[src_pr].fg_rgb, s->cols * sizeof(WORD));
-                memcpy(s->lines[dst_pr].bg_rgb, s->lines[src_pr].bg_rgb, s->cols * sizeof(WORD));
-                memcpy(s->lines[dst_pr].rgb_valid, s->lines[src_pr].rgb_valid, s->cols * sizeof(unsigned char));
+                line_copy(&s->lines[dst_pr], &s->lines[src_pr], s->cols);
             } else if (s->lines && s->lines[dst_pr].cells) {
-                for (int j = 0; j < s->cols; j++) {
-                    s->lines[dst_pr].cells[j].Char.UnicodeChar = L' ';
-                    s->lines[dst_pr].cells[j].Attributes = s->current_attr;
-                    s->lines[dst_pr].fg_rgb[j] = RGB565_WHITE;
-                    s->lines[dst_pr].bg_rgb[j] = RGB565_BLACK;
-                    s->lines[dst_pr].rgb_valid[j] = 0;
-                }
+                line_fill_blank(&s->lines[dst_pr], s->cols, s->current_attr);
             }
         }
         for (int i = top; i < top + count && i <= bottom; i++) {
             int pr = screen_phys_row(s, i);
             if (s->lines && s->lines[pr].cells) {
-                for (int j = 0; j < s->cols; j++) {
-                    s->lines[pr].cells[j].Char.UnicodeChar = L' ';
-                    s->lines[pr].cells[j].Attributes = s->current_attr;
-                    s->lines[pr].fg_rgb[j] = RGB565_WHITE;
-                    s->lines[pr].bg_rgb[j] = RGB565_BLACK;
-                    s->lines[pr].rgb_valid[j] = 0;
-                }
+                line_fill_blank(&s->lines[pr], s->cols, s->current_attr);
             }
         }
     }
@@ -416,22 +410,8 @@ int screen_resize(ScreenBuffer *s, int nc, int nr) {
         int old_r = screen_phys_row(s, -h);
         int new_r = (nst - h % nt + nt) % nt;
         if (old_r >= 0 && old_r < s->total_lines && s->lines && s->lines[old_r].cells) {
-            nl[new_r].cells = (CHAR_INFO *)malloc(nc * sizeof(CHAR_INFO));
-            nl[new_r].fg_rgb = (WORD *)malloc(nc * sizeof(WORD));
-            nl[new_r].bg_rgb = (WORD *)malloc(nc * sizeof(WORD));
-            nl[new_r].rgb_valid = (unsigned char *)calloc(nc, 1);
-            if (nl[new_r].cells && nl[new_r].fg_rgb && nl[new_r].bg_rgb && nl[new_r].rgb_valid) {
-                for (int j = 0; j < nc; j++) {
-                    nl[new_r].cells[j].Char.UnicodeChar = L' ';
-                    nl[new_r].cells[j].Attributes = s->current_attr ? s->current_attr : 0x07;
-                    nl[new_r].fg_rgb[j] = RGB565_WHITE;
-                    nl[new_r].bg_rgb[j] = RGB565_BLACK;
-                }
-                memcpy(nl[new_r].cells, s->lines[old_r].cells, cc * sizeof(CHAR_INFO));
-                memcpy(nl[new_r].fg_rgb, s->lines[old_r].fg_rgb, cc * sizeof(WORD));
-                memcpy(nl[new_r].bg_rgb, s->lines[old_r].bg_rgb, cc * sizeof(WORD));
-                memcpy(nl[new_r].rgb_valid, s->lines[old_r].rgb_valid, cc * sizeof(unsigned char));
-            }
+            if (line_alloc(&nl[new_r], nc, s->current_attr ? s->current_attr : 0x07))
+                line_copy(&nl[new_r], &s->lines[old_r], cc);
         }
     }
 
@@ -440,56 +420,26 @@ int screen_resize(ScreenBuffer *s, int nc, int nr) {
         int new_r = (nst + y) % nt;
         int old_r = screen_phys_row(s, y);
         if (old_r >= 0 && old_r < s->total_lines && s->lines && s->lines[old_r].cells) {
-            nl[new_r].cells = (CHAR_INFO *)malloc(nc * sizeof(CHAR_INFO));
-            nl[new_r].fg_rgb = (WORD *)malloc(nc * sizeof(WORD));
-            nl[new_r].bg_rgb = (WORD *)malloc(nc * sizeof(WORD));
-            nl[new_r].rgb_valid = (unsigned char *)calloc(nc, 1);
-            if (nl[new_r].cells && nl[new_r].fg_rgb && nl[new_r].bg_rgb && nl[new_r].rgb_valid) {
-                for (int j = 0; j < nc; j++) {
-                    nl[new_r].cells[j].Char.UnicodeChar = L' ';
-                    nl[new_r].cells[j].Attributes = s->current_attr ? s->current_attr : 0x07;
-                    nl[new_r].fg_rgb[j] = RGB565_WHITE;
-                    nl[new_r].bg_rgb[j] = RGB565_BLACK;
-                }
-                memcpy(nl[new_r].cells, s->lines[old_r].cells, cc * sizeof(CHAR_INFO));
-                memcpy(nl[new_r].fg_rgb, s->lines[old_r].fg_rgb, cc * sizeof(WORD));
-                memcpy(nl[new_r].bg_rgb, s->lines[old_r].bg_rgb, cc * sizeof(WORD));
-                memcpy(nl[new_r].rgb_valid, s->lines[old_r].rgb_valid, cc * sizeof(unsigned char));
-            }
+            if (line_alloc(&nl[new_r], nc, s->current_attr ? s->current_attr : 0x07))
+                line_copy(&nl[new_r], &s->lines[old_r], cc);
         } else {
             // Allocate blank visible line
-            nl[new_r].cells = (CHAR_INFO *)malloc(nc * sizeof(CHAR_INFO));
-            nl[new_r].fg_rgb = (WORD *)malloc(nc * sizeof(WORD));
-            nl[new_r].bg_rgb = (WORD *)malloc(nc * sizeof(WORD));
-            nl[new_r].rgb_valid = (unsigned char *)calloc(nc, 1);
-            if (nl[new_r].cells && nl[new_r].fg_rgb && nl[new_r].bg_rgb && nl[new_r].rgb_valid) {
-                for (int j = 0; j < nc; j++) {
-                    nl[new_r].cells[j].Char.UnicodeChar = L' ';
-                    nl[new_r].cells[j].Attributes = s->current_attr ? s->current_attr : 0x07;
-                    nl[new_r].fg_rgb[j] = RGB565_WHITE;
-                    nl[new_r].bg_rgb[j] = RGB565_BLACK;
-                }
-            }
+            line_alloc(&nl[new_r], nc, s->current_attr ? s->current_attr : 0x07);
         }
     }
 
     // Migrate alt buffer
+    /* BUG-8 (v1.8.11): 这里以前 rgb_valid 只搬了每行第 0 列（其余三个数组都搬了
+     * cc 个），alt 屏一改窗口大小整屏真彩色就退化成 16 色。现在四个数组统一走
+     * alt_row_copy()，不可能再漏。 */
     for (int y = 0; y < cr && y < s->rows; y++) {
-        memcpy(&na[y * nc], &s->alt_buffer[y * s->cols], cc * sizeof(CHAR_INFO));
-        if (s->alt_fg_rgb) {
-            memcpy(&nafr[y * nc], &s->alt_fg_rgb[y * s->cols], cc * sizeof(WORD));
-            memcpy(&nabr[y * nc], &s->alt_bg_rgb[y * s->cols], cc * sizeof(WORD));
-        }
-        if (s->alt_rgb_valid) nav[y * nc] = s->alt_rgb_valid[y * s->cols];
+        alt_row_copy(na, nafr, nabr, nav, y * nc,
+                     s->alt_buffer, s->alt_fg_rgb, s->alt_bg_rgb, s->alt_rgb_valid, y * s->cols,
+                     cc);
     }
 
     if (s->lines) {
-        for (int i = 0; i < s->total_lines; i++) {
-            free(s->lines[i].cells);
-            free(s->lines[i].fg_rgb);
-            free(s->lines[i].bg_rgb);
-            free(s->lines[i].rgb_valid);
-        }
+        for (int i = 0; i < s->total_lines; i++) line_free(&s->lines[i]);
         free(s->lines);
     }
     free(s->alt_buffer); free(s->alt_fg_rgb); free(s->alt_bg_rgb); free(s->alt_rgb_valid);

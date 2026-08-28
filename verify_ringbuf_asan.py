@@ -46,6 +46,20 @@ f_write = extract_func(src, "void screen_write_cell(")
 if not f_write:
     sys.exit("FAIL: screen_write_cell not found in src/screen.c")
 
+# v1.8.11: 四个并行数组的搬运统一收口到这些辅助函数，测试同样从真源码抽取，
+# 这样「漏搬 rgb_valid」这类回归依然会被 ASAN/断言抓到。
+HELPERS = []
+for sig in ("static void line_free(",
+            "static void line_fill_blank(",
+            "static int line_alloc(",
+            "static void line_copy(",
+            "static void alt_row_copy("):
+    body = extract_func(src, sig)
+    if not body:
+        sys.exit("FAIL: %s not found in src/screen.c" % sig)
+    HELPERS.append(body)
+f_helpers = "\n".join(HELPERS)
+
 f_up = extract_func(src, "void screen_scroll_up(")
 if not f_up:
     sys.exit("FAIL: screen_scroll_up not found in src/screen.c")
@@ -192,7 +206,8 @@ int main(void) {
 }
 """
 
-C_TEST_CODE = PRELUDE + "\n" + f_phys + "\n" + f_ensure + "\n" + f_write + "\n" + f_up + "\n" + DRIVER
+C_TEST_CODE = (PRELUDE + "\n" + f_phys + "\n" + f_helpers + "\n" + f_ensure + "\n" +
+               f_write + "\n" + f_up + "\n" + DRIVER)
 
 def main():
     print("=== ASAN Ring Buffer Scrolling Test (verify_ringbuf_asan.py) ===")
