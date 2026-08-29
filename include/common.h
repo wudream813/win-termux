@@ -25,7 +25,7 @@
 #endif
 
 #ifndef TERMUX_VERSION
-#define TERMUX_VERSION "1.8.16"
+#define TERMUX_VERSION "1.8.17"
 #endif
 
 #define MAX_PANES         16

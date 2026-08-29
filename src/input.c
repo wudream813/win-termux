@@ -1082,6 +1082,24 @@ static void attr_palette_rgb(WORD attr, int is_bg, int *r, int *g, int *b) {
     cliphtml_palette16(ansi, r, g, b);
 }
 
+/* 复制成 HTML 时一行的右边界：纯文本会把行尾连续空格整段裁掉，但 HTML 里
+ * “带颜色的空格”是看得见的内容——它铺着色块底色（colortool 网格里每个色块
+ * 都是 '  gYw  '，末尾两个空格同样有背景色）。v1.8.17 修复：行尾空格只要
+ * 带背景色（或非默认前景色）就必须保留，只裁真正透明（无底色）的行尾空白；
+ * 一旦碰到无颜色的空格，它后面全是默认背景，直接停住。返回最后一个应输出的
+ * cell 下标（无内容时返回 x_start-1，与旧 valid_x1 语义一致）。 */
+static int cliphtml_row_right_boundary(const ClipHtmlCell *cells, int x_start, int valid_nonspace, int x_end) {
+    int right = valid_nonspace;
+    for (int x = valid_nonspace + 1; cells && x <= x_end; x++) {
+        const ClipHtmlCell *c = &cells[x];
+        if (c->ch != 0 && c->ch != (unsigned short)L' ') break;  /* 正常不会出现非空格 */
+        if (!c->bg_valid && !c->fg_valid) break;                /* 透明空格：行尾空白，停 */
+        right = x;                                              /* 带颜色的空格：保留 */
+    }
+    if (right < x_start - 1) right = x_start - 1;
+    return right;
+}
+
 void copy_selection_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs, int block) {
     if (!p) return;
     ScreenBuffer *s = &p->screen;
@@ -1185,16 +1203,12 @@ void copy_selection_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs
         }
 
         if (html_ok) {
-            /* HTML 与文本一致：每行末尾的连续空格都裁掉（纯文本靠行末 trim，
-             * 这里直接把区间末端收到最后一个非空格 cell）。 */
-            while (valid_x1 >= x_start) {
-                WCHAR c = row_cells[valid_x1].ch;
-                if (c != 0 && c != L' ') break;
-                valid_x1--;
-            }
+            /* HTML 行右边界：只裁透明（无底色）的行尾空白；带背景/前景色的
+             * 尾随空格是看得见的色块，必须保留（v1.8.17）。 */
+            int html_x1 = cliphtml_row_right_boundary(row_cells, x_start, valid_x1, x_end);
             if (!first_row) cliphtml_frag_break(&html);
             first_row = 0;
-            cliphtml_frag_row(&html, row_cells, x_start, valid_x1);
+            cliphtml_frag_row(&html, row_cells, x_start, html_x1);
         }
     }
     while (wlen > 0 && wbuf[wlen - 1] == L' ') wlen--;
