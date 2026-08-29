@@ -556,31 +556,6 @@ int copy_step_char(const WCHAR *line, int ncols, int x, int dir) {
     }
 }
 
-/* 复制模式拖动鼠标时把光标准点「整字化」：无论向左还是向右扩展选区，
- * g_copy_cx 都不停在宽字符的次格（半个字）上，而是按整字跳动。
- *   - 向右扩展（x >= anchor_x）：指针落在某宽字符【主格】上，终点取该字
- *     的次格（一次越过整个汉字/emoji）；落在次格或窄字符上则原样返回；
- *   - 向左扩展（x < anchor_x）：指针落在某宽字符【次格】上，退到它的主格。
- * 键盘 ←/→ 走 copy_step_char（落在主格），鼠标拖动用本函数，两者配合让
- * 复制模式里经过中文/emoji 永远是整字整字地走。 */
-int copy_quantize_cursor(const WCHAR *line, int ncols, int x, int anchor_x) {
-    if (!line) return x;
-    if (x < 0) x = 0;
-    if (x >= ncols) x = ncols - 1;
-    int lead;
-    if (x >= anchor_x) {
-        WCHAR c = line[x];
-        int emoji_lead = (c >= 0xD800 && c <= 0xDBFF && x + 1 < ncols &&
-                          line[x + 1] >= 0xDC00 && line[x + 1] <= 0xDFFF);
-        int wide_lead  = !(c >= 0xD800 && c <= 0xDBFF) && is_wide_cp((unsigned int)c);
-        if (emoji_lead || wide_lead) { int nx = x + 1; return nx < ncols ? nx : ncols - 1; }
-        return x;
-    } else {
-        if (cell_is_wide_trail(line, x, &lead)) return lead;
-        return x;
-    }
-}
-
 void cell_truecolor(ScreenBuffer *s, int row, int col, int ar, WORD *out_f, WORD *out_b, int *out_fv, int *out_bv) {    *out_f = RGB565_WHITE; *out_b = RGB565_BLACK;
     *out_fv = 0; *out_bv = 0;
     if (row < 0 || col < 0 || col >= s->cols) return;

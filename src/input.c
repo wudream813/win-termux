@@ -1082,18 +1082,6 @@ static void attr_palette_rgb(WORD attr, int is_bg, int *r, int *g, int *b) {
     cliphtml_palette16(ansi, r, g, b);
 }
 
-/* 取复制光标行（复制模式 cy 可视行，受 scroll_offset 影响）的字符缓冲，
- * 供宽字符吸附/步进使用。无内容时返回 NULL。 */
-static const WCHAR *copy_line_at(ScreenBuffer *s, Pane *p, int cy) {
-    if (s->in_alt_screen && s->alt_buffer)
-        return &s->alt_buffer[(size_t)cy * s->cols].Char.UnicodeChar;
-    int ar = (p->scroll_offset > 0 && !s->in_alt_screen)
-             ? screen_phys_row(s, cy - p->scroll_offset) : -1;
-    if (ar >= 0 && s->lines && s->lines[ar].cells)
-        return &s->lines[ar].cells[0].Char.UnicodeChar;
-    return NULL;
-}
-
 /* 复制时判断某个 cell 是否为「宽字符占位格」。宽字符（中文/全角/BMP 宽符号）
  * 在屏幕上占两列：主格写字、次格写 0 占位（vt.c screen_put_cp）。复制必须跳过
  * 这个次格，否则每个汉字后多一个空格——"保留所有权利"变成"保 留 所 有 权 利"。
@@ -3599,26 +3587,22 @@ void handle_mouse(MOUSE_EVENT_RECORD *me) {
             int click_y = my - 1;
             if (click_y > s->rows - 1) click_y = s->rows - 1;
             if (!g_copy_mode || !g_copy_quick) {
-                /* First corner. 起点落在宽字符次格时左退到主格，保证整字。 */
-                const WCHAR *sl = copy_line_at(s, p, click_y);
-                int ax = sl ? snap_left_to_char(sl, s->cols, click_x) : click_x;
+                /* First corner. 光标精确落在鼠标所在列（可停在汉字中间的
+                 * 任一列）；选区是否整字化由渲染高亮 / 复制时的 snap 负责。 */
                 g_copy_mode = 1;
                 ui_modes_claim();
                 g_copy_quick = 1;
-                g_copy_cx = ax;
+                g_copy_cx = click_x;
                 g_copy_cy = click_y;
-                g_copy_anchor_x = ax;
+                g_copy_anchor_x = click_x;
                 g_copy_anchor_abs_y = screen_to_abs_row(s, click_y, p->scroll_offset);
                 g_copy_sel_active = 1;
                 g_copy_block = quick_alt ? 1 : 0;
             } else {
                 /* Second corner: only the end point moves. */
-                /* 拖动过程整字化：向右扩时指针落在汉字主格就跳到次格（一次跨过
-                 * 整字），向左扩时落在次格就退到主格——光标永不停在半个字上。 */
-                const WCHAR *sl = copy_line_at(s, p, click_y);
-                int cx = sl ? copy_quantize_cursor(sl, s->cols, click_x, g_copy_anchor_x)
-                            : click_x;
-                g_copy_cx = cx;
+                /* 光标精确跟随鼠标，可停在宽字符中间；选区边界在渲染/复制
+                 * 时整字吸附，不切半个汉字。 */
+                g_copy_cx = click_x;
                 g_copy_cy = click_y;
                 if (quick_alt) g_copy_block = 1;
                 else if (quick_shift) g_copy_block = 0;
@@ -3634,26 +3618,17 @@ void handle_mouse(MOUSE_EVENT_RECORD *me) {
             int abs_y = screen_to_abs_row(s, my - 1, p->scroll_offset);
             int cur_x = mx < s->cols ? mx : s->cols - 1;
             if (cur_x < 0) cur_x = 0;
-            /* 普通左键拖选也整字化：起点落宽字符次格退到字首，拖动终点
-             * 向右扩到字尾/向左收到字首——鼠标移过中文/emoji 一次跨过整字。 */
-            const WCHAR *sl = (s->in_alt_screen && s->alt_buffer)
-                ? &s->alt_buffer[(size_t)(my - 1) * s->cols].Char.UnicodeChar
-                : NULL;
-            if (!sl && !s->in_alt_screen) {
-                int ar = screen_phys_row(s, my - 1 - p->scroll_offset);
-                if (ar >= 0 && s->lines && s->lines[ar].cells)
-                    sl = &s->lines[ar].cells[0].Char.UnicodeChar;
-            }
+            /* 鼠标坐标原样记录——光标/选区端点精确跟随鼠标，可停在汉字中间
+             * 任一列；选区是否整字化由渲染高亮与复制取色时的 snap 决定。 */
             if (!g_mouse_selecting) {
                 g_mouse_selecting = 1;
-                int sx = sl ? snap_left_to_char(sl, s->cols, cur_x) : cur_x;
-                g_mouse_sel_sx = sx;
+                g_mouse_sel_sx = cur_x;
                 g_mouse_sel_s_abs_y = abs_y;
-                g_mouse_sel_ex = sx;
+                g_mouse_sel_ex = cur_x;
                 g_mouse_sel_e_abs_y = abs_y;
                 g_mux.needs_redraw = 1;
             } else {
-                g_mouse_sel_ex = sl ? copy_quantize_cursor(sl, s->cols, cur_x, g_mouse_sel_sx) : cur_x;
+                g_mouse_sel_ex = cur_x;
                 g_mouse_sel_e_abs_y = abs_y;
                 g_mux.needs_redraw = 1;
             }
