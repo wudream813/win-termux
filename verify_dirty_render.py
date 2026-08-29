@@ -197,10 +197,52 @@ static void test_cursor_toggle(void) {
     framediff_free(&fd);
 }
 
+/* v1.8.13 回归：colortool 色块行设了背景之后，后续默认色的变化行单独发出时
+ * 必须自成一个 SGR 作用域。framediff 增量帧只把变化行的整段字节发给终端，终端
+ * 实际的 SGR 状态停在上一帧最后发出的行（色块行的背景），而不是整帧顺序里本行
+ * 的上一行。渲染器因此必须在每行 CUP 后先复位，令任意行单独发出都与整帧一致。
+ * 本测试用修复后渲染器应产出的字节形态验证集成契约：增量切片里变化行段的 CUP
+ * 之后紧跟复位，且未变化色块行的背景 SGR 不会泄漏进增量。 */
+static void test_sgr_row_scope(void) {
+    FrameDiff fd; framediff_init(&fd);
+    char out[65536];
+
+    const char *f1 =
+        "\x1b[1;1H\x1b[0m\x1b[0;48;2;100;100;100m####\x1b[0m\x1b[K"
+        "\x1b[2;1H\x1b[0m\x1b[0;38;2;200;200;200mtext\x1b[0m\x1b[K";
+    framediff_begin_frame(&fd, 2);
+    framediff_scan(&fd, f1, strlen(f1));
+    { size_t _n = framediff_emit(&fd, NULL, 0); (void)_n; }
+    { size_t _n = framediff_emit(&fd, out, sizeof(out)); (void)_n; }
+
+    /* 帧 2：只有第 2 行变化（text -> NEXT）；第 1 行色块完全不动。 */
+    const char *f2 =
+        "\x1b[1;1H\x1b[0m\x1b[0;48;2;100;100;100m####\x1b[0m\x1b[K"
+        "\x1b[2;1H\x1b[0m\x1b[0;38;2;200;200;200mNEXT\x1b[0m\x1b[K";
+    framediff_begin_frame(&fd, 2);
+    framediff_scan(&fd, f2, strlen(f2));
+    { size_t _n = framediff_emit(&fd, NULL, 0); (void)_n; }
+    { size_t n = framediff_emit(&fd, out, sizeof(out)); out[n] = 0; }
+
+    char *cup2 = strstr(out, "\x1b[2;1H");
+    CHECK(cup2 != NULL, "changed default row 2 must emit");
+    if (cup2) {
+        CHECK(memcmp(cup2 + 6, "\x1b[0m", 4) == 0,
+              "emitted row 2 chunk must begin with \x1b[0m (self-contained SGR scope)");
+    }
+    CHECK(strstr(out, "\x1b[1;1H") == NULL, "unchanged color-block row 1 must not be re-emitted");
+    CHECK(strstr(out, "48;2;100;100;100") == NULL,
+          "background SGR of unchanged row 1 must NOT leak into the delta");
+    CHECK(strstr(out, "NEXT") != NULL, "row 2 new text must be present");
+
+    framediff_free(&fd);
+}
+
 int main(void) {
     test_basic();
     test_invalidate_and_resize();
     test_cursor_toggle();
+    test_sgr_row_scope();
     if (failures) { printf("[FAIL] %d check(s) failed\n", failures); return 1; }
     printf("[OK] 脏区渲染验证通过（首帧全发 / 未变帧 0 行 / 只发变化行 / OSC always / invalidate / resize / 光标随行）。\n");
     return 0;
@@ -229,6 +271,34 @@ def main():
         if r.returncode != 0:
             print(r.stderr)
             sys.exit(1)
+
+    check_render_sgr_scope()
+
+
+def check_render_sgr_scope():
+    """源码不变量 (v1.8.13)：终端行循环里，每行 CUP 之后必须先 \\x1b[0m 复位并重置
+    颜色哨兵，保证任意一行被 framediff 单独切片发出时都自成 SGR 作用域（不跨行
+    携带 SGR）。render.c 依赖 Win32 API 无法在此编译执行，故以源码锚点锁死修复，
+    变异（删掉行首复位/哨兵重置）会被这里抓到。"""
+    print("--- 源码不变量: 每行自成 SGR 作用域 (render.c) ---")
+    src = (ROOT / "src" / "render.c").read_text(encoding="utf-8")
+    anchor = 'for (int y = 0; y < rr; y++)'
+    i = src.find(anchor)
+    assert i != 0 and i != -1, "render.c: 找不到终端行循环锚点 %r" % anchor
+    head = src[i:i + 1800]
+    cell_x = head.find("for (int x = 0; x < text_rc; x++)")
+    assert cell_x > 0, "render.c: 终端行循环内找不到 cell 循环"
+    pre = head[:cell_x]  # 行首 CUP 与本行第一个 cell 之间的所有代码
+    assert '\\x1b[0m' in pre, ("render.c: 行首 CUP 之后缺少 \\x1b[0m 复位；"
+                               "增量帧单独发出某行时会沿用上一帧末行的 SGR（背景丢失回归）")
+    reset_pos = pre.find('\\x1b[0m')
+    cup_pos = pre.find('\\x1b[%d;1H')
+    assert cup_pos != -1 and reset_pos > cup_pos, "render.c: \\x1b[0m 复位必须在行首 CUP 之后"
+    for tok in ("la_attr = 0xFFFF", "la_fv = -1", "la_bv = -1"):
+        assert tok in pre[:pre.find('\\x1b[0m') + 6] or tok in pre, (
+            "render.c: 行首缺少颜色哨兵重置 %r" % tok)
+    assert pre.find('la_attr = 0xFFFF') < cell_x, "render.c: la_attr 哨兵必须在 cell 循环前重置"
+    print("[OK] render.c 行首复位 + 颜色哨兵重置在位（任意行单独发出与整帧一致）。")
 
 
 if __name__ == "__main__":

@@ -2158,6 +2158,15 @@ void render_screen(void) {
 
             for (int y = 0; y < rr; y++) {
                 pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H", y + 2);
+                /* v1.8.13 脏区修复：每一行都必须自成一个 SGR 作用域。增量帧只会
+                 * 发出与上一帧不同的行，此时终端里实际的 SGR 状态是「上一帧最后
+                 * 发出的那一行」留下的，而不是整帧顺序里本行上一行的状态。本行
+                 * 第一个 cell 以前靠「颜色和上一行末尾相同就不发 SGR」的跨行携带，
+                 * 单独重发时背景/前景就会丢（colortool 色块行之后，后续变化行
+                 * 不重发背景 SGR，整块背景就没了）。行首先复位，并强制本行第一个
+                 * 非空 cell 重发完整颜色，保证任意一行单独发出都和整帧一致。 */
+                pos += snprintf(out + pos, bs - pos, "\x1b[0m");
+                la_attr = 0xFFFF; la_fr = 0; la_br = 0; la_fv = -1; la_bv = -1;
                 int ar = (vo > 0 && !s->in_alt_screen) ? screen_phys_row(s, y - vo) : -1;
                 int cur_cell_abs_y = screen_to_abs_row(s, y, vo);
                 int match_lo = 0, match_hi = 0;
