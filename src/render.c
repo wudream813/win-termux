@@ -2061,15 +2061,27 @@ static int terminal_cursor_position(const ScreenBuffer *s, int scroll_offset,
     return 1;
 }
 
+/* 渲染时取屏幕第 row 行的整行 WCHAR（供选区端点整字吸附）。活屏与回滚历史
+ * 都要覆盖：原来只在 vo>0 时才有 phys 行，活屏 ar=-1 会漏吸附，导致在当前
+ * 屏幕上鼠标选中汉字时高亮把宽字符切成半个（看似光标停在字中间）。 */
+static const WCHAR *render_sel_line(ScreenBuffer *s, int row, int vo) {
+    if (s->in_alt_screen && s->alt_buffer && row >= 0 && row < s->rows)
+        return &s->alt_buffer[(size_t)row * s->cols].Char.UnicodeChar;
+    int abs_y = screen_to_abs_row(s, row, vo);
+    int pr = (abs_y >= 0 && abs_y < s->total_lines)
+             ? (s->scroll_top - s->hist_lines + abs_y + s->total_lines * 2) % s->total_lines : -1;
+    if (pr < 0 || pr >= s->total_lines || !s->lines || !s->lines[pr].cells) return NULL;
+    return &s->lines[pr].cells[0].Char.UnicodeChar;
+}
+
 /* 选区在某一行上的端点吸附到完整字符：块选每行两端都吸；流式选区只在
  * 首行吸左、末行吸右，中间整行不碰。宽字符（中文/全角/emoji）由此不会被
  * 切成半个高亮/半个复制。sel_active 为 0 时直接返回。 */
-static void snap_sel_row(ScreenBuffer *s, int ar, int sel_active, int block,
+static void snap_sel_row(ScreenBuffer *s, int row, int vo, int sel_active, int block,
                                int cur_abs_y, int min_abs_y, int max_abs_y,
                                int *sel_min_x, int *sel_max_x) {
     if (!sel_active) return;
-    const WCHAR *sl = (ar >= 0 && s->lines && s->lines[ar].cells)
-                      ? &s->lines[ar].cells[0].Char.UnicodeChar : NULL;
+    const WCHAR *sl = render_sel_line(s, row, vo);
     if (!sl) return;
     int at_first = (cur_abs_y == min_abs_y), at_last = (cur_abs_y == max_abs_y);
     if (block) {
@@ -2190,7 +2202,7 @@ void render_screen(void) {
                 int ar = (vo > 0 && !s->in_alt_screen) ? screen_phys_row(s, y - vo) : -1;
                 int cur_cell_abs_y = screen_to_abs_row(s, y, vo);
 
-                snap_sel_row(s, ar, sel_active, sel_block, cur_cell_abs_y, sel_min_abs_y, sel_max_abs_y, &sel_min_x, &sel_max_x);
+                snap_sel_row(s, y, vo, sel_active, sel_block, cur_cell_abs_y, sel_min_abs_y, sel_max_abs_y, &sel_min_x, &sel_max_x);
                 int match_lo = 0, match_hi = 0;
                 if (g_search_active && g_search_match_count > 0) {
                     int lo = 0, hi = g_search_match_count;

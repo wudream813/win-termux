@@ -147,6 +147,21 @@ def main():
         print(r.stdout)
         if r.returncode != 0:
             print(r.stderr); raise SystemExit(1)
+    # v1.8.24 修复：渲染高亮在【活屏】(vo==0) 也必须整字吸附。旧实现只在回滚
+    # (vo>0，ar>=0) 时才拿到行，活屏 ar=-1 直接跳过吸附，于是当前屏幕上鼠标选中
+    # 汉字会把宽字符切成半个（看似光标停在字中间）。要求 snap_sel_row 通过
+    # render_sel_line(s, row, vo) 取行（覆盖活屏+回滚+alt），而不是依赖 ar。
+    render_c = open(os.path.join(ROOT, "src", "render.c"), encoding="utf-8").read()
+    if "static const WCHAR *render_sel_line(ScreenBuffer *s, int row, int vo)" not in render_c:
+        raise SystemExit("render.c 缺少 render_sel_line()（活屏选区整字取行）")
+    call = "snap_sel_row(s, y, vo,"
+    if call not in render_c:
+        raise SystemExit("snap_sel_row 未按 (s, y, vo, ...) 传屏幕行+滚动偏移（活屏无法吸附）")
+    # 旧的按 ar（活屏为 -1）取行方式不得残留
+    if "const WCHAR *sl = (ar >= 0" in render_c:
+        raise SystemExit("snap_sel_row 仍按 ar 取行——活屏(ar=-1)会漏整字吸附")
+    print("[ok] 渲染高亮：活屏/回滚/alt 均经 render_sel_line 整字吸附（不切半个汉字）")
+
     print("[OK] verify_copy_snap passed")
 
 
