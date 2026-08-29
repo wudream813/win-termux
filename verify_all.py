@@ -20,6 +20,7 @@ CHECKS = (
     "verify_attr_bg.py",
     "verify_copy_colors.py",
     "verify_copy_trailing_bg.py",
+    "verify_copy_wide.py",
     "verify_search.py",
     "verify_palette_search.py",
     "verify_input_layout.py",

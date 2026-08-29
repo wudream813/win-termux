@@ -19,6 +19,7 @@ typedef struct {
     unsigned char bg_valid;
     unsigned char bold;
     unsigned char underline;
+    unsigned char skip;     /* 1 = 宽字符（中文/全角/emoji BMP 占位）的次格，输出时跳过 */
 } ClipHtmlCell;
 
 typedef struct {

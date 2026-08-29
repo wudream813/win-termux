@@ -160,6 +160,13 @@ void cliphtml_frag_row(ClipHtmlBuf *b, const ClipHtmlCell *cells, int x0, int x1
     memset(&cur, 0, sizeof(cur));
     for (int x = x0; x <= x1; x++) {
         const ClipHtmlCell *c = &cells[x];
+
+        /* 宽字符（中文/全角/BMP 宽符号）占两列：次格是占位符（ch=0），
+         * 复制时整体跳过——不输出空格，也不打断同色 run（占位格与宽字符
+         * 同 attr，下一格样式相同会自然并回同一 span）。否则
+         * "保留所有权利" 会变成 "保 留 所 有 权 利"（v1.8.18 修复）。 */
+        if (c->skip) continue;
+
         RunStyle st;
         style_from_cell(&st, c);
 

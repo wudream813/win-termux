@@ -1082,6 +1082,18 @@ static void attr_palette_rgb(WORD attr, int is_bg, int *r, int *g, int *b) {
     cliphtml_palette16(ansi, r, g, b);
 }
 
+/* 复制时判断某个 cell 是否为「宽字符占位格」。宽字符（中文/全角/BMP 宽符号）
+ * 在屏幕上占两列：主格写字、次格写 0 占位（vt.c screen_put_cp）。复制必须跳过
+ * 这个次格，否则每个汉字后多一个空格——"保留所有权利"变成"保 留 所 有 权 利"。
+ * 判据：本格 ch==0，且左邻是占两列的宽字符。非 BMP emoji 的次格存的是低代理
+ * （ch!=0），由 cliphtml 代理对逻辑处理，不在此列；高代理（emoji 主格）的右邻
+ * 是低代理而非 0，也不会误判。 */
+static int copy_cell_is_wide_spacer(WCHAR ch, WCHAR prev_ch) {
+    if (ch != 0) return 0;
+    if (prev_ch >= 0xD800 && prev_ch <= 0xDBFF) return 0;  /* non-BMP 高代理，次格是低代理 */
+    return is_wide_cp((unsigned int)prev_ch) ? 1 : 0;
+}
+
 /* 复制成 HTML 时一行的右边界：纯文本会把行尾连续空格整段裁掉，但 HTML 里
  * “带颜色的空格”是看得见的内容——它铺着色块底色（colortool 网格里每个色块
  * 都是 '  gYw  '，末尾两个空格同样有背景色）。v1.8.17 修复：行尾空格只要
@@ -1161,6 +1173,32 @@ void copy_selection_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs
                 ch = cell->Char.UnicodeChar;
                 attr = cell->Attributes;
             }
+
+            /* 宽字符（中文/全角/BMP 宽符号，如"保"占两列）写入时主格写字、
+             * 次格写 0 占位（vt.c screen_put_cp）。复制必须把这个占位格整体
+             * 跳过，否则每个汉字后多一个空格——"保留所有权利"变成
+             * "保 留 所 有 权 利"。判据：本格 ch=0 且左邻是占两列的宽字符；
+             * 非 BMP emoji 的次格存的是低代理（ch!=0），由 cliphtml 代理对
+             * 逻辑处理，不在此列。 */
+            WCHAR prev_ch = 0;
+            if (ch == 0 && x > x_start) {
+                if (s->in_alt_screen) {
+                    if (s->alt_buffer && abs_y >= 0 && abs_y < s->rows)
+                        prev_ch = s->alt_buffer[abs_y * s->cols + (x - 1)].Char.UnicodeChar;
+                } else if (pr >= 0 && s->lines[pr].cells) {
+                    prev_ch = s->lines[pr].cells[x - 1].Char.UnicodeChar;
+                }
+            }
+            int is_wide_spacer = copy_cell_is_wide_spacer(ch, prev_ch);
+            if (is_wide_spacer) {
+                if (html_ok) {
+                    ClipHtmlCell *hc = &row_cells[x];
+                    memset(hc, 0, sizeof(*hc));
+                    hc->skip = 1;   /* 通知 cliphtml_frag_row 跳过此占位格 */
+                }
+                continue;
+            }
+
             WCHAR text_ch = (ch != 0) ? ch : L' ';
             wbuf[wlen++] = text_ch;
             if (text_ch != L' ') valid_x1 = x;   /* 末尾连续空格整体裁掉 */
