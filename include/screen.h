@@ -34,5 +34,7 @@ void cell_truecolor(ScreenBuffer *s, int row, int col, int ar, WORD *out_f, WORD
  * ncols 为宽度；返回夹紧/吸附后的列号。 */
 int snap_right_to_char(const WCHAR *line, int ncols, int x);
 int snap_left_to_char(const WCHAR *line, int ncols, int x);
+/* 复制模式按字符移动：一次跨过整个宽字符，dir=+1 右 / -1 左。 */
+int copy_step_char(const WCHAR *line, int ncols, int x, int dir);
 
 #endif // WIN_TERMUX_SCREEN_H

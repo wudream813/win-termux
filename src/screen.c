@@ -511,6 +511,51 @@ int snap_left_to_char(const WCHAR *line, int ncols, int x) {
     return x;
 }
 
+/* 单元格 k 是否为宽字符的【次格】（占位）：BMP 宽字符写 0、emoji 写低代理。
+ * lead[out]（非 NULL）返回该宽字符主格列号。 */
+static int cell_is_wide_trail(const WCHAR *line, int k, int *lead) {
+    if (k < 1) return 0;
+    WCHAR c = line[k];
+    if (c >= 0xDC00 && c <= 0xDFFF &&
+        line[k - 1] >= 0xD800 && line[k - 1] <= 0xDBFF) {
+        if (lead) *lead = k - 1;
+        return 1;
+    }
+    if (c == 0) {
+        WCHAR p = line[k - 1];
+        if (!(p >= 0xD800 && p <= 0xDBFF) && is_wide_cp((unsigned int)p)) {
+            if (lead) *lead = k - 1;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* 复制模式里按字符移动光标：一次跨过整个宽字符（中文/全角/emoji），光标永远
+ * 停在【主格】上，不停在次格（占位）。dir=+1 向右、-1 向左；line 为该行字符。
+ * 规则：右移 = 右侧下一个主格（宽字符主格跨 2 列）；左移 = 左边最近的主格
+ * （左邻若为次格，则该宽字符主格在再左一列）。 */
+int copy_step_char(const WCHAR *line, int ncols, int x, int dir) {
+    if (!line || dir == 0) return x;
+    if (x < 0) x = 0;
+    if (dir > 0) {
+        if (x >= ncols) return ncols - 1;
+        WCHAR c = line[x];
+        int emoji_lead = (c >= 0xD800 && c <= 0xDBFF && x + 1 < ncols &&
+                          line[x + 1] >= 0xDC00 && line[x + 1] <= 0xDFFF);
+        int wide_lead  = !(c >= 0xD800 && c <= 0xDFFF) && is_wide_cp((unsigned int)c);
+        int step = (emoji_lead || wide_lead) ? 2 : 1;
+        int nx = x + step;
+        return nx < ncols ? nx : ncols - 1;
+    } else {
+        if (x <= 0) return 0;
+        int lead;
+        if (cell_is_wide_trail(line, x - 1, &lead))
+            return lead;          /* 左邻是次格 -> 落到它的宽字符主格 */
+        return x - 1;             /* 左邻本身就是主格（窄字符/空格/宽主格） */
+    }
+}
+
 void cell_truecolor(ScreenBuffer *s, int row, int col, int ar, WORD *out_f, WORD *out_b, int *out_fv, int *out_bv) {    *out_f = RGB565_WHITE; *out_b = RGB565_BLACK;
     *out_fv = 0; *out_bv = 0;
     if (row < 0 || col < 0 || col >= s->cols) return;

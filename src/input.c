@@ -1082,6 +1082,18 @@ static void attr_palette_rgb(WORD attr, int is_bg, int *r, int *g, int *b) {
     cliphtml_palette16(ansi, r, g, b);
 }
 
+/* 取复制光标行（复制模式 cy 可视行，受 scroll_offset 影响）的字符缓冲，
+ * 供宽字符吸附/步进使用。无内容时返回 NULL。 */
+static const WCHAR *copy_line_at(ScreenBuffer *s, Pane *p, int cy) {
+    if (s->in_alt_screen && s->alt_buffer)
+        return &s->alt_buffer[(size_t)cy * s->cols].Char.UnicodeChar;
+    int ar = (p->scroll_offset > 0 && !s->in_alt_screen)
+             ? screen_phys_row(s, cy - p->scroll_offset) : -1;
+    if (ar >= 0 && s->lines && s->lines[ar].cells)
+        return &s->lines[ar].cells[0].Char.UnicodeChar;
+    return NULL;
+}
+
 /* 复制时判断某个 cell 是否为「宽字符占位格」。宽字符（中文/全角/BMP 宽符号）
  * 在屏幕上占两列：主格写字、次格写 0 占位（vt.c screen_put_cp）。复制必须跳过
  * 这个次格，否则每个汉字后多一个空格——"保留所有权利"变成"保 留 所 有 权 利"。
@@ -1425,12 +1437,28 @@ int handle_copy_mode_key(KEY_EVENT_RECORD *ke) {
     }
 
     if (vk == VK_LEFT || uc == 'h' || uc == 'H') {
-        if (g_copy_cx > 0) g_copy_cx--;
+        /* 左移一次跨过整个宽字符（中文/全角/emoji），不停在次格（占位）上。 */
+        int vo = p->scroll_offset;
+        int ar = (vo > 0 && !s->in_alt_screen) ? screen_phys_row(s, g_copy_cy - vo) : -1;
+        const WCHAR *sl = (s->in_alt_screen && s->alt_buffer)
+            ? &s->alt_buffer[(size_t)g_copy_cy * s->cols].Char.UnicodeChar
+            : (ar >= 0 && s->lines && s->lines[ar].cells)
+                ? &s->lines[ar].cells[0].Char.UnicodeChar : NULL;
+        g_copy_cx = sl ? copy_step_char(sl, s->cols, g_copy_cx, -1)
+                       : (g_copy_cx > 0 ? g_copy_cx - 1 : 0);
         g_mux.needs_redraw = 1;
         return 0;
     }
     if (vk == VK_RIGHT || uc == 'l' || uc == 'L') {
-        if (g_copy_cx < s->cols - 1) g_copy_cx++;
+        /* 右移一次跨过整个宽字符（中文/全角/emoji），不停在次格（占位）上。 */
+        int vo = p->scroll_offset;
+        int ar = (vo > 0 && !s->in_alt_screen) ? screen_phys_row(s, g_copy_cy - vo) : -1;
+        const WCHAR *sl = (s->in_alt_screen && s->alt_buffer)
+            ? &s->alt_buffer[(size_t)g_copy_cy * s->cols].Char.UnicodeChar
+            : (ar >= 0 && s->lines && s->lines[ar].cells)
+                ? &s->lines[ar].cells[0].Char.UnicodeChar : NULL;
+        g_copy_cx = sl ? copy_step_char(sl, s->cols, g_copy_cx, +1)
+                       : (g_copy_cx < s->cols - 1 ? g_copy_cx + 1 : s->cols - 1);
         g_mux.needs_redraw = 1;
         return 0;
     }
@@ -3571,19 +3599,31 @@ void handle_mouse(MOUSE_EVENT_RECORD *me) {
             int click_y = my - 1;
             if (click_y > s->rows - 1) click_y = s->rows - 1;
             if (!g_copy_mode || !g_copy_quick) {
-                /* First corner. */
+                /* First corner. 起点落在宽字符次格时左退到主格，保证整字。 */
+                const WCHAR *sl = copy_line_at(s, p, click_y);
+                int ax = sl ? snap_left_to_char(sl, s->cols, click_x) : click_x;
                 g_copy_mode = 1;
                 ui_modes_claim();
                 g_copy_quick = 1;
-                g_copy_cx = click_x;
+                g_copy_cx = ax;
                 g_copy_cy = click_y;
-                g_copy_anchor_x = click_x;
+                g_copy_anchor_x = ax;
                 g_copy_anchor_abs_y = screen_to_abs_row(s, click_y, p->scroll_offset);
                 g_copy_sel_active = 1;
                 g_copy_block = quick_alt ? 1 : 0;
             } else {
                 /* Second corner: only the end point moves. */
-                g_copy_cx = click_x;
+                /* 端点吸附到完整字符：拖过中文/emoji 不停在半个字上；锚点在左
+                 * 则终点右扩、锚点在右则终点左收。 */
+                const WCHAR *sl = copy_line_at(s, p, click_y);
+                int cx = click_x;
+                if (sl) {
+                    if (click_x >= g_copy_anchor_x)
+                        cx = snap_right_to_char(sl, s->cols, click_x);
+                    else
+                        cx = snap_left_to_char(sl, s->cols, click_x);
+                }
+                g_copy_cx = cx;
                 g_copy_cy = click_y;
                 if (quick_alt) g_copy_block = 1;
                 else if (quick_shift) g_copy_block = 0;
