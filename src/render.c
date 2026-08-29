@@ -2348,6 +2348,15 @@ void render_screen(void) {
         }
     }
 
+    /* v1.8.14 脏区修复：以下全是「光标」相关序列（定位 CUP + 显隐 ?25h/?25l），
+     * 它们是整帧的全局尾部，不属于任何一行的内容。若让 framediff 按行切片，
+     * 帧尾这个 CUP 会把光标序列折进「光标所在行」的 chunk——当那一行内容没变
+     * （别处正在刷输出、或滚动隐藏/回底重现）时整段不发，光标定位被吞掉，终端
+     * 光标就停在上一个发出的 CUP（常落在滚动条列），表现为「光标位置不对」。
+     * 光标序列必须逐帧无条件发出，故记录起点，让 framediff 只对前面的 body
+     * （标签栏 + 各内容行）做差分，光标段永远原样追加在增量帧末尾。 */
+    int cursor_pos = pos;
+
     if (g_search_mode) {
         int row, left, input_col, box_w;
         search_box_layout(g_mux.host_cols, &row, &left, &input_col, &box_w);
@@ -2470,12 +2479,16 @@ void render_screen(void) {
 
     /* 脏区输出：整帧按 CUP 切成逐行字节，只发与上一帧不同的行。
      * host 尺寸变化会让 begin_frame 检测到行数不一致并强制整帧重发。
-     * 注意 framediff 状态只在本线程（渲染循环）访问，放在锁外即可。 */
+     * 注意 framediff 状态只在本线程（渲染循环）访问，放在锁外即可。
+     * v1.8.14：只对 body（cursor_pos 之前：标签栏 + 各内容行 + 弹层）做行差分；
+     * cursor_pos 之后是光标段（定位 + 显隐），逐帧无条件追加到增量末尾——否则它会
+     * 被末尾 CUP 折进光标所在行的 chunk，那一行内容没变时整段被跳过，光标丢失。 */
+    size_t cursor_len = (size_t)(pos - cursor_pos);
     framediff_begin_frame(&g_frame_diff, g_mux.total_host_rows);
-    framediff_scan(&g_frame_diff, out, (size_t)pos);
-    size_t dlen = framediff_emit(&g_frame_diff, NULL, 0);
+    framediff_scan(&g_frame_diff, out, (size_t)cursor_pos);
+    size_t dlen = framediff_emit(&g_frame_diff, NULL, 0) + cursor_len;
     if (dlen < (size_t)pos) {
-        /* 增量路径：复用常驻缓冲，避免每帧 malloc。 */
+        /* 增量路径：复用常驻缓冲，先写差分 body，再原样追加光标段。 */
         if (dlen + 1 > g_diff_buf_cap) {
             size_t cap = g_diff_buf_cap > 0 ? g_diff_buf_cap : 8192;
             while (cap < dlen + 1) cap *= 2;
@@ -2483,7 +2496,9 @@ void render_screen(void) {
             if (nb) { g_diff_buf = nb; g_diff_buf_cap = cap; }
         }
         if (g_diff_buf && dlen + 1 <= g_diff_buf_cap) {
-            framediff_emit(&g_frame_diff, g_diff_buf, g_diff_buf_cap);
+            size_t blen = framediff_emit(&g_frame_diff, g_diff_buf, g_diff_buf_cap);
+            if (blen + cursor_len <= g_diff_buf_cap)
+                memcpy(g_diff_buf + blen, out + cursor_pos, cursor_len);
             host_write(g_diff_buf, (int)dlen);
         } else {
             host_write(out, pos);
