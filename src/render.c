@@ -2061,6 +2061,26 @@ static int terminal_cursor_position(const ScreenBuffer *s, int scroll_offset,
     return 1;
 }
 
+/* 选区在某一行上的端点吸附到完整字符：块选每行两端都吸；流式选区只在
+ * 首行吸左、末行吸右，中间整行不碰。宽字符（中文/全角/emoji）由此不会被
+ * 切成半个高亮/半个复制。sel_active 为 0 时直接返回。 */
+static void snap_sel_row(ScreenBuffer *s, int ar, int sel_active, int block,
+                               int cur_abs_y, int min_abs_y, int max_abs_y,
+                               int *sel_min_x, int *sel_max_x) {
+    if (!sel_active) return;
+    const WCHAR *sl = (ar >= 0 && s->lines && s->lines[ar].cells)
+                      ? &s->lines[ar].cells[0].Char.UnicodeChar : NULL;
+    if (!sl) return;
+    int at_first = (cur_abs_y == min_abs_y), at_last = (cur_abs_y == max_abs_y);
+    if (block) {
+        *sel_min_x = snap_left_to_char(sl, s->cols, *sel_min_x);
+        *sel_max_x = snap_right_to_char(sl, s->cols, *sel_max_x);
+    } else {
+        if (at_first) *sel_min_x = snap_left_to_char(sl, s->cols, *sel_min_x);
+        if (at_last)  *sel_max_x = snap_right_to_char(sl, s->cols, *sel_max_x);
+    }
+}
+
 void render_screen(void) {
     EnterCriticalSection(&g_mux.cs);
     if (g_mux.host_cols < 1 || g_mux.host_rows < 1 || g_mux.total_host_rows < 1) { LeaveCriticalSection(&g_mux.cs); return; }
@@ -2169,6 +2189,8 @@ void render_screen(void) {
                 la_attr = 0xFFFF; la_fr = 0; la_br = 0; la_fv = -1; la_bv = -1;
                 int ar = (vo > 0 && !s->in_alt_screen) ? screen_phys_row(s, y - vo) : -1;
                 int cur_cell_abs_y = screen_to_abs_row(s, y, vo);
+
+                snap_sel_row(s, ar, sel_active, sel_block, cur_cell_abs_y, sel_min_abs_y, sel_max_abs_y, &sel_min_x, &sel_max_x);
                 int match_lo = 0, match_hi = 0;
                 if (g_search_active && g_search_match_count > 0) {
                     int lo = 0, hi = g_search_match_count;

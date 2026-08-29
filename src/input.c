@@ -1157,6 +1157,29 @@ void copy_selection_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs
         }
         int rel_y = s->in_alt_screen ? abs_y : abs_y - s->hist_lines;
 
+        /* 选区端点吸附到完整字符：与渲染高亮一致，宽字符（中文/全角/emoji）
+         * 不被切半——首行左端点落在宽字符次格则左退一格，末行右端点落在宽字符
+         * 主格则右扩一格；块选每行两端都吸附。 */
+        {
+            const WCHAR *sline = NULL;
+            int sn = s->cols;
+            if (s->in_alt_screen && s->alt_buffer)
+                sline = &s->alt_buffer[(size_t)abs_y * s->cols].Char.UnicodeChar;
+            else if (pr >= 0 && s->lines && s->lines[pr].cells)
+                sline = &s->lines[pr].cells[0].Char.UnicodeChar;
+            if (sline) {
+                if (block) {
+                    x_start = snap_left_to_char(sline, sn, x_start);
+                    x_end = snap_right_to_char(sline, sn, x_end);
+                } else {
+                    if (abs_y == sy_abs) x_start = snap_left_to_char(sline, sn, x_start);
+                    if (abs_y == ey_abs) x_end = snap_right_to_char(sline, sn, x_end);
+                }
+                if (x_start < 0) x_start = 0;
+                if (x_end >= s->cols) x_end = s->cols - 1;
+            }
+        }
+
         int row_wlen_start = wlen;
         int valid_x1 = x_start - 1;  /* 行内最后一个非空格 cell（行尾空格裁掉） */
         for (int x = x_start; x <= x_end; x++) {

@@ -30,4 +30,9 @@ void detect_conpty_width(ScreenBuffer *s, int written_len);
 WORD build_attr(ScreenBuffer *s);
 void cell_truecolor(ScreenBuffer *s, int row, int col, int ar, WORD *out_f, WORD *out_b, int *out_fv, int *out_bv);
 
+/* 选区边界吸附到完整字符（避免选中半个宽字符）。line 为一行的 WCHAR，
+ * ncols 为宽度；返回夹紧/吸附后的列号。 */
+int snap_right_to_char(const WCHAR *line, int ncols, int x);
+int snap_left_to_char(const WCHAR *line, int ncols, int x);
+
 #endif // WIN_TERMUX_SCREEN_H

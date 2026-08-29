@@ -470,8 +470,48 @@ int screen_resize(ScreenBuffer *s, int nc, int nr) {
     return 1;
 }
 
-void cell_truecolor(ScreenBuffer *s, int row, int col, int ar, WORD *out_f, WORD *out_b, int *out_fv, int *out_bv) {
-    *out_f = RGB565_WHITE; *out_b = RGB565_BLACK;
+/* 选区边界「吸附到完整字符」。宽字符（中文/全角/宽符号占两列；emoji 等
+ * non-BMP 字符以高/低代理对占两格）在屏幕上跨两列，选区端点若正好落在它
+ * 中间，会出现「选中半个字」——高亮只盖一半、复制结果也容易错位。
+ * 规则（只看一行的字符缓冲，便于纯函数回归）：
+ *   - 右端点在某个宽字符的【主格】上（BMP 宽字符本格、或 emoji 高代理），
+ *     右扩 1 格把次格也纳入；
+ *   - 左端点落在某个宽字符的【次格】上（BMP 宽字符的占位 0、或 emoji 低代理），
+ *     左退 1 格把主格也纳入。
+ * 返回调整后的端点，夹紧到 [0, ncols-1]。 */
+int snap_right_to_char(const WCHAR *line, int ncols, int x) {
+    if (x < 0 || !line) return x;
+    if (x < ncols) {
+        WCHAR c = line[x];
+        int wide_lead =
+            ((c >= 0xD800 && c <= 0xDBFF) && x + 1 < ncols &&
+             line[x + 1] >= 0xDC00 && line[x + 1] <= 0xDFFF) ? 1
+            : (!(c >= 0xD800 && c <= 0xDFFF) && is_wide_cp((unsigned int)c));
+        if (wide_lead && x + 1 < ncols) return x + 1;
+    }
+    return x;
+}
+
+int snap_left_to_char(const WCHAR *line, int ncols, int x) {
+    (void)ncols;
+    if (x <= 0 || !line) return x;
+    WCHAR c = line[x];
+    /* emoji 低代理：主格在 x-1（高代理） */
+    if (c >= 0xDC00 && c <= 0xDFFF) {
+        if (x - 1 >= 0 && line[x - 1] >= 0xD800 && line[x - 1] <= 0xDBFF)
+            return x - 1;
+        return x;
+    }
+    /* BMP 宽字符的占位格：本格 ch==0、左邻是宽字符主格 */
+    if (c == 0) {
+        WCHAR prev = line[x - 1];
+        if (!(prev >= 0xD800 && prev <= 0xDBFF) && is_wide_cp((unsigned int)prev))
+            return x - 1;
+    }
+    return x;
+}
+
+void cell_truecolor(ScreenBuffer *s, int row, int col, int ar, WORD *out_f, WORD *out_b, int *out_fv, int *out_bv) {    *out_f = RGB565_WHITE; *out_b = RGB565_BLACK;
     *out_fv = 0; *out_bv = 0;
     if (row < 0 || col < 0 || col >= s->cols) return;
     if (s->in_alt_screen) {
