@@ -556,6 +556,18 @@ int copy_step_char(const WCHAR *line, int ncols, int x, int dir) {
     }
 }
 
+/* 复制模式里把【光标所在列】整字化：无论鼠标点选/拖动还是上下移动，光标都不
+ * 许停在宽字符的次格（半个汉字/全角/emoji）上。若 x 落在次格，则退到它所属宽
+ * 字符的主格；落在主格或窄字符上则原样返回。返回值夹紧到 [0, ncols-1]。 */
+int copy_cursor_to_lead(const WCHAR *line, int ncols, int x) {
+    if (!line) return x;
+    if (x < 0) return 0;
+    if (x >= ncols) return ncols > 0 ? ncols - 1 : 0;
+    int lead;
+    if (cell_is_wide_trail(line, x, &lead)) return lead;
+    return x;
+}
+
 void cell_truecolor(ScreenBuffer *s, int row, int col, int ar, WORD *out_f, WORD *out_b, int *out_fv, int *out_bv) {    *out_f = RGB565_WHITE; *out_b = RGB565_BLACK;
     *out_fv = 0; *out_bv = 0;
     if (row < 0 || col < 0 || col >= s->cols) return;

@@ -1,0 +1,173 @@
+#!/usr/bin/env python3
+"""verify_copy_cursor.py
+
+v1.8.23 回归：复制模式里【光标本身】永远停在整字（宽字符主格）上——无论鼠标
+点选/拖动，还是键盘上/下/左/右移动，都不许停在汉字/全角/emoji 的次格（半个字）
+中间。纯坐标整字化由 src/screen.c 的 copy_cursor_to_lead() 完成：落在次格则退
+到其主格，落在主格或窄字符上则原样返回，夹紧到 [0, ncols-1]。
+
+两部分：
+  1. 从【真实 src/screen.c】抽取 cell_is_wide_trail() + copy_cursor_to_lead()
+     与真实 utf8.o（is_wide_cp）链接，断言光标列整字化正确；
+     变异：令 copy_cursor_to_lead 恒返回 x（旧行为=光标可停半个字），用例即失败。
+  2. 源码接线断言：input.c 的鼠标快速复制两角、普通左键拖选、上下移动、进入
+     复制模式都调用了 copy_cursor_to_lead / copy_snap_cursor_to_char。
+"""
+import os
+import subprocess
+import tempfile
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+SCREEN_C = os.path.join(ROOT, "src", "screen.c")
+INPUT_C = os.path.join(ROOT, "src", "input.c")
+SRC = os.path.join(ROOT, "src")
+INC = os.path.join(ROOT, "include")
+
+HARNESS = r"""
+#include <stdio.h>
+#include <string.h>
+#include <wchar.h>
+typedef unsigned short WCHAR;
+static int cell_is_wide_trail(const WCHAR *line, int k, int *lead);
+int is_wide_cp(unsigned int cp);
+%(func)s
+
+static int failures = 0;
+static void ck(const char *n, int got, int want) {
+    if (got != want) { printf("[FAIL] %s: got %d want %d\n", n, got, want); failures++; }
+    else             { printf("[ok]   %s: %d\n", n, got); }
+}
+
+int main(void) {
+    /* "a 保 x"：col0 'a', col1 ' ', col2 保(主), col3 保占位0(次), col4 'x' */
+    WCHAR line1[16] = { 'a',' ',0x4FDD,0,'x', 0,0,0,0,0,0,0,0,0,0,0 };
+    int n = 16;
+
+    /* 光标落在宽字符【次格 col3】-> 必须整字化到主格 col2（不能停半字中间） */
+    ck("光标在汉字次格(3)->整字化到主格(2)", copy_cursor_to_lead(line1,n,3), 2);
+    /* 光标落在主格 col2 -> 保持 2（本就整字） */
+    ck("光标在汉字主格(2)->保持2", copy_cursor_to_lead(line1,n,2), 2);
+    /* 窄字符/空格列原样不动 */
+    ck("光标在ASCII(0)->保持0", copy_cursor_to_lead(line1,n,0), 0);
+    ck("光标在空格(1)->保持1", copy_cursor_to_lead(line1,n,1), 1);
+    ck("光标在x(4)->保持4", copy_cursor_to_lead(line1,n,4), 4);
+
+    /* emoji 代理对 😀：col1 高0xD83D 主格，col2 低0xDE00 次格 */
+    WCHAR line2[16]; memset(line2,0,sizeof line2);
+    line2[0]='A'; line2[1]=0xD83D; line2[2]=0xDE00; line2[3]='B';
+    ck("光标在emoji次格(2)->整字化到主格(1)", copy_cursor_to_lead(line2,n,2), 1);
+    ck("光标在emoji主格(1)->保持1", copy_cursor_to_lead(line2,n,1), 1);
+    ck("光标在emoji后B(3)->保持3", copy_cursor_to_lead(line2,n,3), 3);
+
+    /* 连续两个汉字 "中文"：col0 中主 col1 中次 col2 文主 col3 文次 col4 'z' */
+    WCHAR line3[8] = { 0x4E2D,0,0x6587,0,'z',0,0,0 };
+    ck("光标在中次格(1)->中主(0)", copy_cursor_to_lead(line3,8,1), 0);
+    ck("光标在文次格(3)->文主(2)", copy_cursor_to_lead(line3,8,3), 2);
+    ck("光标在文主(2)->保持2", copy_cursor_to_lead(line3,8,2), 2);
+
+    /* 边界夹紧 */
+    ck("光标负列->0", copy_cursor_to_lead(line1,n,-1), 0);
+    ck("光标越界(ncols)->末列15", copy_cursor_to_lead(line1,n,100), 15);
+    ck("空行(NULL)->原样3", copy_cursor_to_lead(NULL,n,3), 3);
+
+    if (failures) { printf("\n%d FAILURE(S)\n", failures); return 1; }
+    printf("\nALL COPY-CURSOR-TO-LEAD CHECKS PASSED\n");
+    return 0;
+}
+"""
+
+
+def extract(src, name):
+    idx = src.find("\n" + name)
+    if idx < 0:
+        idx = src.find(name)
+    if idx < 0:
+        raise SystemExit("找不到 " + name)
+    ls = src.rfind("\n", 0, idx) + 1
+    brace = src.find("{", idx)
+    depth = 0
+    i = brace
+    while i < len(src):
+        if src[i] == "{":
+            depth += 1
+        elif src[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[ls:i + 1]
+        i += 1
+    raise SystemExit("花括号不配对 " + name)
+
+
+def build_and_run(func_text, label):
+    with tempfile.TemporaryDirectory() as td:
+        stub = os.path.join(td, "stub")
+        os.makedirs(stub)
+        open(os.path.join(stub, "windows.h"), "w").write(
+            "#pragma once\n#include <stddef.h>\n#include <wchar.h>\n"
+            "typedef unsigned short WORD; typedef wchar_t WCHAR;\n"
+            "typedef unsigned long DWORD; typedef void* HANDLE; typedef int BOOL;\n")
+        for hdr in ["shellapi.h", "process.h", "windowsx.h"]:
+            open(os.path.join(stub, hdr), "w").write('#pragma once\n#include "windows.h"\n')
+        uo = os.path.join(td, "utf8.o")
+        p = subprocess.run(["gcc", "-O1", "-g", "-fsanitize=address,undefined",
+                            "-I", stub, "-I", INC, "-c", os.path.join(SRC, "utf8.c"), "-o", uo],
+                           capture_output=True, text=True)
+        if p.returncode != 0:
+            print(p.stderr); raise SystemExit("utf8 编译失败")
+        hc = os.path.join(td, "h.c"); bp = os.path.join(td, "h")
+        open(hc, "w").write(HARNESS.replace("%(func)s", func_text))
+        p = subprocess.run(["gcc", "-O1", "-g", "-fsanitize=address,undefined",
+                            "-Wall", "-Wextra", "-Werror", "-I", INC, hc, uo, "-o", bp],
+                           capture_output=True, text=True)
+        if p.returncode != 0:
+            print(p.stdout); print(p.stderr); raise SystemExit("编译失败: " + label)
+        r = subprocess.run([bp], capture_output=True, text=True,
+                           env={**os.environ, "ASAN_OPTIONS": "detect_leaks=0"})
+        print(r.stdout)
+        if r.stderr:
+            print(r.stderr)
+        return r.returncode
+
+
+def main():
+    src = open(SCREEN_C, encoding="utf-8").read()
+    func = extract(src, "cell_is_wide_trail") + "\n" + extract(src, "copy_cursor_to_lead")
+
+    # 1) 正常源码：应全部通过
+    rc = build_and_run(func, "normal")
+    if rc != 0:
+        raise SystemExit(1)
+
+    # 2) 变异：检测到次格却忽略主格、仍返回 x（=旧行为，光标可停半个字），用例必须失败
+    mutated = func.replace(
+        "    if (cell_is_wide_trail(line, x, &lead)) return lead;",
+        "    if (cell_is_wide_trail(line, x, &lead)) { /*MUTANT*/ }")
+    if mutated == func:
+        raise SystemExit("变异未生效（找不到替换点）")
+    rc = build_and_run(mutated, "mutant")
+    if rc == 0:
+        raise SystemExit("变异居然通过——测试未能捕获『光标停在半个汉字』的回归！")
+    print("[ok] 变异(恒返回x) 被测试正确捕获")
+
+    # 3) input.c 接线断言：所有会移动复制光标的入口都做了整字化
+    isrc = open(INPUT_C, encoding="utf-8").read()
+    wiring = [
+        "copy_cursor_to_lead",   # 整字化纯函数被调用
+        "copy_snap_cursor_to_char(p, s)",  # 上下移动后整字化
+    ]
+    for tok in wiring:
+        if tok not in isrc:
+            raise SystemExit("input.c 缺少接线: " + tok)
+    # 上下移动必须各调用一次整字化（k/K 与 j/J 两个分支）
+    if isrc.count("copy_snap_cursor_to_char(p, s);") < 2:
+        raise SystemExit("VK_UP / VK_DOWN 两分支未都调用 copy_snap_cursor_to_char")
+    # 鼠标普通拖选与快速复制两角都要经过整字化（至少 3 处 copy_cursor_to_lead 调用点）
+    if isrc.count("copy_cursor_to_lead(") < 3:
+        raise SystemExit("鼠标点选/拖选/入口 未全部经过 copy_cursor_to_lead")
+    print("[ok] input.c 接线：鼠标两角+普通拖选+上下移动+进入复制模式 均整字化")
+
+    print("[OK] verify_copy_cursor passed")
+
+
+if __name__ == "__main__":
+    main()

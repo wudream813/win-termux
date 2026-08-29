@@ -306,6 +306,10 @@ static void palette_open_color(void) {
     if (g_pop_anchor_x < 0) g_pop_anchor_x = 0;
 }
 
+/* 复制模式取行 / 光标整字化（定义在复制模式处理处，前置声明以便入口复用）。 */
+static const WCHAR *copy_line_at_cy(Pane *p, ScreenBuffer *s, int cy);
+static void copy_snap_cursor_to_char(Pane *p, ScreenBuffer *s);
+
 static void palette_open_copy_mode(void) {
     if (g_mux.active_pane < 0 || g_mux.active_pane >= g_mux.pane_count ||
         !g_mux.panes[g_mux.active_pane].active) {
@@ -321,6 +325,9 @@ static void palette_open_copy_mode(void) {
     g_copy_block = 0;
     g_copy_cx = p->screen.cursor_x;
     g_copy_cy = p->screen.cursor_y;
+    /* 进入复制模式即把光标整字化：绝不从半个汉字的位置起步。 */
+    g_copy_cx = copy_cursor_to_lead(
+        copy_line_at_cy(p, &p->screen, g_copy_cy), p->screen.cols, g_copy_cx);
     g_mux.needs_redraw = 1;
 }
 
@@ -1335,6 +1342,27 @@ static void copy_mode_anchor_here(Pane *p, ScreenBuffer *s) {
     g_copy_sel_active = 1;
 }
 
+/* 取复制模式第 cy 行（屏幕行）的字符缓冲；与复制取色 / 渲染高亮用同一套
+ * abs->phys 映射，alt 屏直接用 cy。无内容时返回 NULL。 */
+static const WCHAR *copy_line_at_cy(Pane *p, ScreenBuffer *s, int cy) {
+    if (s->in_alt_screen && s->alt_buffer)
+        return &s->alt_buffer[(size_t)cy * s->cols].Char.UnicodeChar;
+    int abs_y = screen_to_abs_row(s, cy, p->scroll_offset);
+    int pr = (abs_y >= 0 && abs_y < s->total_lines)
+             ? (s->scroll_top - s->hist_lines + abs_y + s->total_lines * 2) % s->total_lines : -1;
+    if (pr < 0 || pr >= s->total_lines || !s->lines || !s->lines[pr].cells) return NULL;
+    return &s->lines[pr].cells[0].Char.UnicodeChar;
+}
+
+/* 把 g_copy_cx 整字化：光标永远停在宽字符主格上，绝不停在半个汉字中间。
+ * 在鼠标点选/拖动、上下移动后调用。 */
+static void copy_snap_cursor_to_char(Pane *p, ScreenBuffer *s) {
+    const WCHAR *sl = copy_line_at_cy(p, s, g_copy_cy);
+    g_copy_cx = copy_cursor_to_lead(sl, s->cols, g_copy_cx);
+    if (g_copy_cx < 0) g_copy_cx = 0;
+    if (g_copy_cx >= s->cols) g_copy_cx = s->cols - 1;
+}
+
 /* Copy mode entered by clicking two points with Shift/Alt is a one-shot
  * session: Ctrl+C / Enter copy and close, Esc closes, and any other key closes
  * and is handed back to the pane (that is what the 1 return value means). */
@@ -1425,26 +1453,16 @@ int handle_copy_mode_key(KEY_EVENT_RECORD *ke) {
     }
 
     if (vk == VK_LEFT || uc == 'h' || uc == 'H') {
-        /* 左移一次跨过整个宽字符（中文/全角/emoji），不停在次格（占位）上。 */
-        int vo = p->scroll_offset;
-        int ar = (vo > 0 && !s->in_alt_screen) ? screen_phys_row(s, g_copy_cy - vo) : -1;
-        const WCHAR *sl = (s->in_alt_screen && s->alt_buffer)
-            ? &s->alt_buffer[(size_t)g_copy_cy * s->cols].Char.UnicodeChar
-            : (ar >= 0 && s->lines && s->lines[ar].cells)
-                ? &s->lines[ar].cells[0].Char.UnicodeChar : NULL;
+        /* 左移一次跨过整个宽字符（中文/全角/emoji），永远停在主格上。 */
+        const WCHAR *sl = copy_line_at_cy(p, s, g_copy_cy);
         g_copy_cx = sl ? copy_step_char(sl, s->cols, g_copy_cx, -1)
                        : (g_copy_cx > 0 ? g_copy_cx - 1 : 0);
         g_mux.needs_redraw = 1;
         return 0;
     }
     if (vk == VK_RIGHT || uc == 'l' || uc == 'L') {
-        /* 右移一次跨过整个宽字符（中文/全角/emoji），不停在次格（占位）上。 */
-        int vo = p->scroll_offset;
-        int ar = (vo > 0 && !s->in_alt_screen) ? screen_phys_row(s, g_copy_cy - vo) : -1;
-        const WCHAR *sl = (s->in_alt_screen && s->alt_buffer)
-            ? &s->alt_buffer[(size_t)g_copy_cy * s->cols].Char.UnicodeChar
-            : (ar >= 0 && s->lines && s->lines[ar].cells)
-                ? &s->lines[ar].cells[0].Char.UnicodeChar : NULL;
+        /* 右移一次跨过整个宽字符（中文/全角/emoji），永远停在主格上。 */
+        const WCHAR *sl = copy_line_at_cy(p, s, g_copy_cy);
         g_copy_cx = sl ? copy_step_char(sl, s->cols, g_copy_cx, +1)
                        : (g_copy_cx < s->cols - 1 ? g_copy_cx + 1 : s->cols - 1);
         g_mux.needs_redraw = 1;
@@ -1456,6 +1474,8 @@ int handle_copy_mode_key(KEY_EVENT_RECORD *ke) {
         } else if (p->scroll_offset < s->hist_lines) {
             p->scroll_offset++;
         }
+        /* 上下移动后光标列也不许停在半个汉字中间：整字化到主格。 */
+        copy_snap_cursor_to_char(p, s);
         g_mux.needs_redraw = 1;
         return 0;
     }
@@ -1465,6 +1485,8 @@ int handle_copy_mode_key(KEY_EVENT_RECORD *ke) {
         } else if (p->scroll_offset > 0) {
             p->scroll_offset--;
         }
+        /* 上下移动后光标列也不许停在半个汉字中间：整字化到主格。 */
+        copy_snap_cursor_to_char(p, s);
         g_mux.needs_redraw = 1;
         return 0;
     }
@@ -1487,6 +1509,7 @@ int handle_copy_mode_key(KEY_EVENT_RECORD *ke) {
     }
     if (vk == VK_END || uc == '$') {
         g_copy_cx = s->cols - 1;
+        copy_snap_cursor_to_char(p, s);   /* 行尾若为宽字符次格，退到主格 */
         g_mux.needs_redraw = 1;
         return 0;
     }
@@ -2467,6 +2490,9 @@ void action_execute(int action, int arg, DWORD ctrl) {
                 g_copy_block = 0;
                 g_copy_cx = p->screen.cursor_x;
                 g_copy_cy = p->screen.cursor_y;
+                /* 进入复制模式即把光标整字化：绝不从半个汉字的位置起步。 */
+                g_copy_cx = copy_cursor_to_lead(
+                    copy_line_at_cy(p, &p->screen, g_copy_cy), p->screen.cols, g_copy_cx);
                 g_mux.needs_redraw = 1;
             }
             break;
@@ -3587,23 +3613,27 @@ void handle_mouse(MOUSE_EVENT_RECORD *me) {
             int click_y = my - 1;
             if (click_y > s->rows - 1) click_y = s->rows - 1;
             if (!g_copy_mode || !g_copy_quick) {
-                /* First corner. 光标精确落在鼠标所在列（可停在汉字中间的
-                 * 任一列）；选区是否整字化由渲染高亮 / 复制时的 snap 负责。 */
+                /* First corner. 光标点在哪一行的哪一列，都整字化到宽字符主格——
+                 * 鼠标点选绝不许停在半个汉字中间（终点与锚点同为整字）。 */
                 g_copy_mode = 1;
                 ui_modes_claim();
                 g_copy_quick = 1;
-                g_copy_cx = click_x;
                 g_copy_cy = click_y;
-                g_copy_anchor_x = click_x;
+                g_copy_cx = click_x;
+                g_copy_cx = copy_cursor_to_lead(
+                    copy_line_at_cy(p, s, g_copy_cy), s->cols, g_copy_cx);
+                g_copy_anchor_x = g_copy_cx;
                 g_copy_anchor_abs_y = screen_to_abs_row(s, click_y, p->scroll_offset);
                 g_copy_sel_active = 1;
                 g_copy_block = quick_alt ? 1 : 0;
             } else {
                 /* Second corner: only the end point moves. */
-                /* 光标精确跟随鼠标，可停在宽字符中间；选区边界在渲染/复制
-                 * 时整字吸附，不切半个汉字。 */
-                g_copy_cx = click_x;
+                /* 终点列也整字化：拖动时光标一格格跳过宽字符，不停在半字上；
+                 * 渲染高亮 / 复制取色仍按整字吸附，双保险不切半个汉字。 */
                 g_copy_cy = click_y;
+                g_copy_cx = click_x;
+                g_copy_cx = copy_cursor_to_lead(
+                    copy_line_at_cy(p, s, g_copy_cy), s->cols, g_copy_cx);
                 if (quick_alt) g_copy_block = 1;
                 else if (quick_shift) g_copy_block = 0;
             }
@@ -3615,11 +3645,14 @@ void handle_mouse(MOUSE_EVENT_RECORD *me) {
 
     if (!s->mouse_tracking && !p->is_settings && my >= 1 && !g_sb_dragging) {
         if (me->dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED) {
-            int abs_y = screen_to_abs_row(s, my - 1, p->scroll_offset);
+            int cur_y = my - 1;
+            int abs_y = screen_to_abs_row(s, cur_y, p->scroll_offset);
             int cur_x = mx < s->cols ? mx : s->cols - 1;
             if (cur_x < 0) cur_x = 0;
-            /* 鼠标坐标原样记录——光标/选区端点精确跟随鼠标，可停在汉字中间
-             * 任一列；选区是否整字化由渲染高亮与复制取色时的 snap 决定。 */
+            /* 拖动时光标/选区端点整字化：落在宽字符次格（半个汉字）则退到主格，
+             * 普通鼠标拖选也不许停在半个字中间。 */
+            cur_x = copy_cursor_to_lead(
+                copy_line_at_cy(p, s, cur_y), s->cols, cur_x);
             if (!g_mouse_selecting) {
                 g_mouse_selecting = 1;
                 g_mouse_sel_sx = cur_x;
