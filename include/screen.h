@@ -36,5 +36,7 @@ int snap_right_to_char(const WCHAR *line, int ncols, int x);
 int snap_left_to_char(const WCHAR *line, int ncols, int x);
 /* 复制模式按字符移动：一次跨过整个宽字符，dir=+1 右 / -1 左。 */
 int copy_step_char(const WCHAR *line, int ncols, int x, int dir);
+/* 复制模式拖动鼠标：按整字把光标准点对齐（向右扩到次格、向左收到主格）。 */
+int copy_quantize_cursor(const WCHAR *line, int ncols, int x, int anchor_x);
 
 #endif // WIN_TERMUX_SCREEN_H

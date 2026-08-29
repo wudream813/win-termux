@@ -3613,16 +3613,11 @@ void handle_mouse(MOUSE_EVENT_RECORD *me) {
                 g_copy_block = quick_alt ? 1 : 0;
             } else {
                 /* Second corner: only the end point moves. */
-                /* 端点吸附到完整字符：拖过中文/emoji 不停在半个字上；锚点在左
-                 * 则终点右扩、锚点在右则终点左收。 */
+                /* 拖动过程整字化：向右扩时指针落在汉字主格就跳到次格（一次跨过
+                 * 整字），向左扩时落在次格就退到主格——光标永不停在半个字上。 */
                 const WCHAR *sl = copy_line_at(s, p, click_y);
-                int cx = click_x;
-                if (sl) {
-                    if (click_x >= g_copy_anchor_x)
-                        cx = snap_right_to_char(sl, s->cols, click_x);
-                    else
-                        cx = snap_left_to_char(sl, s->cols, click_x);
-                }
+                int cx = sl ? copy_quantize_cursor(sl, s->cols, click_x, g_copy_anchor_x)
+                            : click_x;
                 g_copy_cx = cx;
                 g_copy_cy = click_y;
                 if (quick_alt) g_copy_block = 1;
@@ -3639,15 +3634,26 @@ void handle_mouse(MOUSE_EVENT_RECORD *me) {
             int abs_y = screen_to_abs_row(s, my - 1, p->scroll_offset);
             int cur_x = mx < s->cols ? mx : s->cols - 1;
             if (cur_x < 0) cur_x = 0;
+            /* 普通左键拖选也整字化：起点落宽字符次格退到字首，拖动终点
+             * 向右扩到字尾/向左收到字首——鼠标移过中文/emoji 一次跨过整字。 */
+            const WCHAR *sl = (s->in_alt_screen && s->alt_buffer)
+                ? &s->alt_buffer[(size_t)(my - 1) * s->cols].Char.UnicodeChar
+                : NULL;
+            if (!sl && !s->in_alt_screen) {
+                int ar = screen_phys_row(s, my - 1 - p->scroll_offset);
+                if (ar >= 0 && s->lines && s->lines[ar].cells)
+                    sl = &s->lines[ar].cells[0].Char.UnicodeChar;
+            }
             if (!g_mouse_selecting) {
                 g_mouse_selecting = 1;
-                g_mouse_sel_sx = cur_x;
+                int sx = sl ? snap_left_to_char(sl, s->cols, cur_x) : cur_x;
+                g_mouse_sel_sx = sx;
                 g_mouse_sel_s_abs_y = abs_y;
-                g_mouse_sel_ex = cur_x;
+                g_mouse_sel_ex = sx;
                 g_mouse_sel_e_abs_y = abs_y;
                 g_mux.needs_redraw = 1;
             } else {
-                g_mouse_sel_ex = cur_x;
+                g_mouse_sel_ex = sl ? copy_quantize_cursor(sl, s->cols, cur_x, g_mouse_sel_sx) : cur_x;
                 g_mouse_sel_e_abs_y = abs_y;
                 g_mux.needs_redraw = 1;
             }
