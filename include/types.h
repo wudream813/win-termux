@@ -216,6 +216,7 @@ extern int g_search_len, g_search_pos;
 // Diagnostic functions
 void dump_pane_bytes(int pane_idx, const char *data, int len);
 void dump_render_output(const char *out, int len, int pcols, int prows, int hcols, int hrows);
+void dump_delta_output(const char *data, int delta_len, int full_len);
 void log_mouse_event(const char *tag, const MOUSE_EVENT_RECORD *me);
 void host_write(const char *data, int len);
 

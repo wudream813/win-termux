@@ -98,6 +98,23 @@ void dump_render_output(const char *data, int len, int mcols, int mrows, int hco
     fclose(f);
 }
 
+/* v1.8.15 诊断：实际通过帧差分发给宿主终端的增量字节（整帧 vs 增量对照）。
+ * 仅在 TERMUX_DUMP 环境变量存在时写 render_delta.log，用于排查脏区渲染问题。 */
+void dump_delta_output(const char *data, int delta_len, int full_len) {
+    if (!g_dump_enabled || delta_len <= 0) return;
+    static int s_frame = 0;
+    s_frame++;
+    /* 采样：每 20 帧记一次，避免日志暴涨；增量帧（delta<full）始终记，
+     * 因为脏区问题只出现在增量路径。 */
+    if (delta_len >= full_len && (s_frame % 20) != 0) return;
+    FILE *f = fopen("render_delta.log", "ab");
+    if (!f) return;
+    fprintf(f, "[delta %d / full %d]\n", delta_len, full_len);
+    fwrite(data, 1, (size_t)delta_len, f);
+    fputc('\n', f);
+    fclose(f);
+}
+
 void log_mouse_event(const char *tag, const MOUSE_EVENT_RECORD *me) {
     if (!g_dump_enabled) return;
     unsigned btn = (unsigned)me->dwButtonState;

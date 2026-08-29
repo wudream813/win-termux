@@ -163,7 +163,13 @@ WORD build_attr(ScreenBuffer *s) {
         FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY,
         FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY
     };
-    WORD a = ctab[fg & 15] | ((ctab[bg & 15] >> 4) << 4);
+    /* v1.8.15 修复：ctab[] 里存的是「前景」位标志（FOREGROUND_*，值 0..0xF），
+     * 背景需要把同样的颜色位左移 4 位到 BACKGROUND_* 位置（如红 0x04<<4=0x40）。
+     * 旧代码写成 (ctab[bg] >> 4) << 4——前景值右移 4 位恒为 0，导致所有走
+     * 16/256 色 attr 的程序内容背景位永远是 0（黑背景）。colortool -c 的色块
+     * 用的正是 ESC[48;5;Nm（量化进 attr），因此背景整片丢失。真彩（48;2;..）
+     * 走 bg_rgb_on 分支不经这里，所以 win-termux 自身 UI 与真彩程序不受影响。 */
+    WORD a = ctab[fg & 15] | (ctab[bg & 15] << 4);
     if (s->bold) a |= FOREGROUND_INTENSITY;
     if (s->underline) a |= COMMON_LVB_UNDERSCORE;
     return a;

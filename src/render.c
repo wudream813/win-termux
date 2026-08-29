@@ -2499,12 +2499,15 @@ void render_screen(void) {
             size_t blen = framediff_emit(&g_frame_diff, g_diff_buf, g_diff_buf_cap);
             if (blen + cursor_len <= g_diff_buf_cap)
                 memcpy(g_diff_buf + blen, out + cursor_pos, cursor_len);
+            dump_delta_output(g_diff_buf, (int)dlen, (int)pos);
             host_write(g_diff_buf, (int)dlen);
         } else {
+            dump_delta_output(out, pos, (int)pos);
             host_write(out, pos);
         }
     } else {
         /* 增量没省到（或分配失败）：发整帧。 */
+        dump_delta_output(out, pos, (int)pos);
         host_write(out, pos);
     }
 }

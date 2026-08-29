@@ -86,8 +86,8 @@ void process_sgr(ScreenBuffer *s, const int *p, int n) {
                 } else if (v == 48 && i + 2 < n && p[i+1] == 5) {
                     int c = p[i+2];
                     if (c < 16) s->bg_color = c;
-                    else if (c < 232) { c -= 16; s->bg_color = ((c/36)>2?1:0)|((c/6%6)>2?2:0)|((c%6)>2?4:0); }
-                    else s->bg_color = (c-232)>12?7:0;
+                    else if (c < 232) { c -= 16; s->bg_color = ((c/36)>2?1:0)|((c/6%6)>2?2:0)|((c%6)>2?4:0); if((c/36)>3||(c/6%6)>3||(c%6)>3) s->bg_color|=8; }
+                    else s->bg_color = (c-232)>12?15:0;
                     s->bg_rgb_on = 0;
                     i += 2;
                 } else if (v == 38 && i + 4 < n && p[i+1] == 2) {
