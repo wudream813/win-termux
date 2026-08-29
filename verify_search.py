@@ -32,9 +32,12 @@ def extract_func(text, prefix):
                 return text[idx : i + 1]
     return None
 
-f_search = extract_func(src, "void execute_search(void)")
+f_search = extract_func(src, "static void run_search(int live)")
 if not f_search:
-    sys.exit("FAIL: execute_search not found in src/input.c")
+    sys.exit("FAIL: run_search not found in src/input.c")
+# 保留对外的 execute_search()/search_preview_live() 薄封装，源码里它们转调 run_search。
+f_search += "\nvoid execute_search(void) { run_search(0); }\n"
+f_search += "\nvoid search_preview_live(void) { run_search(1); }\n"
 
 f_next = extract_func(src, "void search_jump_next(void)")
 if not f_next:
@@ -244,11 +247,36 @@ int main(void) {
     execute_search();
     assert(g_search_match_count == 3);
 
+    // v1.8.26 实时预览（VSCode 式）：边打字边高亮，不滚动、不钉到最后一个匹配。
+    {
+        int before_vo = g_mux.panes[0].scroll_offset;
+        g_search_mode = 1;
+        g_search_active = 0; g_search_match_count = 0; g_search_match_cur = -1;
+        strcpy(g_search_buf, "error");
+        g_search_len = (int)strlen(g_search_buf);
+        search_preview_live();          // live=1
+        assert(g_search_active == 1);
+        assert(g_search_match_count == 3);      // 全部匹配已算出来
+        assert(g_search_match_cur == 0);        // 实时预览：指针置 0（不钉最后）
+        assert(g_mux.panes[0].scroll_offset == before_vo);  // 视图不滚动
+        // 关键词清空：实时预览也清掉高亮
+        g_search_buf[0] = 0; g_search_len = 0;
+        search_preview_live();
+        assert(g_search_active == 0);
+        assert(g_search_match_count == 0);
+        g_search_mode = 0;
+        // 恢复后重新跑一次正式搜索，供后续断言
+        g_search_case_sensitive = 0;
+        strcpy(g_search_buf, "error");
+        g_search_len = (int)strlen(g_search_buf);
+        execute_search();
+    }
+
     free(s->lines[pr10].cells);
     free(s->lines[pr50].cells);
     free(s->lines[pr95].cells);
     free(s->lines);
-    printf("Scrollback Search real source test passed successfully: 3/3 matches + 大小写锁定 3 例验证通过。\n");
+    printf("Scrollback Search real source test passed successfully: 3/3 matches + 大小写锁定 + 实时预览(不滚动/计数/cur=0/清空) 验证通过。\n");
     return 0;
 }
 """
@@ -275,6 +303,24 @@ def main():
             return 1
         print("  " + run_res.stdout.strip())
         print("  [OK] 滚动历史搜索 (Scrollback History Search) 真实源码验证通过！")
+
+    # v1.8.26 源码不变量：
+    # (1) 实时预览接线——搜索框编辑后必须调 search_preview_live()；
+    # (2) 搜索徽章悬停不再展开重复的「U 上一个·D 下一个」长提示（按钮已常驻）。
+    root = os.path.dirname(os.path.abspath(__file__))
+    input_c = open(os.path.join(root, "src", "input.c"), encoding="utf-8").read()
+    render_c = open(os.path.join(root, "src", "render.c"), encoding="utf-8").read()
+    if "search_preview_live();" not in input_c:
+        sys.exit("FAIL: 搜索框编辑后未调用 search_preview_live()（无实时预览）")
+    # run_search 必须有 live 参数且 live 时不滚动
+    if "static void run_search(int live)" not in input_c or "if (!live)" not in input_c:
+        sys.exit("FAIL: run_search 缺少 live 参数 / live 时不应滚动")
+    # 悬停展开只允许复制模式（b.kind == 1）；搜索（kind==2）不得再有 U 上一个长提示
+    if "hovered && b.kind == 1" not in render_c:
+        sys.exit("FAIL: 徽章悬停展开未限制为复制模式（搜索悬停提示应移除）")
+    if "U 上一个 · D 下一个" in render_c:
+        sys.exit("FAIL: 搜索徽章悬停仍展开重复的「U 上一个·D 下一个」长提示")
+    print("  [OK] 实时预览已接线（编辑即高亮、不滚动）；搜索悬停重复提示已移除。")
     return 0
 
 if __name__ == "__main__":

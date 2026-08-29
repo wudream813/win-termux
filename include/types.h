@@ -194,6 +194,7 @@ extern int g_sb_grab_offset;
 extern int g_copy_mode;
 extern int g_copy_sel_active;
 extern int g_copy_cx, g_copy_cy;
+extern int g_copy_end_x;   /* 选区端点（键盘=主格光标；鼠标=原始列） */
 extern int g_copy_anchor_x, g_copy_anchor_abs_y;
 extern int g_copy_block;   /* 1 = 矩形（框）选区，0 = 行内连续选区 */
 extern int g_copy_quick;   /* Shift/Alt 点选发起的临时复制会话 */

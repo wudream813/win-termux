@@ -168,10 +168,28 @@ def main():
     # 上下移动必须各调用一次整字化（k/K 与 j/J 两个分支）
     if isrc.count("copy_snap_cursor_to_char(p, s);") < 2:
         raise SystemExit("VK_UP / VK_DOWN 两分支未都调用 copy_snap_cursor_to_char")
-    # 鼠标普通拖选与快速复制两角都要经过整字化（至少 3 处 copy_cursor_to_lead 调用点）
+    # 鼠标普通拖选与快速复制两角：光标点用 copy_cursor_to_lead 吸主格（显示）。
     if isrc.count("copy_cursor_to_lead(") < 3:
-        raise SystemExit("鼠标点选/拖选/入口 未全部经过 copy_cursor_to_lead")
-    print("[ok] input.c 接线：鼠标两角+普通拖选+上下移动+进入复制模式 均整字化")
+        raise SystemExit("鼠标点选/入口 的光标 未经过 copy_cursor_to_lead")
+    # v1.8.26：选区【端点】必须与光标分离，存原始鼠标列（g_copy_end_x），
+    # 交给渲染/复制 snap 按方向整字扩展，否则向右拖会把点到的汉字漏掉（偏左一格）。
+    if "g_copy_end_x" not in isrc:
+        raise SystemExit("input.c 缺少选区端点 g_copy_end_x（端点/光标未分离）")
+    # 第二角（终点）必须记原始点击列，而不是吸到主格的 g_copy_cx
+    if "g_copy_end_x = click_x;" not in isrc:
+        raise SystemExit("鼠标第二角终点未记原始列（g_copy_end_x = click_x 缺失）")
+    # 普通拖选（g_mouse_selecting）不得再对端点强制 copy_cursor_to_lead（保留
+    # 原始列，snap 按方向扩展）。取拖选段：从 g_mouse_sel_sx 首次赋值往前一点。
+    drag_idx = isrc.find("g_mouse_sel_sx = cur_x;")
+    drag_head = isrc.rfind("FROM_LEFT_1ST_BUTTON_PRESSED", 0, drag_idx)
+    drag_seg = isrc[drag_head:drag_idx + 40]
+    if "copy_cursor_to_lead" in drag_seg:
+        raise SystemExit("普通拖选端点不应强制吸主格（会导致选区偏左一格）")
+    # yank 必须用选区端点 g_copy_end_x，而不是光标 g_copy_cx
+    yank_seg = isrc[isrc.find("static void copy_mode_yank("):isrc.find("static void copy_mode_yank(") + 400]
+    if "g_copy_end_x" not in yank_seg:
+        raise SystemExit("copy_mode_yank 未用 g_copy_end_x 作为复制端点")
+    print("[ok] 光标吸主格显示、选区端点 g_copy_end_x 记原始列（向右拖不漏字/不偏左）")
 
     print("[OK] verify_copy_cursor passed")
 

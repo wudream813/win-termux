@@ -92,8 +92,11 @@ check("int block_x0 = sx < ex ? sx : ex;" in clip and
       "int x_start = block ? block_x0" in clip and
       "int x_end = block ? block_x1" in clip,
       "块复制没有对每一行取同一段列")
-check("if (block) {\n            while (wlen > row_wlen_start && wbuf[wlen - 1] == L' ') wlen--;" in clip,
-      "块复制没有逐行去掉行尾空白")
+# v1.8.26：块（矩形）复制不再逐行裁掉所有尾随空格，而是「只有需要向右补全
+# 的行才补到块右边界；完全空的行保留为空行」（可复制出「啊/空行/c」这种）。
+check("if (valid_x1 < x_start)" in clip and "补全到块右边界" in clip and
+      "wlen = row_wlen_start;" in clip,
+      "块复制没有按『空行留空、内容行补全到块右边界』处理")
 check("void copy_range_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs) {\n"
       "    copy_selection_to_clipboard(p, sx, sy_abs, ex, ey_abs, 0);" in INPUT,
       "拖拽选择没有复用同一个复制实现")

@@ -1067,11 +1067,10 @@ void render_status_badge(char *out, int bs, int *posp, int host_cols) {
     int hovered = status_badge_hovered(&b);
     const char *panel = "\x1b[048;2;033;038;045m";
 
-    if (hovered) {
-        const char *hint = (b.kind == 1)
-            ? " Enter/Ctrl+C 复制 · Shift/Alt+方向改选区 · Esc 退出 "
-            : (g_search_case_sensitive ? " U 上一个 · D 下一个 · Esc 退出 · 大小写:锁定 "
-                                       : " U 上一个 · D 下一个 · Esc 退出 · 大小写:忽略 ");
+    /* 搜索徽章（kind==2）本身就常驻 [U 上]/[D 下]/[×] 按钮，悬停不再展开
+     * 重复的「U 上一个·D 下一个」长提示；只给复制模式（kind==1）保留悬停说明。 */
+    if (hovered && b.kind == 1) {
+        const char *hint = " Enter/Ctrl+C 复制 · Shift/Alt+方向改选区 · Esc 退出 ";
         int hint_cols = utf8_cols(hint, (int)strlen(hint));
         int hint_left = b.start - hint_cols;
         if (hint_left >= 1)
@@ -2164,17 +2163,19 @@ void render_screen(void) {
                 sel_min_abs_y = g_copy_anchor_abs_y < cur_abs_y ? g_copy_anchor_abs_y : cur_abs_y;
                 sel_max_abs_y = g_copy_anchor_abs_y > cur_abs_y ? g_copy_anchor_abs_y : cur_abs_y;
                 if (g_copy_block) {
-                    /* Rectangular selection: the same column range on every row. */
+                    /* Rectangular selection: the same column range on every row.
+                     * 用选区端点 g_copy_end_x（键盘=主格光标；鼠标=原始点击列），
+                     * snap_sel_row 再把每行两端整字吸附，光标显示列 g_copy_cx 不参与。 */
                     sel_block = 1;
-                    sel_min_x = g_copy_anchor_x < g_copy_cx ? g_copy_anchor_x : g_copy_cx;
-                    sel_max_x = g_copy_anchor_x > g_copy_cx ? g_copy_anchor_x : g_copy_cx;
+                    sel_min_x = g_copy_anchor_x < g_copy_end_x ? g_copy_anchor_x : g_copy_end_x;
+                    sel_max_x = g_copy_anchor_x > g_copy_end_x ? g_copy_anchor_x : g_copy_end_x;
                 } else if (g_copy_anchor_abs_y == cur_abs_y) {
-                    sel_min_x = g_copy_anchor_x < g_copy_cx ? g_copy_anchor_x : g_copy_cx;
-                    sel_max_x = g_copy_anchor_x > g_copy_cx ? g_copy_anchor_x : g_copy_cx;
+                    sel_min_x = g_copy_anchor_x < g_copy_end_x ? g_copy_anchor_x : g_copy_end_x;
+                    sel_max_x = g_copy_anchor_x > g_copy_end_x ? g_copy_anchor_x : g_copy_end_x;
                 } else if (g_copy_anchor_abs_y < cur_abs_y) {
-                    sel_min_x = g_copy_anchor_x; sel_max_x = g_copy_cx;
+                    sel_min_x = g_copy_anchor_x; sel_max_x = g_copy_end_x;
                 } else {
-                    sel_min_x = g_copy_cx; sel_max_x = g_copy_anchor_x;
+                    sel_min_x = g_copy_end_x; sel_max_x = g_copy_anchor_x;
                 }
                 sel_active = 1;
             } else if (g_mouse_selecting) {

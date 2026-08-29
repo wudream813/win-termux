@@ -36,6 +36,7 @@ int g_sb_grab_offset = 0;
 int g_copy_mode = 0;
 int g_copy_sel_active = 0;
 int g_copy_cx = 0, g_copy_cy = 0;
+int g_copy_end_x = 0;   /* 选区端点列：键盘=光标主格；鼠标=原始点击列（交给渲染/复制按方向整字扩展） */
 int g_copy_anchor_x = 0, g_copy_anchor_abs_y = 0;
 int g_copy_block = 0;
 int g_copy_quick = 0;

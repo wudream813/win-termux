@@ -41,11 +41,14 @@ void ui_modes_sync_pane(void) {
     g_mux.needs_redraw = 1;
 }
 
-void execute_search(void) {
+/* live=1：搜索框里边打字边调用，只计算并高亮匹配（像 VSCode 的实时预览），
+ *         不滚动、不把指针钉到某个匹配上；用户视图保持不动。
+ * live=0：回车确认，定位到当前匹配（从最后一个匹配起，按 U/D 循环）并滚动到位。 */
+static void run_search(int live) {
     g_search_match_count = 0;
     g_search_match_cur = -1;
     if (g_search_len <= 0) {
-        g_search_active = 0;
+        if (live) g_search_active = 0;   /* 关键词清空：实时预览也清掉高亮 */
         return;
     }
     if (g_mux.active_pane < 0 || g_mux.active_pane >= g_mux.pane_count) return;
@@ -56,7 +59,7 @@ void execute_search(void) {
     WCHAR wquery[64] = {0};
     int wq_len = MultiByteToWideChar(CP_UTF8, 0, g_search_buf, g_search_len, wquery, 63);
     if (wq_len <= 0) {
-        g_search_active = 0;
+        if (live) g_search_active = 0;
         return;
     }
 
@@ -107,18 +110,31 @@ void execute_search(void) {
 
     if (g_search_match_count > 0) {
         g_search_active = 1;
-        g_search_match_cur = g_search_match_count - 1;
-        int target_abs_y = g_search_matches[g_search_match_cur].abs_y;
-        if (!s->in_alt_screen) {
-            int vo = s->hist_lines - (target_abs_y - s->rows / 2);
-            if (vo < 0) vo = 0;
-            if (vo > s->hist_lines) vo = s->hist_lines;
-            p->scroll_offset = vo;
+        /* 实时预览：高亮全部匹配、计数显示 N 个，但不移动视图、也不钉指针；
+         * 回车确认才滚动并把当前指针放到最后一个匹配（U/D 从这里循环）。 */
+        g_search_match_cur = live ? 0 : g_search_match_count - 1;
+        if (!live) {
+            int target_abs_y = g_search_matches[g_search_match_cur].abs_y;
+            if (!s->in_alt_screen) {
+                int vo = s->hist_lines - (target_abs_y - s->rows / 2);
+                if (vo < 0) vo = 0;
+                if (vo > s->hist_lines) vo = s->hist_lines;
+                p->scroll_offset = vo;
+            }
         }
     } else {
         g_search_active = 0;
     }
     LeaveCriticalSection(&g_mux.cs);
+}
+
+void execute_search(void) {
+    run_search(0);
+}
+
+/* 搜索框内边打字边高亮（VSCode 式实时预览）：不滚动、不退出输入框。 */
+void search_preview_live(void) {
+    run_search(1);
 }
 
 void search_jump_next(void) {
@@ -328,6 +344,7 @@ static void palette_open_copy_mode(void) {
     /* 进入复制模式即把光标整字化：绝不从半个汉字的位置起步。 */
     g_copy_cx = copy_cursor_to_lead(
         copy_line_at_cy(p, &p->screen, g_copy_cy), p->screen.cols, g_copy_cx);
+    g_copy_end_x = g_copy_cx;
     g_mux.needs_redraw = 1;
 }
 
@@ -1001,6 +1018,9 @@ void handle_search_key(KEY_EVENT_RECORD *ke) {
 
     if (vk == VK_ESCAPE) {
         g_search_mode = 0;
+        /* 退出输入框：实时预览的高亮一并清掉。 */
+        g_search_active = 0;
+        g_search_match_count = 0;
         g_mux.needs_redraw = 1;
         return;
     }
@@ -1012,10 +1032,13 @@ void handle_search_key(KEY_EVENT_RECORD *ke) {
         return;
     }
 
+    /* 其余都是编辑键：内容变了就实时重算并高亮匹配（VSCode 式预览）。 */
+    int edited = 0;
+
     if (vk == VK_LEFT) {
         g_search_pos = utf8_prev_grapheme(g_search_buf, g_search_pos);
         g_mux.needs_redraw = 1;
-        return;
+        return;   /* 只移光标，不改内容，不必重算匹配 */
     }
     if (vk == VK_RIGHT) {
         g_search_pos = utf8_next_grapheme(g_search_buf, g_search_len, g_search_pos);
@@ -1034,13 +1057,13 @@ void handle_search_key(KEY_EVENT_RECORD *ke) {
     }
     if (vk == VK_BACK) {
         buf_backspace(g_search_buf, &g_search_len, &g_search_pos);
-        g_mux.needs_redraw = 1;
-        return;
+        edited = 1;
+        goto preview;
     }
     if (vk == VK_DELETE) {
         buf_delete(g_search_buf, &g_search_len, &g_search_pos);
-        g_mux.needs_redraw = 1;
-        return;
+        edited = 1;
+        goto preview;
     }
 
     if (uc >= 0xD800 && uc <= 0xDBFF) {
@@ -1065,10 +1088,17 @@ void handle_search_key(KEY_EVENT_RECORD *ke) {
         }
         if (u8_count > 0 && g_search_len + u8_count < (int)sizeof(g_search_buf) - 1) {
             buf_insert_utf8(g_search_buf, &g_search_len, &g_search_pos, sizeof(g_search_buf) - 1, u8, u8_count);
-            g_mux.needs_redraw = 1;
-            return;
+            edited = 1;
+            goto preview;
         }
     }
+    return;
+
+preview:
+    (void)edited;
+    /* 内容变了：边打字边重算并高亮全部匹配（不滚动、不退出输入框）。 */
+    search_preview_live();
+    g_mux.needs_redraw = 1;
 }
 
 void copy_range_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs) {
@@ -1262,10 +1292,28 @@ void copy_selection_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs
             }
         }
         if (block) {
-            while (wlen > row_wlen_start && wbuf[wlen - 1] == L' ') wlen--;
+            /* 块（矩形）选区：
+             *  - 完全空的行（块窗口内没有任何实际内容）保留为一个空行，这样
+             *    框选一列「啊 / 空行 / c」时，空行原样保留，复制得到：
+             *        啊
+             *        (空)
+             *        c
+             *  - 有内容但不到块右边界的行，用空格补全到块右边界（矩形列对齐）；
+             *  - 超过块右边界的尾随空格不补（x_end 即块右端，循环只到 x_end）。
+             * （流式选区仍在下面按行裁掉尾随空格。） */
+            int row_cells_in_block = x_end - x_start + 1;
+            if (valid_x1 < x_start) {
+                wlen = row_wlen_start;          /* 整行空：清掉补齐的空格，留空行 */
+            } else {
+                while (wlen - row_wlen_start < row_cells_in_block)
+                    wbuf[wlen++] = L' ';        /* 补全到块右边界 */
+            }
         }
         if (abs_y < ey_abs) {
-            while (wlen > row_wlen_start && wbuf[wlen - 1] == L' ') wlen--;
+            if (!block) {
+                /* 流式选区：裁掉行尾空格（非矩形，行末不齐）。 */
+                while (wlen > row_wlen_start && wbuf[wlen - 1] == L' ') wlen--;
+            }
             wbuf[wlen++] = L'\r';
             wbuf[wlen++] = L'\n';
         }
@@ -1332,12 +1380,15 @@ static void copy_mode_leave(Pane *p) {
 static void copy_mode_yank(Pane *p, ScreenBuffer *s) {
     if (!g_copy_sel_active) return;
     int cur_abs_y = screen_to_abs_row(s, g_copy_cy, p->scroll_offset);
+    /* 选区端点用 g_copy_end_x（键盘=主格光标；鼠标=原始点击列），复制时
+     * snap_left/right_to_char 按方向把边界整字扩展，不会切掉半个汉字。 */
     copy_selection_to_clipboard(p, g_copy_anchor_x, g_copy_anchor_abs_y,
-                                g_copy_cx, cur_abs_y, g_copy_block);
+                                g_copy_end_x, cur_abs_y, g_copy_block);
 }
 
 static void copy_mode_anchor_here(Pane *p, ScreenBuffer *s) {
     g_copy_anchor_x = g_copy_cx;
+    g_copy_end_x = g_copy_cx;
     g_copy_anchor_abs_y = screen_to_abs_row(s, g_copy_cy, p->scroll_offset);
     g_copy_sel_active = 1;
 }
@@ -1454,11 +1505,14 @@ int handle_copy_mode_key(KEY_EVENT_RECORD *ke) {
         return 0;
     }
 
+    /* 键盘移动：光标永远停在宽字符主格；选区端点与光标同列（主格），
+     * 渲染/复制的 snap 再按方向整字扩展。 */
     if (vk == VK_LEFT || uc == 'h' || uc == 'H') {
         /* 左移一次跨过整个宽字符（中文/全角/emoji），永远停在主格上。 */
         const CHAR_INFO *sl = copy_line_at_cy(p, s, g_copy_cy);
         g_copy_cx = sl ? copy_step_char(sl, s->cols, g_copy_cx, -1)
                        : (g_copy_cx > 0 ? g_copy_cx - 1 : 0);
+        g_copy_end_x = g_copy_cx;
         g_mux.needs_redraw = 1;
         return 0;
     }
@@ -1467,6 +1521,7 @@ int handle_copy_mode_key(KEY_EVENT_RECORD *ke) {
         const CHAR_INFO *sl = copy_line_at_cy(p, s, g_copy_cy);
         g_copy_cx = sl ? copy_step_char(sl, s->cols, g_copy_cx, +1)
                        : (g_copy_cx < s->cols - 1 ? g_copy_cx + 1 : s->cols - 1);
+        g_copy_end_x = g_copy_cx;
         g_mux.needs_redraw = 1;
         return 0;
     }
@@ -1478,6 +1533,7 @@ int handle_copy_mode_key(KEY_EVENT_RECORD *ke) {
         }
         /* 上下移动后光标列也不许停在半个汉字中间：整字化到主格。 */
         copy_snap_cursor_to_char(p, s);
+        g_copy_end_x = g_copy_cx;
         g_mux.needs_redraw = 1;
         return 0;
     }
@@ -1489,6 +1545,7 @@ int handle_copy_mode_key(KEY_EVENT_RECORD *ke) {
         }
         /* 上下移动后光标列也不许停在半个汉字中间：整字化到主格。 */
         copy_snap_cursor_to_char(p, s);
+        g_copy_end_x = g_copy_cx;
         g_mux.needs_redraw = 1;
         return 0;
     }
@@ -1506,12 +1563,14 @@ int handle_copy_mode_key(KEY_EVENT_RECORD *ke) {
     }
     if (vk == VK_HOME || uc == '0' || uc == '^') {
         g_copy_cx = 0;
+        g_copy_end_x = 0;
         g_mux.needs_redraw = 1;
         return 0;
     }
     if (vk == VK_END || uc == '$') {
         g_copy_cx = s->cols - 1;
         copy_snap_cursor_to_char(p, s);   /* 行尾若为宽字符次格，退到主格 */
+        g_copy_end_x = s->cols - 1;       /* 端点给到最右列，渲染/复制再整字扩展 */
         g_mux.needs_redraw = 1;
         return 0;
     }
@@ -2495,6 +2554,7 @@ void action_execute(int action, int arg, DWORD ctrl) {
                 /* 进入复制模式即把光标整字化：绝不从半个汉字的位置起步。 */
                 g_copy_cx = copy_cursor_to_lead(
                     copy_line_at_cy(p, &p->screen, g_copy_cy), p->screen.cols, g_copy_cx);
+                g_copy_end_x = g_copy_cx;
                 g_mux.needs_redraw = 1;
             }
             break;
@@ -3615,8 +3675,9 @@ void handle_mouse(MOUSE_EVENT_RECORD *me) {
             int click_y = my - 1;
             if (click_y > s->rows - 1) click_y = s->rows - 1;
             if (!g_copy_mode || !g_copy_quick) {
-                /* First corner. 光标点在哪一行的哪一列，都整字化到宽字符主格——
-                 * 鼠标点选绝不许停在半个汉字中间（终点与锚点同为整字）。 */
+                /* First corner. 光标整字化到宽字符主格（绝不停在半个汉字中间）；
+                 * 选区锚点/端点记鼠标原始列，渲染高亮 / 复制取色时 snap 按方向
+                 * 把被点到的汉字整字纳入（点左半或右半都选中整个字，不偏不漏）。 */
                 g_copy_mode = 1;
                 ui_modes_claim();
                 g_copy_quick = 1;
@@ -3624,18 +3685,19 @@ void handle_mouse(MOUSE_EVENT_RECORD *me) {
                 g_copy_cx = click_x;
                 g_copy_cx = copy_cursor_to_lead(
                     copy_line_at_cy(p, s, g_copy_cy), s->cols, g_copy_cx);
-                g_copy_anchor_x = g_copy_cx;
+                g_copy_anchor_x = click_x;
+                g_copy_end_x = click_x;
                 g_copy_anchor_abs_y = screen_to_abs_row(s, click_y, p->scroll_offset);
                 g_copy_sel_active = 1;
                 g_copy_block = quick_alt ? 1 : 0;
             } else {
                 /* Second corner: only the end point moves. */
-                /* 终点列也整字化：拖动时光标一格格跳过宽字符，不停在半字上；
-                 * 渲染高亮 / 复制取色仍按整字吸附，双保险不切半个汉字。 */
+                /* 端点记鼠标原始列（点到汉字左半/右半都由 snap 整字纳入，选区
+                 * 不向左偏一格）；光标仍整字化到主格用于显示。 */
                 g_copy_cy = click_y;
-                g_copy_cx = click_x;
                 g_copy_cx = copy_cursor_to_lead(
-                    copy_line_at_cy(p, s, g_copy_cy), s->cols, g_copy_cx);
+                    copy_line_at_cy(p, s, click_y), s->cols, click_x);
+                g_copy_end_x = click_x;
                 if (quick_alt) g_copy_block = 1;
                 else if (quick_shift) g_copy_block = 0;
             }
@@ -3651,10 +3713,9 @@ void handle_mouse(MOUSE_EVENT_RECORD *me) {
             int abs_y = screen_to_abs_row(s, cur_y, p->scroll_offset);
             int cur_x = mx < s->cols ? mx : s->cols - 1;
             if (cur_x < 0) cur_x = 0;
-            /* 拖动时光标/选区端点整字化：落在宽字符次格（半个汉字）则退到主格，
-             * 普通鼠标拖选也不许停在半个字中间。 */
-            cur_x = copy_cursor_to_lead(
-                copy_line_at_cy(p, s, cur_y), s->cols, cur_x);
+            /* 端点记鼠标原始列；点到汉字左半/右半都由渲染高亮 / 复制取色的
+             * snap 按方向整字纳入（左端吸主格、右端扩次格），选区不切半个字、
+             * 也不向左偏一格。 */
             if (!g_mouse_selecting) {
                 g_mouse_selecting = 1;
                 g_mouse_sel_sx = cur_x;
