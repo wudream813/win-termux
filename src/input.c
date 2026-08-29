@@ -1,4 +1,5 @@
 #include "input.h"
+#include "cliphtml.h"
 #include <ctype.h>
 
 void do_scroll(int d) {
@@ -1067,6 +1068,13 @@ void copy_range_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs) {
     copy_selection_to_clipboard(p, sx, sy_abs, ex, ey_abs, 0);
 }
 
+/* 16 色 attr -> RGB（默认 Campbell 调色板，与 Windows Terminal 一致）。
+ * attr 是 Windows 控制台属性字：低 4 位前景、高 4 位背景。 */
+static void attr_palette_rgb(WORD attr, int is_bg, int *r, int *g, int *b) {
+    int nibble = is_bg ? ((attr >> 4) & 0x0F) : (attr & 0x0F);
+    cliphtml_palette16(nibble, r, g, b);
+}
+
 void copy_selection_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs, int block) {
     if (!p) return;
     ScreenBuffer *s = &p->screen;
@@ -1084,10 +1092,17 @@ void copy_selection_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs
 
     int max_chars = total_lines * (s->cols + 2) + 64;
     WCHAR *wbuf = (WCHAR *)malloc(max_chars * sizeof(WCHAR));
-    if (!wbuf) return;
+    ClipHtmlCell *row_cells = (ClipHtmlCell *)malloc((s->cols > 0 ? s->cols : 1) * sizeof(ClipHtmlCell));
+    ClipHtmlBuf html;
+    cliphtml_init(&html);
+    int html_ok = (wbuf != NULL && row_cells != NULL);
+    if (!wbuf) { free(row_cells); cliphtml_free(&html); return; }
+    if (!row_cells) html_ok = 0;
     int wlen = 0;
 
     EnterCriticalSection(&g_mux.cs);
+    if (html_ok) cliphtml_frag_begin(&html);
+    int first_row = 1;
     for (int abs_y = sy_abs; abs_y <= ey_abs; abs_y++) {
         /* A block selection takes the same column window out of every row;
          * the stream selection runs from the start point to the end point. */
@@ -1096,26 +1111,61 @@ void copy_selection_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs
         if (x_start < 0) x_start = 0;
         if (x_end >= s->cols) x_end = s->cols - 1;
 
+        int pr = -1;
+        if (!s->in_alt_screen) {
+            int ar = abs_y;
+            if (ar >= 0 && ar < s->total_lines)
+                pr = (s->scroll_top - s->hist_lines + ar + s->total_lines * 2) % s->total_lines;
+            if (pr < 0 || pr >= s->total_lines || !s->lines || !s->lines[pr].cells) pr = -1;
+        }
+        int rel_y = s->in_alt_screen ? abs_y : abs_y - s->hist_lines;
+
         int row_wlen_start = wlen;
+        int valid_x1 = x_start - 1;  /* 行内最后一个非空格 cell（行尾空格裁掉） */
         for (int x = x_start; x <= x_end; x++) {
             CHAR_INFO *cell = NULL;
             if (s->in_alt_screen) {
                 if (abs_y >= 0 && abs_y < s->rows && s->alt_buffer) cell = &s->alt_buffer[abs_y * s->cols + x];
-            } else {
-                int ar = abs_y;
-                if (ar >= 0 && ar < s->total_lines && s->lines) {
-                    int pr = (s->scroll_top - s->hist_lines + ar + s->total_lines * 2) % s->total_lines;
-                    if (pr >= 0 && pr < s->total_lines && s->lines[pr].cells)
-                        cell = &s->lines[pr].cells[x];
-                }
+            } else if (pr >= 0) {
+                cell = &s->lines[pr].cells[x];
             }
+
+            WCHAR ch = 0;
+            WORD attr = 0x07;
             if (cell) {
-                WCHAR ch = cell->Char.UnicodeChar;
-                if (ch != 0) {
-                    wbuf[wlen++] = ch;
+                ch = cell->Char.UnicodeChar;
+                attr = cell->Attributes;
+            }
+            WCHAR text_ch = (ch != 0) ? ch : L' ';
+            wbuf[wlen++] = text_ch;
+            if (text_ch != L' ') valid_x1 = x;   /* 末尾连续空格整体裁掉 */
+
+            if (html_ok) {
+                ClipHtmlCell *hc = &row_cells[x];
+                memset(hc, 0, sizeof(*hc));
+                hc->ch = (unsigned short)text_ch;
+
+                WORD frgb, brgb; int fgv, bgv;
+                cell_truecolor(s, rel_y, x, pr, &frgb, &brgb, &fgv, &bgv);
+                if (fgv) {
+                    int cr, cg, cb; rgb565_split(frgb, &cr, &cg, &cb);
+                    hc->fg_valid = 1; hc->r = (unsigned char)cr; hc->g = (unsigned char)cg; hc->b = (unsigned char)cb;
+                } else if ((attr & 0x0F) != 0x07) {
+                    /* 默认前景（灰 7）不染色，保持目标应用自身文字色；
+                     * 其余 16 色按 Campbell 调色板给出。 */
+                    int cr, cg, cb; attr_palette_rgb(attr, 0, &cr, &cg, &cb);
+                    hc->fg_valid = 1; hc->r = (unsigned char)cr; hc->g = (unsigned char)cg; hc->b = (unsigned char)cb;
                 }
-            } else {
-                wbuf[wlen++] = L' ';
+                if (bgv) {
+                    int cr, cg, cb; rgb565_split(brgb, &cr, &cg, &cb);
+                    hc->bg_valid = 1; hc->br = (unsigned char)cr; hc->bg = (unsigned char)cg; hc->bb = (unsigned char)cb;
+                } else if ((attr >> 4) & 0x0F) {
+                    /* 背景 nibble 为 0（默认黑）时不染色。 */
+                    int cr, cg, cb; attr_palette_rgb(attr, 1, &cr, &cg, &cb);
+                    hc->bg_valid = 1; hc->br = (unsigned char)cr; hc->bg = (unsigned char)cg; hc->bb = (unsigned char)cb;
+                }
+                hc->bold = (attr & FOREGROUND_INTENSITY) ? 1 : 0;
+                hc->underline = (attr & COMMON_LVB_UNDERSCORE) ? 1 : 0;
             }
         }
         if (block) {
@@ -1126,11 +1176,28 @@ void copy_selection_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs
             wbuf[wlen++] = L'\r';
             wbuf[wlen++] = L'\n';
         }
+
+        if (html_ok) {
+            /* HTML 与文本一致：每行末尾的连续空格都裁掉（纯文本靠行末 trim，
+             * 这里直接把区间末端收到最后一个非空格 cell）。 */
+            while (valid_x1 >= x_start) {
+                WCHAR c = row_cells[valid_x1].ch;
+                if (c != 0 && c != L' ') break;
+                valid_x1--;
+            }
+            if (!first_row) cliphtml_frag_break(&html);
+            first_row = 0;
+            cliphtml_frag_row(&html, row_cells, x_start, valid_x1);
+        }
     }
     while (wlen > 0 && wbuf[wlen - 1] == L' ') wlen--;
     wbuf[wlen] = 0;
+
+    int html_ready = 0;
+    if (html_ok) html_ready = cliphtml_finalize(&html);
     LeaveCriticalSection(&g_mux.cs);
 
+    /* 剪贴板 API 在锁外调用，不阻塞读线程。 */
     if (wlen > 0 && OpenClipboard(NULL)) {
         EmptyClipboard();
         HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, (wlen + 1) * sizeof(WCHAR));
@@ -1142,8 +1209,25 @@ void copy_selection_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs
                 SetClipboardData(CF_UNICODETEXT, hMem);
             }
         }
+        if (html_ready && html.len > 0) {
+            /* HTML Format 是 UTF-8 字节，额外注册一个剪贴板格式，与纯文本并存：
+             * 浏览器 / Word / 邮件 / 富文本编辑器取彩色，记事本取纯文本。 */
+            UINT cf = RegisterClipboardFormatA("HTML Format");
+            HGLOBAL hHtml = GlobalAlloc(GMEM_MOVEABLE, html.len + 1);
+            if (cf && hHtml) {
+                char *pH = (char *)GlobalLock(hHtml);
+                if (pH) {
+                    memcpy(pH, html.data, html.len);
+                    pH[html.len] = 0;
+                    GlobalUnlock(hHtml);
+                    SetClipboardData(cf, hHtml);
+                }
+            }
+        }
         CloseClipboard();
     }
+    cliphtml_free(&html);
+    free(row_cells);
     free(wbuf);
 }
 

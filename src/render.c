@@ -1,4 +1,6 @@
 #include "render.h"
+#include "framediff.h"
+
 
 #define TB_BG        "\x1b[048;2;022;027;034m"
 #define TAB_IN_BG    "\x1b[048;2;033;038;045m"
@@ -1995,6 +1997,12 @@ void render_help_content(char *out, int bs, int *posp, int host_rows, int host_c
 static char *g_render_buf = NULL;
 static int g_render_buf_cap = 0;
 
+/* v1.8.12 脏区渲染：上一帧影子。整帧仍照常生成（绝对光标定位），
+ * 输出前按行与影子比对，没变的行不发，省掉绝大部分字节。 */
+static FrameDiff g_frame_diff;
+static char *g_diff_buf = NULL;
+static size_t g_diff_buf_cap = 0;
+
 static char *render_buffer_acquire(int needed) {
     if (needed <= 0) return NULL;
     if (g_render_buf_cap >= needed) return g_render_buf;
@@ -2450,7 +2458,31 @@ void render_screen(void) {
     LeaveCriticalSection(&g_mux.cs);
 
     theme_remap(out, pos);
-    host_write(out, pos);
+
+    /* 脏区输出：整帧按 CUP 切成逐行字节，只发与上一帧不同的行。
+     * host 尺寸变化会让 begin_frame 检测到行数不一致并强制整帧重发。
+     * 注意 framediff 状态只在本线程（渲染循环）访问，放在锁外即可。 */
+    framediff_begin_frame(&g_frame_diff, g_mux.total_host_rows);
+    framediff_scan(&g_frame_diff, out, (size_t)pos);
+    size_t dlen = framediff_emit(&g_frame_diff, NULL, 0);
+    if (dlen < (size_t)pos) {
+        /* 增量路径：复用常驻缓冲，避免每帧 malloc。 */
+        if (dlen + 1 > g_diff_buf_cap) {
+            size_t cap = g_diff_buf_cap > 0 ? g_diff_buf_cap : 8192;
+            while (cap < dlen + 1) cap *= 2;
+            char *nb = (char *)realloc(g_diff_buf, cap);
+            if (nb) { g_diff_buf = nb; g_diff_buf_cap = cap; }
+        }
+        if (g_diff_buf && dlen + 1 <= g_diff_buf_cap) {
+            framediff_emit(&g_frame_diff, g_diff_buf, g_diff_buf_cap);
+            host_write(g_diff_buf, (int)dlen);
+        } else {
+            host_write(out, pos);
+        }
+    } else {
+        /* 增量没省到（或分配失败）：发整帧。 */
+        host_write(out, pos);
+    }
 }
 
 void render_cleanup(void) {
@@ -2459,4 +2491,5 @@ void render_cleanup(void) {
         g_render_buf = NULL;
         g_render_buf_cap = 0;
     }
+    framediff_free(&g_frame_diff);
 }

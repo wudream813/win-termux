@@ -6,6 +6,15 @@
 
 ## 版本更新记录
 
+### v1.8.12
+- **复制时保留颜色（HTML Format 剪贴板）**：拖选 / 复制模式 / 块选复制时，除了原有的 `CF_UNICODETEXT` 纯文本，现在还会同时写入 `HTML Format` 富文本格式。粘到浏览器输入框、Word、邮件、富文本编辑器、即时通讯工具时，终端里的前景色 / 背景色 / 加粗 / 下划线一并保留；粘到记事本等纯文本目标时仍是纯文本，完全兼容。
+  - 真彩色 cell（`rgb_valid`）直出 `#rrggbb`；16 色 attr 按 Windows Terminal 默认的 **Campbell 调色板**给出，贴出来的颜色和终端里看到的一致。
+  - 相邻同色 cell 自动合并成一个 `<span>`（行程编码），HTML 体积不会随字符数膨胀；`<pre style="white-space:pre-wrap">` 保留空格与行首缩进，等宽字体对齐。
+  - HTML Format 头部四个字节偏移量（StartHTML / EndHTML / StartFragment / EndFragment）按规范自动计算并补齐；`&` `<` `>` 转义；UTF-16 代理对合成 4 字节 UTF-8（emoji 不截断）；空 cell 按空格处理。
+  - 纯逻辑收在新模块 `src/cliphtml.c`（不依赖 Win32），剪贴板 API 仍在锁外调用，不阻塞读线程。
+- **脏区渲染（只发变化行）**：整帧仍照常生成，但输出前由新模块 `src/framediff.c` 把整帧 VT 流按绝对光标定位（`\x1b[r;cH`）切成「每行一段字节」，与上一帧影子逐行 `memcmp`，**没变的行一个字节都不发**。空闲时（光标不闪烁、无输出）重绘只发标题等 `always` 段，实测稳态字节从整帧量级降到接近 0；有输出时只发真正变化的行。OSC 标题等不属于任何一行的序列归 `always` 段每帧照发，窗口尺寸变化 / 切标签页 / invalidate 自动整帧重发。
+- **验证**：新增 `verify_html_clipboard.py`（编译真实 `cliphtml.c` + ASAN/UBSan，断言四个偏移量精确指向标记、真彩色与 Campbell 16 色字面量、同色 run 合并成一个 `<span>`、`& < >` 转义、代理对合成 emoji、空 cell 与行尾裁剪）和 `verify_dirty_render.py`（编译真实 `framediff.c`，断言首帧全发、内容不变的帧 0 行输出、只改第 2 行时增量只含第 2 行的 CUP 段、OSC 始终在 always、invalidate / 行数变化后强制整帧、光标显隐随所在行走），并入 `verify_all.py`（现 22 项）。两条回归都做过变异验证（改错偏移、破坏 RLE、强制全脏、漏发变化行都会立刻报错）。单元测试 260 checks / 0 failed，gcc / g++ 双 `-Werror` 编译通过。
+
 ### v1.8.11
 - **修复 alt 屏改大小丢真彩色（BUG-8）**：`screen_resize()` 迁移备用屏幕（vim / htop / less 等全屏程序用的那块）时，`cells` / `fg_rgb` / `bg_rgb` 三个数组都按列数整块搬，唯独 `alt_rgb_valid` 只搬了每行第 0 列 —— 结果一改窗口大小，除最左一列外整屏真彩色标记被清零，颜色瞬间退化成 16 色。现在四个并行数组一起搬。
 - **修复搜索当前项被滚出后乱跳（BUG-9）**：搜索命中项被新输出挤出滚动缓冲时，如果用户正停留的那一条被剔除，光标以前会弹到**最新**的一条（`new_count - 1`），浏览位置从最老一端直接跳到最新一端。剔除总是发生在最老的一端，因此现在落到存活项的 index 0，也就是「原当前项之后最近的一条」，继续按 `n` 就能顺着往下走。

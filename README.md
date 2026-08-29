@@ -5,7 +5,7 @@
 Windows 终端复用器（Terminal Multiplexer）—— 模块化 C 架构，基于 Windows ConPTY。
 在 Windows 控制台里管理多个 cmd / PowerShell 会话，像 tmux 一样分标签页。
 
-当前版本：**v1.8.11**
+当前版本：**v1.8.12**
 
 > ⚠️ **警告 / 注意事项**：
 > 控制台终端**必须配置使用等宽字体**（Monospace Font，例如 *Cascadia Code*、*Consolas*、*JetBrains Mono*、*Fira Code* 等）。
@@ -215,6 +215,8 @@ python3 verify_color8.py        # color=8 渲染用色回归
 python3 verify_emoji.py         # Emoji 与字素簇边界测试
 python3 verify_ringbuf_asan.py  # 环形缓冲区局部滚动 ASAN 内存安全
 python3 verify_screen_state.py  # alt 屏 resize 保留真彩色 / 搜索当前项落点
+python3 verify_html_clipboard.py # 复制保留颜色：HTML Format 偏移量 / 真彩色 / Campbell 16 色 / RLE
+python3 verify_dirty_render.py   # 脏区渲染：整帧切行比对，未变行 0 输出
 python3 verify_search.py          # 滚动历史搜索行为验证
 python3 verify_item_color.py       # 菜单项启动默认颜色选择条的渲染/热区一致性
 python3 verify_search_box.py       # 搜索输入框只画右上角一小框、不吃整行

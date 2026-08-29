@@ -4,7 +4,7 @@ CFLAGS = -O2 -s -Wall -Wextra -Iinclude
 CXXFLAGS = -O2 -s -Wall -Wextra -Iinclude
 LDFLAGS = -luser32 -lshell32
 
-SRC = src/config.c src/input.c src/keymap.c src/main.c src/pane.c src/render.c src/screen.c src/theme.c src/utf8.c src/vt.c
+SRC = src/config.c src/cliphtml.c src/framediff.c src/input.c src/keymap.c src/main.c src/pane.c src/render.c src/screen.c src/theme.c src/utf8.c src/vt.c
 TARGET = termux.exe
 TARGET_CPP = termux_cpp.exe
 
