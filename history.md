@@ -6,6 +6,11 @@
 
 ## 版本更新记录
 
+### v1.8.16
+- **修复复制（HTML Format）时 16 色红↔蓝、黄↔青对调**：复制保留颜色走两条取色路径——真彩色（`fg_rgb_on/bg_rgb_on`）直出 `#rrggbb`；16 色按 Campbell 调色板给 RGB。但 cell 属性字（`CHAR_INFO.Attributes`）里的颜色 nibble 是 **Windows 控制台颜色位** 序（红=4、蓝=1、绿=2、黄=6、青=3），而 Campbell 调色板表（`cliphtml_palette16`）按 **ANSI/VT 色号** 索引（红=1、蓝=4、绿=2、黄=3、青=6）。复制取色函数 `attr_palette_rgb` 直接拿 Windows nibble 去索引 ANSI 调色板，**漏掉了 `render.c` 往终端写 SGR 时一直使用的 `m[]={0,4,2,6,1,5,3,7}` Windows→ANSI 转换**，于是粘到 Word / 浏览器 / 邮件时，红色文字（`38;5;1`）变成蓝色、蓝色变红、黄青互换，前景和背景都错。v1.8.15 修好屏幕显示与背景位后，这个一直存在于复制路径的调色板错位暴露了出来。
+  - 修复：`attr_palette_rgb` 先用同一张 `win_to_ansi[]` 表把 Windows nibble 转成 ANSI 色号（含亮位 `|8`）再查 Campbell 表，前景、背景、暗色亮色全部正确，和终端里看到的颜色一致。
+- **验证**：新增 `verify_copy_colors.py`——从**真实 `src/input.c` 抽取 `attr_palette_rgb` 函数**、链接**真实 `src/cliphtml.c`** 编译执行，断言 Windows 红(nibble 4)/蓝(1)/绿(2)/黄(6)/青(3) 及高 4 位背景、亮位 `|8` 都映射到正确 Campbell RGB（红 197,15,31 / 蓝 0,55,218 / 亮蓝 59,120,255 等），并断言红样的 R 通道大于蓝样。变异验证：去掉转换表（旧 bug）立即 11 处失败。单元测试 260 checks / 0 failed，`verify_all.py` 25 项，gcc / g++ 双 `-Werror` 编译通过。
+
 ### v1.8.15
 - **修复 16/256 色背景属性永远是黑（`colortool -c` 色块背景丢失的真正根因）**：用户实测 `colortool -c` 背景一直不显示。这次拿到真实字节日志（`TERMUX_DUMP`）后定位到，colortool 用的是 **256 色背景 SGR `ESC[48;5;Nm`**，win-termux 的 vt 解析器把它量化进 16 色控制台属性（`bg_color`），再由 `build_attr()` 组装成 Windows 属性字（低 4 位前景、高 4 位背景）。而 `build_attr()` 里背景位的算法写错了：
   ```c

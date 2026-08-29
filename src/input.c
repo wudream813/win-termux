@@ -1069,10 +1069,17 @@ void copy_range_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs) {
 }
 
 /* 16 色 attr -> RGB（默认 Campbell 调色板，与 Windows Terminal 一致）。
- * attr 是 Windows 控制台属性字：低 4 位前景、高 4 位背景。 */
+ * attr 是 Windows 控制台属性字：低 4 位前景、高 4 位背景。
+ * v1.8.16 修复：这个 nibble 是「Windows 控制台颜色位」序（红=4、蓝=1、
+ * 黄=6、青=3），而 cliphtml 的 16 色调色板表是 ANSI/VT 序（红=1、蓝=4、
+ * 黄=3、青=6）。两者必须先用 win_to_ansi[] 转换——否则复制 HTML 里红↔蓝、
+ * 黄↔青会对调（render.c 往终端写 SGR 时早就用了同一张 m[] 表，复制这条
+ * 路径漏了）。 */
 static void attr_palette_rgb(WORD attr, int is_bg, int *r, int *g, int *b) {
+    static const int win_to_ansi[8] = {0, 4, 2, 6, 1, 5, 3, 7};
     int nibble = is_bg ? ((attr >> 4) & 0x0F) : (attr & 0x0F);
-    cliphtml_palette16(nibble, r, g, b);
+    int ansi = win_to_ansi[nibble & 7] | (nibble & 8);
+    cliphtml_palette16(ansi, r, g, b);
 }
 
 void copy_selection_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs, int block) {
