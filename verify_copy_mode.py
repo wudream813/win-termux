@@ -98,8 +98,19 @@ check("if (valid_x1 < x_start)" in clip and "补全到块右边界" in clip and
       "wlen = row_wlen_start;" in clip,
       "块复制没有按『空行留空、内容行补全到块右边界』处理")
 check("void copy_range_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs) {\n"
-      "    copy_selection_to_clipboard(p, sx, sy_abs, ex, ey_abs, 0);" in INPUT,
-      "拖拽选择没有复用同一个复制实现")
+      "    copy_selection_to_clipboard(p, sx, sy_abs, ex, ey_abs, 0, 0);" in INPUT,
+      "拖拽选择没有复用同一个复制实现（闭合区间）")
+
+# v1.8.27：键盘选区为半开区间（默认不选任何格、→ 一次只选中跨过的那个字符）。
+check("int halfopen = g_copy_quick ? 0 : 1;" in INPUT and
+      "int half = !g_copy_quick;" in RENDER,
+      "键盘选区没有按半开区间（caret）处理")
+check("sel_max_x -= 1;            /* 右端 caret 排他 */" in RENDER or
+      "sel_max_x -= 1;" in RENDER,
+      "半开选区右端 caret 没有排他（默认会多选中一格）")
+check("copy_selection_to_clipboard(p, g_copy_anchor_x, g_copy_anchor_abs_y," in INPUT
+      and "halfopen)" in INPUT,
+      "yank 没有把半开标志传给复制实现")
 check("int sel_active = 0, sel_block = 0" in RENDER and
       "if (g_copy_block) {" in RENDER and
       "in_sel = (cur_cell_abs_y >= sel_min_abs_y && cur_cell_abs_y <= sel_max_abs_y &&" in RENDER,

@@ -1102,7 +1102,7 @@ preview:
 }
 
 void copy_range_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs) {
-    copy_selection_to_clipboard(p, sx, sy_abs, ex, ey_abs, 0);
+    copy_selection_to_clipboard(p, sx, sy_abs, ex, ey_abs, 0, 0);
 }
 
 /* 16 色 attr -> RGB（默认 Campbell 调色板，与 Windows Terminal 一致）。
@@ -1149,12 +1149,20 @@ static int cliphtml_row_right_boundary(const ClipHtmlCell *cells, int x_start, i
     return right;
 }
 
-void copy_selection_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs, int block) {
+void copy_selection_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs, int block, int halfopen) {
     if (!p) return;
     ScreenBuffer *s = &p->screen;
     if (sy_abs > ey_abs || (sy_abs == ey_abs && sx > ex)) {
         int tx = sx; sx = ex; ex = tx;
         int ty = sy_abs; sy_abs = ey_abs; ey_abs = ty;
+    }
+    /* 键盘发起的选区是「半开区间」[锚点 caret, 端点 caret)：锚点处格子包含、
+     * 端点 caret 处格子不包含（默认不选任何格、→ 一次只选中跨过的那一个字符）。
+     * 归一化后 sx=左 caret（含），ex=右 caret（排他），故闭合到格子时右端 -1。
+     * 鼠标拖选 / Shift-Alt 两角是闭合区间（halfopen=0），右端不减。 */
+    if (halfopen) {
+        ex = ex - 1;
+        if (ex < 0) ex = 0;
     }
     int block_x0 = sx < ex ? sx : ex;
     int block_x1 = sx > ex ? sx : ex;
@@ -1380,10 +1388,12 @@ static void copy_mode_leave(Pane *p) {
 static void copy_mode_yank(Pane *p, ScreenBuffer *s) {
     if (!g_copy_sel_active) return;
     int cur_abs_y = screen_to_abs_row(s, g_copy_cy, p->scroll_offset);
-    /* 选区端点用 g_copy_end_x（键盘=主格光标；鼠标=原始点击列），复制时
-     * snap_left/right_to_char 按方向把边界整字扩展，不会切掉半个汉字。 */
+    /* 键盘选区（!quick）是半开区间：端点 caret 排他，默认不选任何格、→ 一次
+     * 只选中跨过的那一个字符；Shift/Alt 点选（quick）与鼠标拖选是闭合区间。
+     * 半开闭合时 snap 仍按整字处理，不切半个汉字。 */
+    int halfopen = g_copy_quick ? 0 : 1;
     copy_selection_to_clipboard(p, g_copy_anchor_x, g_copy_anchor_abs_y,
-                                g_copy_end_x, cur_abs_y, g_copy_block);
+                                g_copy_end_x, cur_abs_y, g_copy_block, halfopen);
 }
 
 static void copy_mode_anchor_here(Pane *p, ScreenBuffer *s) {

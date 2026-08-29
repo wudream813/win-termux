@@ -186,7 +186,7 @@ def main():
     if "copy_cursor_to_lead" in drag_seg:
         raise SystemExit("普通拖选端点不应强制吸主格（会导致选区偏左一格）")
     # yank 必须用选区端点 g_copy_end_x，而不是光标 g_copy_cx
-    yank_seg = isrc[isrc.find("static void copy_mode_yank("):isrc.find("static void copy_mode_yank(") + 400]
+    yank_seg = isrc[isrc.find("static void copy_mode_yank("):isrc.find("static void copy_mode_yank(") + 600]
     if "g_copy_end_x" not in yank_seg:
         raise SystemExit("copy_mode_yank 未用 g_copy_end_x 作为复制端点")
     print("[ok] 光标吸主格显示、选区端点 g_copy_end_x 记原始列（向右拖不漏字/不偏左）")

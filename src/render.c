@@ -2162,22 +2162,35 @@ void render_screen(void) {
                 int cur_abs_y = screen_to_abs_row(s, g_copy_cy, vo);
                 sel_min_abs_y = g_copy_anchor_abs_y < cur_abs_y ? g_copy_anchor_abs_y : cur_abs_y;
                 sel_max_abs_y = g_copy_anchor_abs_y > cur_abs_y ? g_copy_anchor_abs_y : cur_abs_y;
+                /* 键盘选区（!quick）= 半开区间 [锚点 caret, 端点 caret)：端点 caret
+                 * 处的格子不包含，所以默认锚点==端点时没有任何格子高亮，→ 一次跨过
+                 * 一个字符后恰好选中跨过的那一个（宽字符选中两列）。鼠标 Shift/Alt
+                 * 两角（quick）= 闭合区间，端点格子包含。snap_sel_row 再整字吸附。 */
+                int half = !g_copy_quick;
                 if (g_copy_block) {
-                    /* Rectangular selection: the same column range on every row.
-                     * 用选区端点 g_copy_end_x（键盘=主格光标；鼠标=原始点击列），
-                     * snap_sel_row 再把每行两端整字吸附，光标显示列 g_copy_cx 不参与。 */
+                    /* Rectangular selection: the same column range on every row. */
                     sel_block = 1;
                     sel_min_x = g_copy_anchor_x < g_copy_end_x ? g_copy_anchor_x : g_copy_end_x;
                     sel_max_x = g_copy_anchor_x > g_copy_end_x ? g_copy_anchor_x : g_copy_end_x;
+                    if (half) { sel_max_x -= 1; if (sel_max_x < 0) sel_max_x = 0; }
+                    if (!half || g_copy_anchor_x != g_copy_end_x) sel_active = 1;
                 } else if (g_copy_anchor_abs_y == cur_abs_y) {
                     sel_min_x = g_copy_anchor_x < g_copy_end_x ? g_copy_anchor_x : g_copy_end_x;
                     sel_max_x = g_copy_anchor_x > g_copy_end_x ? g_copy_anchor_x : g_copy_end_x;
+                    if (half) sel_max_x -= 1;            /* 右端 caret 排他 */
+                    /* 锚点==端点（同一 caret）时一个格子都不选；半开下 max-1<min 即空。 */
+                    if (!half || g_copy_anchor_x != g_copy_end_x) sel_active = 1;
                 } else if (g_copy_anchor_abs_y < cur_abs_y) {
-                    sel_min_x = g_copy_anchor_x; sel_max_x = g_copy_end_x;
+                    /* 锚点在上：顶行从锚点 caret 起，底行到端点 caret 前（半开减 1）。 */
+                    sel_min_x = g_copy_anchor_x;
+                    sel_max_x = half ? g_copy_end_x - 1 : g_copy_end_x;
+                    sel_active = 1;
                 } else {
-                    sel_min_x = g_copy_end_x; sel_max_x = g_copy_anchor_x;
+                    /* 锚点在下：顶行从端点 caret 起，底行到锚点 caret 前（半开减 1）。 */
+                    sel_min_x = g_copy_end_x;
+                    sel_max_x = half ? g_copy_anchor_x - 1 : g_copy_anchor_x;
+                    sel_active = 1;
                 }
-                sel_active = 1;
             } else if (g_mouse_selecting) {
                 sel_min_abs_y = g_mouse_sel_s_abs_y < g_mouse_sel_e_abs_y ? g_mouse_sel_s_abs_y : g_mouse_sel_e_abs_y;
                 sel_max_abs_y = g_mouse_sel_s_abs_y > g_mouse_sel_e_abs_y ? g_mouse_sel_s_abs_y : g_mouse_sel_e_abs_y;

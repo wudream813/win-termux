@@ -30,7 +30,7 @@ void open_command_palette(void);
 void execute_palette_command(int item_index);
 void copy_range_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs);
 /* block = 1 复制矩形区域（每行取同一段列），block = 0 复制连续文本流。 */
-void copy_selection_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs, int block);
+void copy_selection_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs, int block, int halfopen);
 void execute_search(void);
 void search_preview_live(void);
 void search_jump_next(void);
