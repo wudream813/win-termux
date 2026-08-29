@@ -24,7 +24,14 @@ HARNESS = r"""
 #include <string.h>
 #include <wchar.h>
 typedef unsigned short WCHAR;
-static int cell_is_wide_trail(const WCHAR *line, int k, int *lead);
+typedef unsigned short WORD;
+/* 真实 CHAR_INFO 布局：Char(WCHAR) + Attributes(WORD) = 4 字节/单元格。
+ * 这些吸附/步进函数必须按 CHAR_INFO 步长索引；若误取 &Char 当 WCHAR*（2 字节
+ * 步长）就会读到相邻单元格的 Attributes、列号错位（历史 bug：→ 要按两下）。 */
+typedef struct { union { WCHAR UnicodeChar; char AsciiChar; } Char; WORD Attributes; } CHAR_INFO;
+#define LCC(line, i) ((line)[(i)].Char.UnicodeChar)
+#define CI(ch) { { (WCHAR)(ch) }, 0x07 }
+static int cell_is_wide_trail(const CHAR_INFO *line, int k, int *lead);
 int is_wide_cp(unsigned int cp);
 %(func)s
 
@@ -36,7 +43,8 @@ static void ck(const char *n, int got, int want) {
 
 int main(void) {
     /* "a 保 x"：col0 'a', col1 ' ', col2 保(主), col3 保占位0(次), col4 'x' */
-    WCHAR line1[16] = { 'a',' ',0x4FDD,0,'x', 0,0,0,0,0,0,0,0,0,0,0 };
+    CHAR_INFO line1[16] = { CI('a'),CI(' '),CI(0x4FDD),CI(0),CI('x'),
+                            CI(0),CI(0),CI(0),CI(0),CI(0),CI(0),CI(0),CI(0),CI(0),CI(0),CI(0) };
     int n = 16;
 
     /* 向右：从主格 col2 跨到 col4（跳过次格 col3） */
@@ -50,11 +58,10 @@ int main(void) {
     /* 向右：末列不越界 */
     ck("右:末列(15)夹紧", copy_step_char(line1,n,15,+1), 15);
 
-    /* 向左：站在次格 col3 -> 退到 col1（跨过整个汉字：3-2=1） */
+    /* 向左：站在次格 col3 -> 退到主格 col2（跨过整个汉字） */
     ck("左:站在次格(3)->吸到保主格(2)", copy_step_char(line1,n,3,-1), 2);
-    /* 向左：站在 'x' col4，左邻(col3)是占位 -> 说明左边是汉字，退到主格 col2?
-       x 在 col4，左邻 col3 是 0（中文次格），再左 col2 是中文主格：
-       从 x 向左应跨过整个汉字到 col1（空格） */
+    /* 向左：站在 'x' col4，左邻(col3)是占位 0、再左 col2 是中文主格：
+       从 x 向左应跨过整个汉字到 col2（主格） */
     ck("左:从x(4)->汉字主格(2)", copy_step_char(line1,n,4,-1), 2);
     /* 向左：ASCII col0 -> 0（不越界） */
     ck("左:col0夹紧0", copy_step_char(line1,n,0,-1), 0);
@@ -62,18 +69,19 @@ int main(void) {
     ck("左:空格(1)->0", copy_step_char(line1,n,1,-1), 0);
 
     /* emoji 代理对：😀 U+1F600 = 高0xD83D(col1) 低0xDE00(col2)，col0 'A' col3 'B' */
-    WCHAR line2[16]; memset(line2,0,sizeof line2);
-    line2[0]='A'; line2[1]=0xD83D; line2[2]=0xDE00; line2[3]='B';
+    CHAR_INFO line2[16]; memset(line2,0,sizeof line2);
+    line2[0]= (CHAR_INFO)CI('A'); line2[1]= (CHAR_INFO)CI(0xD83D);
+    line2[2]= (CHAR_INFO)CI(0xDE00); line2[3]= (CHAR_INFO)CI('B');
     ck("右:emoji主格(1)->跳到3", copy_step_char(line2,n,1,+1), 3);
     ck("右:emoji次格(2)->3", copy_step_char(line2,n,2,+1), 3);
     ck("左:emoji次格(2)->emoji主格(1)", copy_step_char(line2,n,2,-1), 1);
     ck("左:从B(3)->emoji主格(1)", copy_step_char(line2,n,3,-1), 1);
 
     /* 连续两个汉字 "中文"：col0 中主 col1 中次 col2 文主 col3 文次 col4 'z' */
-    WCHAR line3[8] = { 0x4E2D,0,0x6587,0,'z',0,0,0 };
+    CHAR_INFO line3[8] = { CI(0x4E2D),CI(0),CI(0x6587),CI(0),CI('z'),CI(0),CI(0),CI(0) };
     ck("右:中主(0)->文主(2)", copy_step_char(line3,8,0,+1), 2);
     ck("右:文主(2)->z(4)", copy_step_char(line3,8,2,+1), 4);
-    ck("左:中次(1)->退到0前? -> 0", copy_step_char(line3,8,1,-1), 0);
+    ck("左:中次(1)->退到0", copy_step_char(line3,8,1,-1), 0);
     ck("左:文次(3)->文主格(2)", copy_step_char(line3,8,3,-1), 2);
 
     if (failures) { printf("\n%d FAILURE(S)\n", failures); return 1; }

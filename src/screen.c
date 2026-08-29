@@ -470,41 +470,48 @@ int screen_resize(ScreenBuffer *s, int nc, int nr) {
     return 1;
 }
 
+/* 宽字符在屏幕缓冲里占两个相邻 CHAR_INFO 单元格。这些吸附/步进函数按【单元格
+ * 列号】索引，必须用 CHAR_INFO*（步长 = sizeof(CHAR_INFO)，含 Char+Attributes），
+ * 而不能取 &cells[0].Char.UnicodeChar 当 WCHAR*——那样按 sizeof(WCHAR) 步长索引，
+ * 会读到相邻单元格的 Attributes，列号全错位（历史 bug：→ 要按两下才跨过汉字）。
+ * LCC() 取一行里第 i 个单元格的字符。 */
+#define LCC(line, i) ((line)[(i)].Char.UnicodeChar)
+
 /* 选区边界「吸附到完整字符」。宽字符（中文/全角/宽符号占两列；emoji 等
  * non-BMP 字符以高/低代理对占两格）在屏幕上跨两列，选区端点若正好落在它
  * 中间，会出现「选中半个字」——高亮只盖一半、复制结果也容易错位。
- * 规则（只看一行的字符缓冲，便于纯函数回归）：
+ * 规则（只看一行的单元格缓冲，便于纯函数回归）：
  *   - 右端点在某个宽字符的【主格】上（BMP 宽字符本格、或 emoji 高代理），
  *     右扩 1 格把次格也纳入；
  *   - 左端点落在某个宽字符的【次格】上（BMP 宽字符的占位 0、或 emoji 低代理），
  *     左退 1 格把主格也纳入。
  * 返回调整后的端点，夹紧到 [0, ncols-1]。 */
-int snap_right_to_char(const WCHAR *line, int ncols, int x) {
+int snap_right_to_char(const CHAR_INFO *line, int ncols, int x) {
     if (x < 0 || !line) return x;
     if (x < ncols) {
-        WCHAR c = line[x];
+        WCHAR c = LCC(line, x);
         int wide_lead =
             ((c >= 0xD800 && c <= 0xDBFF) && x + 1 < ncols &&
-             line[x + 1] >= 0xDC00 && line[x + 1] <= 0xDFFF) ? 1
+             LCC(line, x + 1) >= 0xDC00 && LCC(line, x + 1) <= 0xDFFF) ? 1
             : (!(c >= 0xD800 && c <= 0xDFFF) && is_wide_cp((unsigned int)c));
         if (wide_lead && x + 1 < ncols) return x + 1;
     }
     return x;
 }
 
-int snap_left_to_char(const WCHAR *line, int ncols, int x) {
+int snap_left_to_char(const CHAR_INFO *line, int ncols, int x) {
     (void)ncols;
     if (x <= 0 || !line) return x;
-    WCHAR c = line[x];
+    WCHAR c = LCC(line, x);
     /* emoji 低代理：主格在 x-1（高代理） */
     if (c >= 0xDC00 && c <= 0xDFFF) {
-        if (x - 1 >= 0 && line[x - 1] >= 0xD800 && line[x - 1] <= 0xDBFF)
+        if (x - 1 >= 0 && LCC(line, x - 1) >= 0xD800 && LCC(line, x - 1) <= 0xDBFF)
             return x - 1;
         return x;
     }
     /* BMP 宽字符的占位格：本格 ch==0、左邻是宽字符主格 */
     if (c == 0) {
-        WCHAR prev = line[x - 1];
+        WCHAR prev = LCC(line, x - 1);
         if (!(prev >= 0xD800 && prev <= 0xDBFF) && is_wide_cp((unsigned int)prev))
             return x - 1;
     }
@@ -513,16 +520,16 @@ int snap_left_to_char(const WCHAR *line, int ncols, int x) {
 
 /* 单元格 k 是否为宽字符的【次格】（占位）：BMP 宽字符写 0、emoji 写低代理。
  * lead[out]（非 NULL）返回该宽字符主格列号。 */
-static int cell_is_wide_trail(const WCHAR *line, int k, int *lead) {
+static int cell_is_wide_trail(const CHAR_INFO *line, int k, int *lead) {
     if (k < 1) return 0;
-    WCHAR c = line[k];
+    WCHAR c = LCC(line, k);
     if (c >= 0xDC00 && c <= 0xDFFF &&
-        line[k - 1] >= 0xD800 && line[k - 1] <= 0xDBFF) {
+        LCC(line, k - 1) >= 0xD800 && LCC(line, k - 1) <= 0xDBFF) {
         if (lead) *lead = k - 1;
         return 1;
     }
     if (c == 0) {
-        WCHAR p = line[k - 1];
+        WCHAR p = LCC(line, k - 1);
         if (!(p >= 0xD800 && p <= 0xDBFF) && is_wide_cp((unsigned int)p)) {
             if (lead) *lead = k - 1;
             return 1;
@@ -532,17 +539,17 @@ static int cell_is_wide_trail(const WCHAR *line, int k, int *lead) {
 }
 
 /* 复制模式里按字符移动光标：一次跨过整个宽字符（中文/全角/emoji），光标永远
- * 停在【主格】上，不停在次格（占位）。dir=+1 向右、-1 向左；line 为该行字符。
+ * 停在【主格】上，不停在次格（占位）。dir=+1 向右、-1 向左；line 为该行单元格。
  * 规则：右移 = 右侧下一个主格（宽字符主格跨 2 列）；左移 = 左边最近的主格
  * （左邻若为次格，则该宽字符主格在再左一列）。 */
-int copy_step_char(const WCHAR *line, int ncols, int x, int dir) {
+int copy_step_char(const CHAR_INFO *line, int ncols, int x, int dir) {
     if (!line || dir == 0) return x;
     if (x < 0) x = 0;
     if (dir > 0) {
         if (x >= ncols) return ncols - 1;
-        WCHAR c = line[x];
+        WCHAR c = LCC(line, x);
         int emoji_lead = (c >= 0xD800 && c <= 0xDBFF && x + 1 < ncols &&
-                          line[x + 1] >= 0xDC00 && line[x + 1] <= 0xDFFF);
+                          LCC(line, x + 1) >= 0xDC00 && LCC(line, x + 1) <= 0xDFFF);
         int wide_lead  = !(c >= 0xD800 && c <= 0xDFFF) && is_wide_cp((unsigned int)c);
         int step = (emoji_lead || wide_lead) ? 2 : 1;
         int nx = x + step;
@@ -559,7 +566,7 @@ int copy_step_char(const WCHAR *line, int ncols, int x, int dir) {
 /* 复制模式里把【光标所在列】整字化：无论鼠标点选/拖动还是上下移动，光标都不
  * 许停在宽字符的次格（半个汉字/全角/emoji）上。若 x 落在次格，则退到它所属宽
  * 字符的主格；落在主格或窄字符上则原样返回。返回值夹紧到 [0, ncols-1]。 */
-int copy_cursor_to_lead(const WCHAR *line, int ncols, int x) {
+int copy_cursor_to_lead(const CHAR_INFO *line, int ncols, int x) {
     if (!line) return x;
     if (x < 0) return 0;
     if (x >= ncols) return ncols > 0 ? ncols - 1 : 0;

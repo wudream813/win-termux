@@ -6,6 +6,14 @@
 
 ## 版本更新记录
 
+### v1.8.25
+- **修复「复制模式里 → 要按两下才走过一个汉字」的真正根因（CHAR_INFO 步长错位）**。整字吸附/步进/光标函数（`snap_left/right_to_char`、`copy_step_char`、`copy_cursor_to_lead`）此前接收的是 `const WCHAR *line`，取行时用 `&cells[0].Char.UnicodeChar`。但屏幕缓冲里每个单元格是 `CHAR_INFO { WCHAR Char; WORD Attributes; }`，**步长是 4 字节**；把它当 `WCHAR*`（2 字节步长）按列索引时，`line[x]` 读到的是错位后的内容——`line[3]` 甚至读到前一个单元格的属性值 `7`。于是在汉字主格那一列，`copy_step_char` 读到的是别的字符、误判成「窄字符」，**右移只走 1 格落到汉字次格**，必须再按一下才跨过整个汉字。
+  - 这些函数的参数统一改为 `const CHAR_INFO *line`，函数内用 `line[i].Char.UnicodeChar`（新增宏 `LCC(line,i)`）按真实步长读字符；
+  - 取行处（`copy_line_at_cy`、复制取色 `sline`、渲染 `render_sel_line`）统一返回 `CHAR_INFO*`（`s->lines[pr].cells` / `&s->alt_buffer[...]`），不再取 `&...Char.UnicodeChar`；
+  - 修复后在真实缓冲上：RIGHT 从「中」一下跨到「文」再到后续字符，每次跨过一整个汉字；左移、上下移动、鼠标点选/拖选、端点吸附同步恢复正确。
+- **测试加固**：三个整字回归脚本（`verify_copy_snap/step/cursor.py`）的测试数组从紧凑 `WCHAR[]`（2 字节步长，恰好掩盖 bug）改为真实布局的 `CHAR_INFO[]`（带 Attributes、4 字节步长），从此能真正按单元格步长验证；`verify_copy_snap.py` 另加源码不变量，禁止再出现 `&cells[0].Char.UnicodeChar` 当整行指针、且要求四个整字函数签名为 `CHAR_INFO*`。
+- 单元测试 260 / 0 failed，`verify_all.py` 30 项全过，gcc / g++ 双 `-Werror`。
+
 ### v1.8.24
 - **修复「当前屏幕上鼠标选中汉字，高亮/光标仍像停在字中间」的真正根因**：v1.8.23 已把光标坐标整字化，但**渲染选区高亮**的端点吸附 `snap_sel_row()` 只有在滚动回历史（`scroll_offset>0`，此时才能算出物理行 `ar>=0`）时才拿到行内容；在**当前屏幕（活屏，`ar=-1`）上直接 return、完全不吸附**。于是在活屏用鼠标拖选中文时，选区高亮把宽字符（中文/全角/emoji）切成半个，视觉上就像光标停在了字中间。
   - 新增 `render_sel_line(s, row, vo)`：渲染时按屏幕行号统一取整行字符——活屏用 `screen_phys_row(s,row)`、回滚历史用 abs→phys 公式、alt 屏用 `alt_buffer`，三种情况都能取到行；

@@ -29,6 +29,11 @@ HARNESS = r"""
 #include <wchar.h>
 typedef unsigned short WORD; typedef unsigned short WCHAR;
 typedef unsigned int UINT; typedef void* HANDLE; typedef int BOOL;
+/* 真实 CHAR_INFO 布局（4 字节/单元格）；函数必须按 CHAR_INFO 步长索引，
+ * 否则 &Char 当 WCHAR* 会读到相邻单元格的 Attributes（→ 要按两下的历史 bug）。 */
+typedef struct { union { WCHAR UnicodeChar; char AsciiChar; } Char; WORD Attributes; } CHAR_INFO;
+#define LCC(line, i) ((line)[(i)].Char.UnicodeChar)
+#define CI(ch) { { (WCHAR)(ch) }, 0x07 }
 int is_wide_cp(unsigned int cp);
 %(funcs)s
 
@@ -42,7 +47,8 @@ int main(void) {
     /* "ab 保 x"：
        col 0 'a', 1 'b', 2 ' ', 3 保(0x4FDD 主格), 4 保占位0(次格),
        5 'x'。中文占 3、4 两列。 */
-    WCHAR line1[16] = { 'a','b',' ',0x4FDD,0,'x', 0,0,0,0,0,0,0,0,0,0 };
+    CHAR_INFO line1[16] = { CI('a'),CI('b'),CI(' '),CI(0x4FDD),CI(0),CI('x'),
+                            CI(0),CI(0),CI(0),CI(0),CI(0),CI(0),CI(0),CI(0),CI(0),CI(0) };
     int n = 16;
 
     /* 右端点：在中文主格 col3 -> 扩到 col4（包含占位） */
@@ -63,21 +69,22 @@ int main(void) {
     /* 左端点在 col0 -> 保持 0（不能负） */
     ck("左:端点col0->0", snap_left_to_char(line1,n,0), 0);
 
-    /* emoji 代理对：😀 U+1F600 = 高代理 0xD83D, 低代理 0xDE00，占 col6 主、col7 次 */
-    WCHAR line2[16]; memset(line2,0,sizeof line2);
-    line2[0]='A'; line2[1]=0xD83D; line2[2]=0xDE00; line2[3]='B';
+    /* emoji 代理对：😀 U+1F600 = 高代理 0xD83D, 低代理 0xDE00，占 col1 主、col2 次 */
+    CHAR_INFO line2[16]; memset(line2,0,sizeof line2);
+    line2[0]= (CHAR_INFO)CI('A'); line2[1]= (CHAR_INFO)CI(0xD83D);
+    line2[2]= (CHAR_INFO)CI(0xDE00); line2[3]= (CHAR_INFO)CI('B');
     ck("右:端点在emoji高代理(1)->扩到2", snap_right_to_char(line2,n,1), 2);
     ck("右:端点在emoji低代理(2)->不扩", snap_right_to_char(line2,n,2), 2);
     ck("左:端点在emoji低代理(2)->退到1", snap_left_to_char(line2,n,2), 1);
     ck("左:端点在emoji高代理(1)->不变", snap_left_to_char(line2,n,1), 1);
 
     /* 全角字符 '＠' U+FF20 宽 */
-    WCHAR line3[8] = { 'x', 0xFF20, 0, 'y', 0,0,0,0 };
+    CHAR_INFO line3[8] = { CI('x'), CI(0xFF20), CI(0), CI('y'), CI(0),CI(0),CI(0),CI(0) };
     ck("右:全角主格(1)->扩到2", snap_right_to_char(line3,8,1), 2);
     ck("左:全角次格(2)->退到1", snap_left_to_char(line3,8,2), 1);
 
     /* 越界夹紧：宽主格在最后一列、无次格可扩 -> 不越界 */
-    WCHAR line4[4] = {'a','b','c',0x4FDD};
+    CHAR_INFO line4[4] = { CI('a'),CI('b'),CI('c'),CI(0x4FDD) };
     ck("右:末列宽主格无次格->不越界(3)", snap_right_to_char(line4,4,3), 3);
 
     if (failures) { printf("\n%d FAILURE(S)\n", failures); return 1; }
@@ -147,20 +154,31 @@ def main():
         print(r.stdout)
         if r.returncode != 0:
             print(r.stderr); raise SystemExit(1)
-    # v1.8.24 修复：渲染高亮在【活屏】(vo==0) 也必须整字吸附。旧实现只在回滚
-    # (vo>0，ar>=0) 时才拿到行，活屏 ar=-1 直接跳过吸附，于是当前屏幕上鼠标选中
-    # 汉字会把宽字符切成半个（看似光标停在字中间）。要求 snap_sel_row 通过
-    # render_sel_line(s, row, vo) 取行（覆盖活屏+回滚+alt），而不是依赖 ar。
+    # v1.8.24：渲染高亮在【活屏】(vo==0) 也必须整字吸附（旧实现活屏 ar=-1 漏吸附）。
+    # v1.8.25：取行必须返回 CHAR_INFO*（真实 4 字节步长）；旧的返回
+    # &cells[0].Char.UnicodeChar（WCHAR*，2 字节步长）会读到相邻单元格的
+    # Attributes、列号错位，导致键盘 → 要按两下才跨过一个汉字。
     render_c = open(os.path.join(ROOT, "src", "render.c"), encoding="utf-8").read()
-    if "static const WCHAR *render_sel_line(ScreenBuffer *s, int row, int vo)" not in render_c:
-        raise SystemExit("render.c 缺少 render_sel_line()（活屏选区整字取行）")
-    call = "snap_sel_row(s, y, vo,"
-    if call not in render_c:
+    input_c = open(os.path.join(ROOT, "src", "input.c"), encoding="utf-8").read()
+    if "static const CHAR_INFO *render_sel_line(ScreenBuffer *s, int row, int vo)" not in render_c:
+        raise SystemExit("render.c 缺少 CHAR_INFO* render_sel_line()（活屏选区整字取行）")
+    if "snap_sel_row(s, y, vo," not in render_c:
         raise SystemExit("snap_sel_row 未按 (s, y, vo, ...) 传屏幕行+滚动偏移（活屏无法吸附）")
-    # 旧的按 ar（活屏为 -1）取行方式不得残留
-    if "const WCHAR *sl = (ar >= 0" in render_c:
-        raise SystemExit("snap_sel_row 仍按 ar 取行——活屏(ar=-1)会漏整字吸附")
-    print("[ok] 渲染高亮：活屏/回滚/alt 均经 render_sel_line 整字吸附（不切半个汉字）")
+    # 旧的错误取行法（返回 &...Char.UnicodeChar 当 WCHAR*，2 字节步长错位）不得残留
+    for tag, src in (("render.c", render_c), ("input.c", input_c)):
+        for bad in ("return &s->lines[pr].cells[0].Char.UnicodeChar",
+                    "return &s->lines[ar].cells[0].Char.UnicodeChar",
+                    "return &s->alt_buffer[(size_t)row * s->cols].Char.UnicodeChar",
+                    "= &s->alt_buffer[(size_t)abs_y * s->cols].Char.UnicodeChar",
+                    "= &s->lines[pr].cells[0].Char.UnicodeChar"):
+            if bad in src:
+                raise SystemExit(tag + " 仍把整行当 WCHAR* 取（2字节步长错位）: " + bad)
+    # 三个整字函数的签名必须是 CHAR_INFO*
+    screen_h = open(os.path.join(ROOT, "include", "screen.h"), encoding="utf-8").read()
+    for fn in ("snap_right_to_char", "snap_left_to_char", "copy_step_char", "copy_cursor_to_lead"):
+        if (fn + "(const WCHAR *") in screen_h:
+            raise SystemExit("screen.h " + fn + " 仍是 WCHAR* 参数（应为 CHAR_INFO*）")
+    print("[ok] 整字函数按 CHAR_INFO 真实步长索引；活屏/回滚/alt 高亮均整字吸附")
 
     print("[OK] verify_copy_snap passed")
 

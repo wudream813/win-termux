@@ -2064,14 +2064,17 @@ static int terminal_cursor_position(const ScreenBuffer *s, int scroll_offset,
 /* 渲染时取屏幕第 row 行的整行 WCHAR（供选区端点整字吸附）。活屏与回滚历史
  * 都要覆盖：原来只在 vo>0 时才有 phys 行，活屏 ar=-1 会漏吸附，导致在当前
  * 屏幕上鼠标选中汉字时高亮把宽字符切成半个（看似光标停在字中间）。 */
-static const WCHAR *render_sel_line(ScreenBuffer *s, int row, int vo) {
+/* 取屏幕第 row 行的单元格缓冲（供选区端点整字吸附）。返回 CHAR_INFO*（真实
+ * 步长）；旧实现返回 &cells[0].Char.UnicodeChar（WCHAR*），按 2 字节步长索引
+ * 会读到相邻单元格的 Attributes、列号错位。活屏 / 回滚历史 / alt 屏都覆盖。 */
+static const CHAR_INFO *render_sel_line(ScreenBuffer *s, int row, int vo) {
     if (s->in_alt_screen && s->alt_buffer && row >= 0 && row < s->rows)
-        return &s->alt_buffer[(size_t)row * s->cols].Char.UnicodeChar;
+        return &s->alt_buffer[(size_t)row * s->cols];
     int abs_y = screen_to_abs_row(s, row, vo);
     int pr = (abs_y >= 0 && abs_y < s->total_lines)
              ? (s->scroll_top - s->hist_lines + abs_y + s->total_lines * 2) % s->total_lines : -1;
     if (pr < 0 || pr >= s->total_lines || !s->lines || !s->lines[pr].cells) return NULL;
-    return &s->lines[pr].cells[0].Char.UnicodeChar;
+    return s->lines[pr].cells;
 }
 
 /* 选区在某一行上的端点吸附到完整字符：块选每行两端都吸；流式选区只在
@@ -2081,7 +2084,7 @@ static void snap_sel_row(ScreenBuffer *s, int row, int vo, int sel_active, int b
                                int cur_abs_y, int min_abs_y, int max_abs_y,
                                int *sel_min_x, int *sel_max_x) {
     if (!sel_active) return;
-    const WCHAR *sl = render_sel_line(s, row, vo);
+    const CHAR_INFO *sl = render_sel_line(s, row, vo);
     if (!sl) return;
     int at_first = (cur_abs_y == min_abs_y), at_last = (cur_abs_y == max_abs_y);
     if (block) {

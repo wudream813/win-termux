@@ -307,7 +307,7 @@ static void palette_open_color(void) {
 }
 
 /* 复制模式取行 / 光标整字化（定义在复制模式处理处，前置声明以便入口复用）。 */
-static const WCHAR *copy_line_at_cy(Pane *p, ScreenBuffer *s, int cy);
+static const CHAR_INFO *copy_line_at_cy(Pane *p, ScreenBuffer *s, int cy);
 static void copy_snap_cursor_to_char(Pane *p, ScreenBuffer *s);
 
 static void palette_open_copy_mode(void) {
@@ -1168,12 +1168,12 @@ void copy_selection_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs
          * 不被切半——首行左端点落在宽字符次格则左退一格，末行右端点落在宽字符
          * 主格则右扩一格；块选每行两端都吸附。 */
         {
-            const WCHAR *sline = NULL;
+            const CHAR_INFO *sline = NULL;
             int sn = s->cols;
             if (s->in_alt_screen && s->alt_buffer)
-                sline = &s->alt_buffer[(size_t)abs_y * s->cols].Char.UnicodeChar;
+                sline = &s->alt_buffer[(size_t)abs_y * s->cols];
             else if (pr >= 0 && s->lines && s->lines[pr].cells)
-                sline = &s->lines[pr].cells[0].Char.UnicodeChar;
+                sline = s->lines[pr].cells;
             if (sline) {
                 if (block) {
                     x_start = snap_left_to_char(sline, sn, x_start);
@@ -1342,22 +1342,24 @@ static void copy_mode_anchor_here(Pane *p, ScreenBuffer *s) {
     g_copy_sel_active = 1;
 }
 
-/* 取复制模式第 cy 行（屏幕行）的字符缓冲；与复制取色 / 渲染高亮用同一套
- * abs->phys 映射，alt 屏直接用 cy。无内容时返回 NULL。 */
-static const WCHAR *copy_line_at_cy(Pane *p, ScreenBuffer *s, int cy) {
+/* 取复制模式第 cy 行（屏幕行）的单元格缓冲；与复制取色 / 渲染高亮用同一套
+ * abs->phys 映射，alt 屏直接用 cy。返回 CHAR_INFO*（真实步长），无内容时 NULL。
+ * 注意：必须返回单元格指针，不能取 &cells[0].Char.UnicodeChar 当 WCHAR*，
+ * 否则按 2 字节步长索引会读到相邻单元格的 Attributes、列号全错位。 */
+static const CHAR_INFO *copy_line_at_cy(Pane *p, ScreenBuffer *s, int cy) {
     if (s->in_alt_screen && s->alt_buffer)
-        return &s->alt_buffer[(size_t)cy * s->cols].Char.UnicodeChar;
+        return &s->alt_buffer[(size_t)cy * s->cols];
     int abs_y = screen_to_abs_row(s, cy, p->scroll_offset);
     int pr = (abs_y >= 0 && abs_y < s->total_lines)
              ? (s->scroll_top - s->hist_lines + abs_y + s->total_lines * 2) % s->total_lines : -1;
     if (pr < 0 || pr >= s->total_lines || !s->lines || !s->lines[pr].cells) return NULL;
-    return &s->lines[pr].cells[0].Char.UnicodeChar;
+    return s->lines[pr].cells;
 }
 
 /* 把 g_copy_cx 整字化：光标永远停在宽字符主格上，绝不停在半个汉字中间。
  * 在鼠标点选/拖动、上下移动后调用。 */
 static void copy_snap_cursor_to_char(Pane *p, ScreenBuffer *s) {
-    const WCHAR *sl = copy_line_at_cy(p, s, g_copy_cy);
+    const CHAR_INFO *sl = copy_line_at_cy(p, s, g_copy_cy);
     g_copy_cx = copy_cursor_to_lead(sl, s->cols, g_copy_cx);
     if (g_copy_cx < 0) g_copy_cx = 0;
     if (g_copy_cx >= s->cols) g_copy_cx = s->cols - 1;
@@ -1454,7 +1456,7 @@ int handle_copy_mode_key(KEY_EVENT_RECORD *ke) {
 
     if (vk == VK_LEFT || uc == 'h' || uc == 'H') {
         /* 左移一次跨过整个宽字符（中文/全角/emoji），永远停在主格上。 */
-        const WCHAR *sl = copy_line_at_cy(p, s, g_copy_cy);
+        const CHAR_INFO *sl = copy_line_at_cy(p, s, g_copy_cy);
         g_copy_cx = sl ? copy_step_char(sl, s->cols, g_copy_cx, -1)
                        : (g_copy_cx > 0 ? g_copy_cx - 1 : 0);
         g_mux.needs_redraw = 1;
@@ -1462,7 +1464,7 @@ int handle_copy_mode_key(KEY_EVENT_RECORD *ke) {
     }
     if (vk == VK_RIGHT || uc == 'l' || uc == 'L') {
         /* 右移一次跨过整个宽字符（中文/全角/emoji），永远停在主格上。 */
-        const WCHAR *sl = copy_line_at_cy(p, s, g_copy_cy);
+        const CHAR_INFO *sl = copy_line_at_cy(p, s, g_copy_cy);
         g_copy_cx = sl ? copy_step_char(sl, s->cols, g_copy_cx, +1)
                        : (g_copy_cx < s->cols - 1 ? g_copy_cx + 1 : s->cols - 1);
         g_mux.needs_redraw = 1;

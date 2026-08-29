@@ -28,7 +28,12 @@ HARNESS = r"""
 #include <string.h>
 #include <wchar.h>
 typedef unsigned short WCHAR;
-static int cell_is_wide_trail(const WCHAR *line, int k, int *lead);
+typedef unsigned short WORD;
+/* 真实 CHAR_INFO 布局（4 字节/单元格）；函数必须按 CHAR_INFO 步长索引。 */
+typedef struct { union { WCHAR UnicodeChar; char AsciiChar; } Char; WORD Attributes; } CHAR_INFO;
+#define LCC(line, i) ((line)[(i)].Char.UnicodeChar)
+#define CI(ch) { { (WCHAR)(ch) }, 0x07 }
+static int cell_is_wide_trail(const CHAR_INFO *line, int k, int *lead);
 int is_wide_cp(unsigned int cp);
 %(func)s
 
@@ -40,7 +45,8 @@ static void ck(const char *n, int got, int want) {
 
 int main(void) {
     /* "a 保 x"：col0 'a', col1 ' ', col2 保(主), col3 保占位0(次), col4 'x' */
-    WCHAR line1[16] = { 'a',' ',0x4FDD,0,'x', 0,0,0,0,0,0,0,0,0,0,0 };
+    CHAR_INFO line1[16] = { CI('a'),CI(' '),CI(0x4FDD),CI(0),CI('x'),
+                            CI(0),CI(0),CI(0),CI(0),CI(0),CI(0),CI(0),CI(0),CI(0),CI(0),CI(0) };
     int n = 16;
 
     /* 光标落在宽字符【次格 col3】-> 必须整字化到主格 col2（不能停半字中间） */
@@ -53,14 +59,15 @@ int main(void) {
     ck("光标在x(4)->保持4", copy_cursor_to_lead(line1,n,4), 4);
 
     /* emoji 代理对 😀：col1 高0xD83D 主格，col2 低0xDE00 次格 */
-    WCHAR line2[16]; memset(line2,0,sizeof line2);
-    line2[0]='A'; line2[1]=0xD83D; line2[2]=0xDE00; line2[3]='B';
+    CHAR_INFO line2[16]; memset(line2,0,sizeof line2);
+    line2[0]= (CHAR_INFO)CI('A'); line2[1]= (CHAR_INFO)CI(0xD83D);
+    line2[2]= (CHAR_INFO)CI(0xDE00); line2[3]= (CHAR_INFO)CI('B');
     ck("光标在emoji次格(2)->整字化到主格(1)", copy_cursor_to_lead(line2,n,2), 1);
     ck("光标在emoji主格(1)->保持1", copy_cursor_to_lead(line2,n,1), 1);
     ck("光标在emoji后B(3)->保持3", copy_cursor_to_lead(line2,n,3), 3);
 
     /* 连续两个汉字 "中文"：col0 中主 col1 中次 col2 文主 col3 文次 col4 'z' */
-    WCHAR line3[8] = { 0x4E2D,0,0x6587,0,'z',0,0,0 };
+    CHAR_INFO line3[8] = { CI(0x4E2D),CI(0),CI(0x6587),CI(0),CI('z'),CI(0),CI(0),CI(0) };
     ck("光标在中次格(1)->中主(0)", copy_cursor_to_lead(line3,8,1), 0);
     ck("光标在文次格(3)->文主(2)", copy_cursor_to_lead(line3,8,3), 2);
     ck("光标在文主(2)->保持2", copy_cursor_to_lead(line3,8,2), 2);
