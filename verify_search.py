@@ -209,14 +209,19 @@ int main(void) {
     assert(g_search_matches[0].abs_y == 10 && g_search_matches[0].start_x == 0);
     assert(g_search_matches[1].abs_y == 50 && g_search_matches[1].start_x == 9);
     assert(g_search_matches[2].abs_y == 95 && g_search_matches[2].start_x == 0);
-    assert(g_search_match_cur == 2); // Default focus on latest match
+    // v1.8.28：回车确认落在第 1 个匹配（cur=0）；D(next) 往下、U(prev) 往上。
+    assert(g_search_match_cur == 0); // focus on first match
 
-    // Test jump navigation
-    search_jump_next(); // Should wrap to 1 (prev earlier match)
+    // Test jump navigation: next = 下一个（行号增大），0->1->2->回0；prev 反之。
+    search_jump_next(); // 下一个: 0 -> 1
     assert(g_search_match_cur == 1);
-    search_jump_next(); // Should wrap to 0
+    search_jump_next(); // 下一个: 1 -> 2
+    assert(g_search_match_cur == 2);
+    search_jump_next(); // 回绕: 2 -> 0
     assert(g_search_match_cur == 0);
-    search_jump_prev(); // Should go forward to 1
+    search_jump_prev(); // 上一个: 0 -> 2（回绕到最后）
+    assert(g_search_match_cur == 2);
+    search_jump_prev(); // 上一个: 2 -> 1
     assert(g_search_match_cur == 1);
 
     // v1.8.7: search_case_sensitive 锁定大小写后，"error" 只应命中小写那两行，

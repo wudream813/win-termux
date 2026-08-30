@@ -110,9 +110,10 @@ static void run_search(int live) {
 
     if (g_search_match_count > 0) {
         g_search_active = 1;
-        /* 实时预览：高亮全部匹配、计数显示 N 个，但不移动视图、也不钉指针；
-         * 回车确认才滚动并把当前指针放到最后一个匹配（U/D 从这里循环）。 */
-        g_search_match_cur = live ? 0 : g_search_match_count - 1;
+        /* 实时预览（live）：高亮全部匹配、计数显示 N 个，不移动视图、指针置 0。
+         * 回车确认：指针落在第 1 个匹配（cur=0）并把它滚到屏幕中间——这样按 D
+         * 顺序往下走（0→1→2…）、按 U 回绕到上一个，符合 [U 上]/[D 下] 的方向。 */
+        g_search_match_cur = 0;
         if (!live) {
             int target_abs_y = g_search_matches[g_search_match_cur].abs_y;
             if (!s->in_alt_screen) {
@@ -145,7 +146,8 @@ void search_jump_next(void) {
 
     EnterCriticalSection(&g_mux.cs);
     if (g_search_match_count > 0 && g_search_active) {
-        g_search_match_cur = (g_search_match_cur - 1 + g_search_match_count) % g_search_match_count;
+        /* D / n = 下一个：往下（行号增大）循环。 */
+        g_search_match_cur = (g_search_match_cur + 1) % g_search_match_count;
         int target_abs_y = g_search_matches[g_search_match_cur].abs_y;
         if (!s->in_alt_screen) {
             int vo = s->hist_lines - (target_abs_y - s->rows / 2);
@@ -166,7 +168,8 @@ void search_jump_prev(void) {
 
     EnterCriticalSection(&g_mux.cs);
     if (g_search_match_count > 0 && g_search_active) {
-        g_search_match_cur = (g_search_match_cur + 1) % g_search_match_count;
+        /* U / N = 上一个：往上（行号减小）循环。 */
+        g_search_match_cur = (g_search_match_cur - 1 + g_search_match_count) % g_search_match_count;
         int target_abs_y = g_search_matches[g_search_match_cur].abs_y;
         if (!s->in_alt_screen) {
             int vo = s->hist_lines - (target_abs_y - s->rows / 2);
@@ -1166,6 +1169,15 @@ void copy_selection_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs
     }
     int block_x0 = sx < ex ? sx : ex;
     int block_x1 = sx > ex ? sx : ex;
+    /* 框（Alt）选宽度恒为 2 的倍数（每格 2 列）：奇数宽度就把右端再扩一列，
+     * 与渲染高亮的偶数宽度对齐（例如光标在第 3 列时框 3 格按 4 格输出）。 */
+    if (block) {
+        int bw = block_x1 - block_x0 + 1;
+        if (bw > 0 && (bw % 2) != 0) {
+            block_x1 += 1;
+            if (block_x1 >= s->cols) block_x1 = s->cols - 1;
+        }
+    }
     if (block && sy_abs > ey_abs) {
         int ty = sy_abs; sy_abs = ey_abs; ey_abs = ty;
     }
@@ -1466,12 +1478,19 @@ int handle_copy_mode_key(KEY_EVENT_RECORD *ke) {
     int is_motion = (vk == VK_LEFT || vk == VK_RIGHT || vk == VK_UP || vk == VK_DOWN ||
                      vk == VK_PRIOR || vk == VK_NEXT || vk == VK_HOME || vk == VK_END);
 
-    /* Shift/Alt reshape the selection: Shift keeps the text-flow selection,
-     * Alt switches to a rectangular block.  Either one starts a selection at
-     * the cursor if none is open yet. */
+    /* v1.8.28 选择语义：
+     *   Shift/Alt + 方向 = 从当前光标起（若无选区则锚定）开始/扩展选择；
+     *                      Shift 为行（流式）选区，Alt 为矩形（框）选区。
+     *   纯方向（无 Shift/Alt）= 仅移动光标；默认（copy_move_deselect=1）丢弃
+     *                      当前高亮，从头再来；可在设置里关掉以保留选区。
+     * Space/v/V/b 已移除，不再用作开始/切换选择。 */
     if (is_motion && (has_shift || has_alt)) {
         if (!g_copy_sel_active) copy_mode_anchor_here(p, s);
         g_copy_block = has_alt ? 1 : 0;
+    } else if (is_motion && g_copy_sel_active && !g_copy_quick && g_copy_move_deselect) {
+        /* 无修饰移动：丢弃当前高亮（保留复制模式本身）。 */
+        g_copy_sel_active = 0;
+        g_copy_block = 0;
     } else if (g_copy_quick) {
         copy_mode_leave(p);
         return 1;
@@ -1492,22 +1511,8 @@ int handle_copy_mode_key(KEY_EVENT_RECORD *ke) {
         return 0;
     }
 
-    if (vk == VK_SPACE || uc == 'v' || uc == 'V') {
-        g_copy_sel_active = !g_copy_sel_active;
-        if (g_copy_sel_active) {
-            copy_mode_anchor_here(p, s);
-            g_copy_block = (uc == 'V');   /* Shift+V 直接开块选 */
-        }
-        g_mux.needs_redraw = 1;
-        return 0;
-    }
-
-    if (uc == 'b' || uc == 'B') {
-        g_copy_block = !g_copy_block;
-        if (!g_copy_sel_active) copy_mode_anchor_here(p, s);
-        g_mux.needs_redraw = 1;
-        return 0;
-    }
+    /* v1.8.28：选择统一用 Shift（行选区）/ Alt（块选）+ 方向键发起；
+     * 不再用 Space / v / V / b。在当前光标处按 Shift/Alt+方向即开始选择。 */
 
     if (uc == 'y' || uc == 'Y') {
         copy_mode_yank(p, s);
@@ -1770,8 +1775,9 @@ static void handle_settings_keys_key(WORD vk, WCHAR uc, BOOL is_ctrl) {
 static void settings_behavior_toggle(int idx) {
     if (idx == 0) g_mouse_enabled = !g_mouse_enabled;
     else if (idx == 1) g_copy_on_select = !g_copy_on_select;
-    else if (idx == 2) g_confirm_on_exit = !g_confirm_on_exit;
-    else if (idx == 3) {
+    else if (idx == 2) g_copy_move_deselect = !g_copy_move_deselect;
+    else if (idx == 3) g_confirm_on_exit = !g_confirm_on_exit;
+    else if (idx == 4) {
         g_search_case_sensitive = !g_search_case_sensitive;
         if (g_search_active) execute_search();   /* 立刻按新规则重新匹配 */
     }
@@ -3717,38 +3723,10 @@ void handle_mouse(MOUSE_EVENT_RECORD *me) {
         }
     }
 
-    if (!s->mouse_tracking && !p->is_settings && my >= 1 && !g_sb_dragging) {
-        if (me->dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED) {
-            int cur_y = my - 1;
-            int abs_y = screen_to_abs_row(s, cur_y, p->scroll_offset);
-            int cur_x = mx < s->cols ? mx : s->cols - 1;
-            if (cur_x < 0) cur_x = 0;
-            /* 端点记鼠标原始列；点到汉字左半/右半都由渲染高亮 / 复制取色的
-             * snap 按方向整字纳入（左端吸主格、右端扩次格），选区不切半个字、
-             * 也不向左偏一格。 */
-            if (!g_mouse_selecting) {
-                g_mouse_selecting = 1;
-                g_mouse_sel_sx = cur_x;
-                g_mouse_sel_s_abs_y = abs_y;
-                g_mouse_sel_ex = cur_x;
-                g_mouse_sel_e_abs_y = abs_y;
-                g_mux.needs_redraw = 1;
-            } else {
-                g_mouse_sel_ex = cur_x;
-                g_mouse_sel_e_abs_y = abs_y;
-                g_mux.needs_redraw = 1;
-            }
-        } else {
-            if (g_mouse_selecting) {
-                if (g_copy_on_select &&
-                    (g_mouse_sel_sx != g_mouse_sel_ex || g_mouse_sel_s_abs_y != g_mouse_sel_e_abs_y)) {
-                    copy_range_to_clipboard(p, g_mouse_sel_sx, g_mouse_sel_s_abs_y, g_mouse_sel_ex, g_mouse_sel_e_abs_y);
-                }
-                g_mouse_selecting = 0;
-                g_mux.needs_redraw = 1;
-            }
-        }
-    }
+    /* v1.8.28：删除「直接鼠标拖动即选区并自动复制」——选择统一走复制模式
+     * （Ctrl+B [）里的 Shift/Alt 两角点选，或进入复制模式后用键盘 Shift/Alt
+     * 移动来选，避免在终端里随手一拖就抢走选择/复制。普通左键不再起选区。 */
+    g_mouse_selecting = 0;
 
     if (me->dwEventFlags == MOUSE_WHEELED) {
         int d = (short)HIWORD(me->dwButtonState);

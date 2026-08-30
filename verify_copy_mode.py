@@ -70,6 +70,23 @@ check("if (is_motion && (has_shift || has_alt))" in key and
       "Shift/Alt + 方向键没有改变选区形状（Shift=行选, Alt=块选）")
 check("copy_mode_leave(p);\n        return 1;" in key,
       "快捷会话里的其它键没有“退出并把按键交回终端”")
+
+# v1.8.28：Space / v / V / b 不再用于开始/切换选择（改由 Shift/Alt+方向）。
+check("vk == VK_SPACE" not in key and "uc == 'v'" not in key and "uc == 'V'" not in key
+      and "uc == 'b'" not in key and "uc == 'B'" not in key,
+      "Space/v/V/b 应已移除，选择改用 Shift/Alt+方向")
+# v1.8.28：无 Shift/Alt 移动时，默认丢弃当前高亮（可配置 copy_move_deselect）。
+check("g_copy_move_deselect" in key and "g_copy_sel_active = 0;" in key,
+      "无修饰移动没有丢弃当前高亮（copy_move_deselect）")
+# v1.8.28：框（Alt）选宽度恒为偶数（奇数扩一列）。
+check("框（Alt）选宽度恒为 2 的倍数" in RENDER and "width_cells" in RENDER,
+      "块选没有把宽度对齐到 2 的倍数")
+check("框（Alt）选宽度恒为 2 的倍数" in INPUT and "block_x1 += 1;" in INPUT,
+      "块选复制没有把宽度对齐到 2 的倍数")
+# v1.8.28：配置项 copy_move_deselect 存在（config 解析 + 设置页）。
+CONFIG = (ROOT / "src" / "config.c").read_text(encoding="utf-8")
+check('"copy_move_deselect"' in CONFIG and "g_copy_move_deselect" in CONFIG,
+      "缺少 copy_move_deselect 配置项")
 check("copy_mode_yank(p, s);" in key and "g_copy_block" in func(INPUT, "static void copy_mode_yank("),
       "复制时没有按当前选区形状取内容")
 
@@ -80,8 +97,12 @@ check("quick_shift" in mouse and "quick_alt" in mouse and
       "Shift/Alt 点击没有直接进入（块）复制模式")
 check("/* Second corner: only the end point moves. */" in mouse,
       "第二次点击没有只移动选区终点")
-check(mouse.index("quick_shift") < mouse.index("if (!s->mouse_tracking && !p->is_settings"),
-      "Shift/Alt 点选必须排在普通拖拽选择之前")
+# v1.8.28：删除「直接鼠标拖动即选区/自动复制」——普通左键不再起选区；
+# g_mouse_selecting 在鼠标处理里被清零，且不再有拖选自动复制分支。
+check("g_mouse_selecting = 0;" in mouse,
+      "直接鼠标拖动复制未移除（普通左键应不再起选区）")
+check("copy_range_to_clipboard(p, g_mouse_sel_sx" not in mouse,
+      "仍残留普通拖选松开即自动复制的调用")
 check(mouse.index("quick_shift") < mouse.index("if (s->mouse_tracking == 0) {"),
       "Shift/Alt 点选必须在鼠标事件转发给全屏程序之前生效")
 check("me->dwEventFlags == MOUSE_MOVED && g_copy_mode && g_copy_quick" in mouse,
