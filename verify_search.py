@@ -317,6 +317,18 @@ def main():
     render_c = open(os.path.join(root, "src", "render.c"), encoding="utf-8").read()
     if "search_preview_live();" not in input_c:
         sys.exit("FAIL: 搜索框编辑后未调用 search_preview_live()（无实时预览）")
+    # v1.8.29：搜索框内 Alt+C 手动切换区分大小写并实时重算。
+    if "g_search_case_sensitive = !g_search_case_sensitive;" not in input_c.split("void handle_search_key")[1].split("void ")[0]:
+        sys.exit("FAIL: handle_search_key 内没有 Alt+C 切换区分大小写")
+    if 's_alt' not in input_c.split("void handle_search_key")[1].split("void ")[0]:
+        sys.exit("FAIL: handle_search_key 未检测 Alt 修饰键（Alt+C 切换大小写）")
+    # 搜索框后缀显示 Aa/aa 大小写状态标记。
+    if 'Aa' not in render_c.split("void render_search_box")[1].split("void ")[0] or \
+       'aa' not in render_c.split("void render_search_box")[1].split("void ")[0]:
+        sys.exit("FAIL: 搜索框未显示 Aa/aa 大小写状态标记")
+    # v1.8.29：copy_on_select 设置已删除。
+    if "g_copy_on_select" in input_c or "copy_on_select" in render_c:
+        sys.exit("FAIL: 已删除的 copy_on_select 设置仍有残留")
     # run_search 必须有 live 参数且 live 时不滚动
     if "static void run_search(int live)" not in input_c or "if (!live)" not in input_c:
         sys.exit("FAIL: run_search 缺少 live 参数 / live 时不应滚动")

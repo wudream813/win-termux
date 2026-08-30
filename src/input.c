@@ -1018,6 +1018,17 @@ void handle_palette_mouse(MOUSE_EVENT_RECORD *me) {
 
 void handle_search_key(KEY_EVENT_RECORD *ke) {
     WORD vk = ke->wVirtualKeyCode; WCHAR uc = ke->uChar.UnicodeChar;
+    DWORD sctrl = ke->dwControlKeyState;
+    int s_alt = (sctrl & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) != 0;
+
+    /* Alt+C（或 Alt+L）：在搜索框内直接切换「区分大小写」，立刻实时重算高亮。 */
+    if (s_alt && (vk == 'C' || uc == 'c' || uc == 'C' ||
+                  vk == 'L' || uc == 'l' || uc == 'L')) {
+        g_search_case_sensitive = !g_search_case_sensitive;
+        search_preview_live();
+        g_mux.needs_redraw = 1;
+        return;
+    }
 
     if (vk == VK_ESCAPE) {
         g_search_mode = 0;
@@ -1155,6 +1166,21 @@ static int cliphtml_row_right_boundary(const ClipHtmlCell *cells, int x_start, i
 void copy_selection_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs, int block, int halfopen) {
     if (!p) return;
     ScreenBuffer *s = &p->screen;
+    /* 框（Alt）选宽度恒为 2 的倍数（每字符 2 列），即使一个汉字都没框到也要偶数。
+     * 在归一化之前按方向处理：sx=锚点 caret、ex=活动端点 caret；格数为
+     * |ex-sx|（半开）或 |ex-sx|+1（闭合）。奇数就把活动端点向远离锚点方向
+     * 再外扩一列（端点在右 ex+1，端点在左 ex-1；锚点不动）。与渲染高亮一致。 */
+    if (block) {
+        int anchor = sx, endp = ex;
+        int width_cells = halfopen ? (endp - anchor)
+                                   : (endp >= anchor ? endp - anchor + 1 : anchor - endp + 1);
+        if (width_cells < 0) width_cells = -width_cells;
+        if (width_cells % 2 != 0) {
+            if (endp >= anchor) { endp += 1; if (endp > s->cols - 1) endp = s->cols - 1; }
+            else               { endp -= 1; if (endp < 0) endp = 0; }
+        }
+        sx = anchor; ex = endp;
+    }
     if (sy_abs > ey_abs || (sy_abs == ey_abs && sx > ex)) {
         int tx = sx; sx = ex; ex = tx;
         int ty = sy_abs; sy_abs = ey_abs; ey_abs = ty;
@@ -1169,15 +1195,6 @@ void copy_selection_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs
     }
     int block_x0 = sx < ex ? sx : ex;
     int block_x1 = sx > ex ? sx : ex;
-    /* 框（Alt）选宽度恒为 2 的倍数（每格 2 列）：奇数宽度就把右端再扩一列，
-     * 与渲染高亮的偶数宽度对齐（例如光标在第 3 列时框 3 格按 4 格输出）。 */
-    if (block) {
-        int bw = block_x1 - block_x0 + 1;
-        if (bw > 0 && (bw % 2) != 0) {
-            block_x1 += 1;
-            if (block_x1 >= s->cols) block_x1 = s->cols - 1;
-        }
-    }
     if (block && sy_abs > ey_abs) {
         int ty = sy_abs; sy_abs = ey_abs; ey_abs = ty;
     }
@@ -1774,10 +1791,9 @@ static void handle_settings_keys_key(WORD vk, WCHAR uc, BOOL is_ctrl) {
 
 static void settings_behavior_toggle(int idx) {
     if (idx == 0) g_mouse_enabled = !g_mouse_enabled;
-    else if (idx == 1) g_copy_on_select = !g_copy_on_select;
-    else if (idx == 2) g_copy_move_deselect = !g_copy_move_deselect;
-    else if (idx == 3) g_confirm_on_exit = !g_confirm_on_exit;
-    else if (idx == 4) {
+    else if (idx == 1) g_copy_move_deselect = !g_copy_move_deselect;
+    else if (idx == 2) g_confirm_on_exit = !g_confirm_on_exit;
+    else if (idx == 3) {
         g_search_case_sensitive = !g_search_case_sensitive;
         if (g_search_active) execute_search();   /* 立刻按新规则重新匹配 */
     }

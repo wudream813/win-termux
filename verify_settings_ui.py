@@ -123,8 +123,10 @@ check("search_case_sensitive" in behavior and "SETTINGS_BEHAVIOR_TOGGLES" in REN
       "行为页缺少搜索锁定大小写开关，或开关数量仍写死")
 check("g_key_capture_active" in keys and "handle_key_capture" in INPUT,
       "键位录制在渲染与输入两侧都实现")
-check(all(k in behavior for k in ("mouse", "copy_on_select", "confirm_on_exit", "scrollback")),
+check(all(k in behavior for k in ("mouse", "copy_move_deselect", "confirm_on_exit", "scrollback")),
       "行为页覆盖四个 [general] 开关")
+check("copy_on_select" not in behavior and "g_copy_on_select" not in INPUT,
+      "已删除的 copy_on_select 设置仍有残留")
 
 key_handlers = ("handle_settings_appearance_key", "handle_settings_keys_key", "handle_settings_behavior_key")
 for h in key_handlers:

@@ -18,7 +18,7 @@
 #define SETTINGS_ROLE_COL_W     34
 #define SETTINGS_KEYS_ROW0      6
 #define SETTINGS_BEHAVIOR_ROW0  6
-#define SETTINGS_BEHAVIOR_TOGGLES 5   /* mouse / copy_on_select / copy_move_deselect / confirm_on_exit / search_case_sensitive */
+#define SETTINGS_BEHAVIOR_TOGGLES 4   /* mouse / copy_move_deselect / confirm_on_exit / search_case_sensitive */
 /* 相对 main_left 的按钮列偏移，渲染时用绝对定位写出，鼠标按同样的偏移命中 */
 #define SETTINGS_KEYS_PREFIX_COL 56   /* [前缀] / [直接] 切换 */
 

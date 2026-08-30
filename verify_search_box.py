@@ -50,6 +50,7 @@ HARNESS = "\n".join([
     '#include "utf8.h"',
     "char g_search_buf[64];",
     "int g_search_len = 0, g_search_pos = 0;",
+    "int g_search_case_sensitive = 0;",
     define("BADGE_ROW"),
     define("SEARCH_BOX_PREFIX_COLS"),
     define("SEARCH_BOX_INPUT_COLS"),

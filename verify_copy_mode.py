@@ -81,8 +81,9 @@ check("g_copy_move_deselect" in key and "g_copy_sel_active = 0;" in key,
 # v1.8.28：框（Alt）选宽度恒为偶数（奇数扩一列）。
 check("框（Alt）选宽度恒为 2 的倍数" in RENDER and "width_cells" in RENDER,
       "块选没有把宽度对齐到 2 的倍数")
-check("框（Alt）选宽度恒为 2 的倍数" in INPUT and "block_x1 += 1;" in INPUT,
-      "块选复制没有把宽度对齐到 2 的倍数")
+check("框（Alt）选宽度恒为 2 的倍数" in INPUT and "width_cells" in INPUT
+      and "endp += 1;" in INPUT and "endp -= 1;" in INPUT,
+      "块选复制没有按方向把宽度对齐到 2 的倍数（端点在右+1 / 在左-1）")
 # v1.8.28：配置项 copy_move_deselect 存在（config 解析 + 设置页）。
 CONFIG = (ROOT / "src" / "config.c").read_text(encoding="utf-8")
 check('"copy_move_deselect"' in CONFIG and "g_copy_move_deselect" in CONFIG,

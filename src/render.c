@@ -719,7 +719,6 @@ static void render_settings_behavior(char *out, int bs, int *posp, int host_rows
 
     struct { const char *key; const char *desc; int value; } toggles[SETTINGS_BEHAVIOR_TOGGLES] = {
         {"mouse",           "鼠标支持（标签点击 / 拖选 / 滚轮）", g_mouse_enabled},
-        {"copy_on_select",  "拖选松开后自动复制到剪贴板",         g_copy_on_select},
         {"copy_move_deselect", "复制模式直接移动（无 Shift/Alt）丢弃高亮", g_copy_move_deselect},
         {"confirm_on_exit", "退出 termux 前二次确认",             g_confirm_on_exit},
         {"search_case_sensitive", "搜索锁定大小写（区分大小写）",  g_search_case_sensitive},
@@ -1244,8 +1243,14 @@ void render_search_box(char *out, int bs, int *posp, int host_rows, int host_col
     pos += snprintf(out + pos, bs - pos, "\x1b[048;2;022;027;034m\x1b[038;2;255;255;255m");
     render_scrollable_input(out, bs, &pos, g_search_buf, g_search_len, g_search_pos, box_w,
                             "\x1b[048;2;022;027;034m", NULL);
-    pos += snprintf(out + pos, bs - pos,
-                    "\x1b[0m\x1b[048;2;033;038;045m\x1b[038;2;139;148;158m Enter/Esc  \x1b[0m");
+    /* 后缀固定 12 列（SEARCH_BOX_SUFFIX_COLS）：前 3 列大小写模式标记
+     * "Aa "（区分大小写=高亮）/ "aa "（忽略=灰），其余 9 列为 "Enter/Esc" 提示。 */
+    /* 后缀固定 12 列：2 列大小写标记 Aa/aa + 1 空格 + "Enter/Esc" 9 列 = 12。 */
+    pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[048;2;033;038;045m");
+    pos += snprintf(out + pos, bs - pos, g_search_case_sensitive
+                        ? "\x1b[038;2;121;192;255;1mAa"
+                        : "\x1b[038;2;139;148;158maa");
+    pos += snprintf(out + pos, bs - pos, "\x1b[038;2;139;148;158m Enter/Esc\x1b[0m");
     *posp = pos;
 }
 
@@ -2172,16 +2177,18 @@ void render_screen(void) {
                     /* Rectangular selection: the same column range on every row. */
                     sel_block = 1;
                     int a = g_copy_anchor_x, e = g_copy_end_x;
-                    /* 框（Alt）选宽度恒为 2 的倍数（每格宽 2 列）：锚点占一列，
-                     * 从锚点数「目标格数」，奇数就把【活动端】再外扩一列。 */
+                    /* 框（Alt）选宽度恒为 2 的倍数（每字符 2 列），即使框到的全是
+                     * ASCII/标点、一个汉字都没有也要偶数：奇数格数就把【活动端点】
+                     * 再向远离锚点的方向外扩一列（向右则 e+1，向左则 e-1）。 */
                     int width_cells = half ? (e - a) : (e >= a ? e - a + 1 : a - e + 1);
                     if (width_cells < 0) width_cells = -width_cells;
                     if (width_cells % 2 != 0) {
-                        if (e >= a) e += half ? 1 : 1;   /* 端点在右：向右扩一列 */
-                        else        a -= 1;              /* 端点在左：向左扩一列 */
+                        if (e >= a) e += 1;   /* 活动端点在右：向右再扩一列 */
+                        else        e -= 1;   /* 活动端点在左：向左再扩一列（锚点不动） */
                     }
                     if (e >= a) { sel_min_x = a; sel_max_x = half ? e - 1 : e; }
                     else        { sel_min_x = e; sel_max_x = half ? a - 1 : a; }
+                    if (sel_min_x < 0) sel_min_x = 0;
                     if (sel_max_x < sel_min_x) sel_max_x = sel_min_x;
                     if (sel_max_x >= s->cols) sel_max_x = s->cols - 1;
                     if (!half || g_copy_anchor_x != g_copy_end_x) sel_active = 1;

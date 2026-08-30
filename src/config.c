@@ -9,7 +9,6 @@ int g_settings_table_sel = 0;
 int g_default_startup = 0;
 int g_scrollback_lines = SCROLL_BUF_LINES;
 int g_mouse_enabled = 1;
-int g_copy_on_select = 1;
 int g_copy_move_deselect = 1;
 int g_confirm_on_exit = 0;
 int g_search_case_sensitive = 0;
@@ -69,7 +68,6 @@ void init_default_config(void) {
     g_default_startup = 0;
     g_scrollback_lines = SCROLL_BUF_LINES;
     g_mouse_enabled = 1;
-    g_copy_on_select = 1;
     g_copy_move_deselect = 1;
     g_confirm_on_exit = 0;
     g_search_case_sensitive = 0;
@@ -117,7 +115,6 @@ static int apply_general_key(const char *key, const char *val) {
         return 1;
     }
     if (_stricmp(key, "mouse") == 0)           { g_mouse_enabled = config_parse_bool(val, 1); return 1; }
-    if (_stricmp(key, "copy_on_select") == 0)  { g_copy_on_select = config_parse_bool(val, 1); return 1; }
     if (_stricmp(key, "copy_move_deselect") == 0) { g_copy_move_deselect = config_parse_bool(val, 1); return 1; }
     if (_stricmp(key, "confirm_on_exit") == 0) { g_confirm_on_exit = config_parse_bool(val, 0); return 1; }
     if (_stricmp(key, "search_case_sensitive") == 0) { g_search_case_sensitive = config_parse_bool(val, 0); return 1; }
@@ -299,14 +296,12 @@ void save_config(void) {
         "prefix = %s\r\n"
         "scrollback = %d\r\n"
         "mouse = %s\r\n"
-        "copy_on_select = %s\r\n"
         "copy_move_deselect = %s\r\n"
         "confirm_on_exit = %s\r\n"
         "search_case_sensitive = %s\r\n"
         "default_startup = %d\r\n\r\n",
         theme_name(), keymap_prefix_text(), g_scrollback_lines,
         g_mouse_enabled ? "true" : "false",
-        g_copy_on_select ? "true" : "false",
         g_copy_move_deselect ? "true" : "false",
         g_confirm_on_exit ? "true" : "false",
         g_search_case_sensitive ? "true" : "false",
