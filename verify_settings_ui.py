@@ -175,6 +175,11 @@ check("int act_r = 17;" in RENDER and "r == 17" in INPUT,
       "详情页操作按钮行没有随颜色行下移到第 17 行")
 check("item_color_hit(main_left, c)" in INPUT,
       "详情页颜色选择条没有鼠标热区")
+# v1.8.30：外观页语义颜色网格的 hover 列区间必须与点击命中对齐（c=g_mouse_x+1，
+# 点击 c∈[col, col+W-2] ⇔ hover g_mouse_x∈[col-1, col+W-3]）。旧代码上界少 1，
+# 鼠标停在格子右半边时不高亮却可点击。
+check("g_mouse_x <= col + SETTINGS_ROLE_COL_W - 3" in RENDER,
+      "语义颜色网格 hover 列区间与点击命中未对齐（上界错位）")
 check("(g_settings_field + 1) % 4" in INPUT and "(g_settings_field + 3) % 4" in INPUT,
       "Tab 没有把颜色行算成第 4 个字段")
 check("g_edit_color = (g_edit_color + 1) % 9" in INPUT and

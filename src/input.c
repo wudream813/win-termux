@@ -1166,21 +1166,8 @@ static int cliphtml_row_right_boundary(const ClipHtmlCell *cells, int x_start, i
 void copy_selection_to_clipboard(Pane *p, int sx, int sy_abs, int ex, int ey_abs, int block, int halfopen) {
     if (!p) return;
     ScreenBuffer *s = &p->screen;
-    /* 框（Alt）选宽度恒为 2 的倍数（每字符 2 列），即使一个汉字都没框到也要偶数。
-     * 在归一化之前按方向处理：sx=锚点 caret、ex=活动端点 caret；格数为
-     * |ex-sx|（半开）或 |ex-sx|+1（闭合）。奇数就把活动端点向远离锚点方向
-     * 再外扩一列（端点在右 ex+1，端点在左 ex-1；锚点不动）。与渲染高亮一致。 */
-    if (block) {
-        int anchor = sx, endp = ex;
-        int width_cells = halfopen ? (endp - anchor)
-                                   : (endp >= anchor ? endp - anchor + 1 : anchor - endp + 1);
-        if (width_cells < 0) width_cells = -width_cells;
-        if (width_cells % 2 != 0) {
-            if (endp >= anchor) { endp += 1; if (endp > s->cols - 1) endp = s->cols - 1; }
-            else               { endp -= 1; if (endp < 0) endp = 0; }
-        }
-        sx = anchor; ex = endp;
-    }
+    /* → 按一次只前进一格、复制内容也只多一格（宽字符一次跨两列由
+     * copy_step_char / snap 保证），不再强制把框选宽度补成偶数。 */
     if (sy_abs > ey_abs || (sy_abs == ey_abs && sx > ex)) {
         int tx = sx; sx = ex; ex = tx;
         int ty = sy_abs; sy_abs = ey_abs; ey_abs = ty;

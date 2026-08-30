@@ -78,12 +78,16 @@ check("vk == VK_SPACE" not in key and "uc == 'v'" not in key and "uc == 'V'" not
 # v1.8.28：无 Shift/Alt 移动时，默认丢弃当前高亮（可配置 copy_move_deselect）。
 check("g_copy_move_deselect" in key and "g_copy_sel_active = 0;" in key,
       "无修饰移动没有丢弃当前高亮（copy_move_deselect）")
-# v1.8.28：框（Alt）选宽度恒为偶数（奇数扩一列）。
-check("框（Alt）选宽度恒为 2 的倍数" in RENDER and "width_cells" in RENDER,
-      "块选没有把宽度对齐到 2 的倍数")
-check("框（Alt）选宽度恒为 2 的倍数" in INPUT and "width_cells" in INPUT
-      and "endp += 1;" in INPUT and "endp -= 1;" in INPUT,
-      "块选复制没有按方向把宽度对齐到 2 的倍数（端点在右+1 / 在左-1）")
+# v1.8.30：Alt 框选不再强制偶数宽——→ 按一次高亮/复制只多一格（宽字符一次跨两列
+# 由 copy_step_char / snap 保证），补偶数会让高亮比光标多走一格。断言该逻辑已移除。
+check("width_cells" not in RENDER and "2 的倍数" not in RENDER,
+      "块选渲染仍残留强制偶数宽（→ 高亮会多走一格）")
+check("endp += 1;" not in INPUT and "endp -= 1;" not in INPUT
+      and "width_cells" not in INPUT,
+      "块选复制仍残留强制偶数宽")
+# 块选仍按半开 [lo, hi-1] 处理（→ 一格）。
+check("sel_max_x = half ? hi - 1 : hi;" in RENDER,
+      "块选没有按半开区间（右 caret 排他）渲染")
 # v1.8.28：配置项 copy_move_deselect 存在（config 解析 + 设置页）。
 CONFIG = (ROOT / "src" / "config.c").read_text(encoding="utf-8")
 check('"copy_move_deselect"' in CONFIG and "g_copy_move_deselect" in CONFIG,

@@ -594,7 +594,8 @@ static void render_settings_appearance(char *out, int bs, int *posp, int host_ro
         int col = settings_role_col(main_left, role);
         if (row > host_rows) continue;
         int selected = (g_settings_theme_sel == theme_count() + role);
-        int hovered = (g_mouse_y == row - 1 && g_mouse_x >= col - 1 && g_mouse_x < col + SETTINGS_ROLE_COL_W - 2);
+        /* hover 列区间与点击命中一致：c ∈ [col, col+COL_W-2]（g_mouse_x = c-1）。 */
+        int hovered = (g_mouse_y == row - 1 && g_mouse_x >= col - 1 && g_mouse_x <= col + SETTINGS_ROLE_COL_W - 3);
         int r, g, b;
         theme_role_rgb(role, &r, &g, &b);
 
@@ -2174,21 +2175,15 @@ void render_screen(void) {
                  * 两角（quick）= 闭合区间，端点格子包含。snap_sel_row 再整字吸附。 */
                 int half = !g_copy_quick;
                 if (g_copy_block) {
-                    /* Rectangular selection: the same column range on every row. */
+                    /* Rectangular selection: the same column range on every row.
+                     * 半开区间 [锚点 caret, 端点 caret)：→ 按一次只前进一格，
+                     * 高亮也只跟着多一格（宽字符一次跨两列由 copy_step_char 保证，
+                     * 不再强制补偶数宽）。snap_sel_row 再把框边整字吸附。 */
                     sel_block = 1;
-                    int a = g_copy_anchor_x, e = g_copy_end_x;
-                    /* 框（Alt）选宽度恒为 2 的倍数（每字符 2 列），即使框到的全是
-                     * ASCII/标点、一个汉字都没有也要偶数：奇数格数就把【活动端点】
-                     * 再向远离锚点的方向外扩一列（向右则 e+1，向左则 e-1）。 */
-                    int width_cells = half ? (e - a) : (e >= a ? e - a + 1 : a - e + 1);
-                    if (width_cells < 0) width_cells = -width_cells;
-                    if (width_cells % 2 != 0) {
-                        if (e >= a) e += 1;   /* 活动端点在右：向右再扩一列 */
-                        else        e -= 1;   /* 活动端点在左：向左再扩一列（锚点不动） */
-                    }
-                    if (e >= a) { sel_min_x = a; sel_max_x = half ? e - 1 : e; }
-                    else        { sel_min_x = e; sel_max_x = half ? a - 1 : a; }
-                    if (sel_min_x < 0) sel_min_x = 0;
+                    int lo = g_copy_anchor_x < g_copy_end_x ? g_copy_anchor_x : g_copy_end_x;
+                    int hi = g_copy_anchor_x > g_copy_end_x ? g_copy_anchor_x : g_copy_end_x;
+                    sel_min_x = lo;
+                    sel_max_x = half ? hi - 1 : hi;   /* 半开：右 caret 排他 */
                     if (sel_max_x < sel_min_x) sel_max_x = sel_min_x;
                     if (sel_max_x >= s->cols) sel_max_x = s->cols - 1;
                     if (!half || g_copy_anchor_x != g_copy_end_x) sel_active = 1;
