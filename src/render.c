@@ -645,7 +645,15 @@ static void render_settings_keys(char *out, int bs, int *posp, int host_rows, in
         int row = settings_keys_row_at(host_rows, entry);
         if (row < 0) continue;
         int selected = (g_settings_keys_sel == entry);
-        int hovered = (g_mouse_y == row - 1 && g_mouse_x >= main_left - 1 && g_mouse_x < main_left + 70);
+        /* 整行 hover 热区只覆盖文字区（到 [前缀] 按钮前一列），不含右侧按钮列
+         * （[前缀]/[改]/[复位]）：按钮有自己的高亮底色，若整行 hover 也亮，鼠标
+         * 停在按钮上时行底色和按钮底色会叠加，看上去「文字行的 hover 带到了按钮
+         * 上」。鼠标在任一按钮列上时整行不亮底，只让被悬停的那个按钮亮。 */
+        int keys_on_btn = (entry > 0 &&
+                           g_mouse_x >= main_left + SETTINGS_KEYS_PREFIX_COL - 1 &&
+                           g_mouse_x < main_left + SETTINGS_KEYS_RESET_COL + 5);
+        int hovered = (g_mouse_y == row - 1 && g_mouse_x >= main_left - 1 &&
+                       g_mouse_x < main_left + SETTINGS_KEYS_PREFIX_COL - 1 && !keys_on_btn);
         int capturing = (g_key_capture_active && selected);
 
         char name[24], label[24], combo[48];
@@ -676,11 +684,13 @@ static void render_settings_keys(char *out, int bs, int *posp, int host_rows, in
         append_padded_utf8(out, bs, &pos, &cols, combo, 16);
         pos += snprintf(out + pos, bs - pos, "\x1b[0m");
 
-        /* 是否需要先按前缀键，可以按 P 或点这里切换。 */
+        /* 是否需要先按前缀键，可以按 P 或点这里切换。按钮高亮独立判断行/列，
+         * 不依赖整行 hover（hover 在按钮列上被关掉，避免行底色与按钮底色叠加）。 */
+        int row_under_mouse = (g_mouse_y == row - 1);
         if (entry > 0) {
             int action = keymap_action_at(entry - 1);
             int uses_prefix = keymap_action_uses_prefix(action);
-            int h_prefix = (hovered && g_mouse_x >= main_left + SETTINGS_KEYS_PREFIX_COL - 1 &&
+            int h_prefix = (row_under_mouse && g_mouse_x >= main_left + SETTINGS_KEYS_PREFIX_COL - 1 &&
                             g_mouse_x < main_left + SETTINGS_KEYS_PREFIX_COL + 5);
             pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s%s\x1b[0m",
                             row, main_left + SETTINGS_KEYS_PREFIX_COL,
@@ -689,9 +699,9 @@ static void render_settings_keys(char *out, int bs, int *posp, int host_rows, in
                             uses_prefix ? "[前缀]" : "[直接]");
         }
 
-        int h_edit = (hovered && g_mouse_x >= main_left + SETTINGS_KEYS_EDIT_COL - 1 &&
+        int h_edit = (row_under_mouse && g_mouse_x >= main_left + SETTINGS_KEYS_EDIT_COL - 1 &&
                       g_mouse_x < main_left + SETTINGS_KEYS_RESET_COL - 1);
-        int h_reset = (hovered && g_mouse_x >= main_left + SETTINGS_KEYS_RESET_COL - 1 &&
+        int h_reset = (row_under_mouse && g_mouse_x >= main_left + SETTINGS_KEYS_RESET_COL - 1 &&
                        g_mouse_x < main_left + SETTINGS_KEYS_RESET_COL + 5);
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s[改]\x1b[0m",
                         row, main_left + SETTINGS_KEYS_EDIT_COL,
@@ -738,12 +748,18 @@ static void render_settings_behavior(char *out, int bs, int *posp, int host_rows
     int sb_row = SETTINGS_BEHAVIOR_ROW0 + SETTINGS_BEHAVIOR_TOGGLES;
     if (sb_row <= host_rows) {
         int selected = (g_settings_behavior_sel == SETTINGS_BEHAVIOR_TOGGLES);
-        int hovered = (g_mouse_y == sb_row - 1 && g_mouse_x >= main_left - 1 && g_mouse_x < main_left + 60);
+        /* scrollback 行右侧有 [-] / [+] 按钮，整行 hover 只覆盖文字区（到 [-]
+         * 前一列）；按钮有自己的高亮，避免行底色与按钮底色叠加。 */
+        int sb_on_btn = (g_mouse_x >= main_left + SETTINGS_SB_MINUS_COL - 1 &&
+                         g_mouse_x < main_left + SETTINGS_SB_PLUS_COL + 3);
+        int hovered = (g_mouse_y == sb_row - 1 && g_mouse_x >= main_left - 1 &&
+                       g_mouse_x < main_left + SETTINGS_SB_MINUS_COL - 1 && !sb_on_btn);
+        int sb_row_under_mouse = (g_mouse_y == sb_row - 1);
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s     %-22s \x1b[0m",
                         sb_row, main_left, settings_row_style(selected, hovered), "scrollback");
-        int h_minus = (hovered && g_mouse_x >= main_left + SETTINGS_SB_MINUS_COL - 1 &&
+        int h_minus = (sb_row_under_mouse && g_mouse_x >= main_left + SETTINGS_SB_MINUS_COL - 1 &&
                        g_mouse_x < main_left + SETTINGS_SB_MINUS_COL + 2);
-        int h_plus = (hovered && g_mouse_x >= main_left + SETTINGS_SB_PLUS_COL - 1 &&
+        int h_plus = (sb_row_under_mouse && g_mouse_x >= main_left + SETTINGS_SB_PLUS_COL - 1 &&
                       g_mouse_x < main_left + SETTINGS_SB_PLUS_COL + 2);
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s[-]\x1b[0m",
                         sb_row, main_left + SETTINGS_SB_MINUS_COL,
@@ -1131,6 +1147,30 @@ void search_box_layout(int host_cols, int *row, int *left, int *input_col, int *
     if (input_w) *input_w = iw;
 }
 
+/* 搜索框后缀里「Aa / aa」大小写标记的列区间（1 基，右排他）。后缀紧跟输入框：
+ * 输入框占 input_w 列，后缀第 1-2 列即大小写标记，第 3 列起是空格 + Enter/Esc。
+ * 渲染、hover、点击三处共用本几何，保证「高亮哪里就能点哪里」。 */
+static void search_box_case_geom(int host_cols, int *case_col, int *case_w) {
+    int row, left, input_col, box_w;
+    search_box_layout(host_cols, &row, &left, &input_col, &box_w);
+    (void)row;
+    if (case_col) *case_col = input_col + box_w;   /* 1 基首列 */
+    if (case_w)   *case_w = 2;                     /* "Aa" / "aa" 占 2 列 */
+}
+
+int search_box_case_hit(int host_cols, int r, int c) {
+    int row, left, input_col, box_w;
+    search_box_layout(host_cols, &row, &left, &input_col, &box_w);
+    if (r != row) return 0;
+    int cc, cw;
+    search_box_case_geom(host_cols, &cc, &cw);
+    return (c >= cc && c < cc + cw);
+}
+
+int search_box_case_hovered(int host_cols) {
+    return search_box_case_hit(host_cols, g_mouse_y + 1, g_mouse_x + 1);
+}
+
 #define CONFIRM_W 34
 #define CONFIRM_H 4
 #define CONFIRM_YES_W 10   /* [ Y 确认 ] */
@@ -1246,12 +1286,18 @@ void render_search_box(char *out, int bs, int *posp, int host_rows, int host_col
                             "\x1b[048;2;022;027;034m", NULL);
     /* 后缀固定 12 列（SEARCH_BOX_SUFFIX_COLS）：前 3 列大小写模式标记
      * "Aa "（区分大小写=高亮）/ "aa "（忽略=灰），其余 9 列为 "Enter/Esc" 提示。 */
-    /* 后缀固定 12 列：2 列大小写标记 Aa/aa + 1 空格 + "Enter/Esc" 9 列 = 12。 */
+    /* 后缀固定 12 列：2 列大小写标记 Aa/aa + 1 空格 + "Enter/Esc" 9 列 = 12。
+     * Aa/aa 可点击切换区分大小写：悬停时加深底色提示可点（search_box_case_hit
+     * 与点击命中同一几何）。区分=蓝 121;192;255，忽略=灰 139;148;158。 */
+    int case_hover = search_box_case_hovered(host_cols);
     pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[048;2;033;038;045m");
+    /* hover 加深色复用设置页选中行蓝 048;075;110（theme.c 已登记，勿自造色）。 */
+    pos += snprintf(out + pos, bs - pos, case_hover ? "\x1b[048;2;048;075;110m" : "");
     pos += snprintf(out + pos, bs - pos, g_search_case_sensitive
-                        ? "\x1b[038;2;121;192;255;1mAa"
-                        : "\x1b[038;2;139;148;158maa");
-    pos += snprintf(out + pos, bs - pos, "\x1b[038;2;139;148;158m Enter/Esc\x1b[0m");
+                        ? "\x1b[038;2;121;192;255;1m"
+                        : "\x1b[038;2;139;148;158m");
+    pos += snprintf(out + pos, bs - pos, g_search_case_sensitive ? "Aa" : "aa");
+    pos += snprintf(out + pos, bs - pos, "\x1b[048;2;033;038;045m\x1b[038;2;139;148;158m Enter/Esc\x1b[0m");
     *posp = pos;
 }
 

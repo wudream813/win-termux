@@ -51,12 +51,16 @@ HARNESS = "\n".join([
     "char g_search_buf[64];",
     "int g_search_len = 0, g_search_pos = 0;",
     "int g_search_case_sensitive = 0;",
+    "int g_mouse_x = -1, g_mouse_y = -1;",
     define("BADGE_ROW"),
     define("SEARCH_BOX_PREFIX_COLS"),
     define("SEARCH_BOX_INPUT_COLS"),
     define("SEARCH_BOX_SUFFIX_COLS"),
     define("SEARCH_BOX_COLS"),
     extract_func(RENDER, "void search_box_layout("),
+    extract_func(RENDER, "static void search_box_case_geom("),
+    extract_func(RENDER, "int search_box_case_hit("),
+    extract_func(RENDER, "int search_box_case_hovered("),
     extract_func(RENDER, "void render_search_box("),
     r'''
 static void emit(int host_rows, int host_cols, const char *query) {
@@ -76,12 +80,27 @@ static void emit(int host_rows, int host_cols, const char *query) {
     fputc('\n', stdout);
 }
 
+static void casehit(int host_cols) {
+    int row, left, input_col, input_w;
+    search_box_layout(host_cols, &row, &left, &input_col, &input_w);
+    int case_col = input_col + input_w;      /* Aa/aa 首列(1基) */
+    /* 在标记两列上应命中，标记左边一列、右边一列应不命中。 */
+    printf("CASE %d %d %d %d %d %d %d\n", host_cols,
+           search_box_case_hit(host_cols, row, case_col - 1),
+           search_box_case_hit(host_cols, row, case_col),
+           search_box_case_hit(host_cols, row, case_col + 1),
+           search_box_case_hit(host_cols, row + 1, case_col),
+           case_col, row);
+}
+
 int main(void) {
     emit(29, 120, "");
     emit(29, 120, "error");
     emit(29, 120, "aVeryLongSearchKeywordThatScrolls");
     emit(29, 120, "中文关键词也要能放下");
     emit(40, 80, "err");
+    casehit(120);
+    casehit(80);
     return 0;
 }
 ''',
@@ -157,6 +176,24 @@ def main() -> int:
 
     print(f"  {len(frames)} 组样例：只画第 2 行、宽度恒定 {geoms[0][5] + 18} 列、右对齐、光标在输入区内")
     print("  [OK] 搜索输入框不再吃掉整行终端内容。")
+
+    # Aa/aa 大小写标记命中：标记两列命中、左右相邻列与其它行不命中（hover/点击同一几何）
+    case_lines = []
+    for line in run.stdout.split("\n"):
+        if line.startswith("CASE "):
+            case_lines.append([int(x) for x in line.split()[1:]])
+    if len(case_lines) != 2:
+        print("FAIL: Aa/aa 命中几何 harness 输出不完整", file=sys.stderr)
+        return 1
+    for host_cols, left_hit, hit0, hit1, wrong_row, case_col, row in case_lines:
+        # 字段顺序：host_cols, hit(case_col-1)=应0, hit(case_col)=应1,
+        #          hit(case_col+1)=应1(标记第2列), hit(row+1)=应0, case_col, row
+        if not (hit0 == 1 and hit1 == 1 and left_hit == 0 and wrong_row == 0):
+            print(f"FAIL: Aa/aa 命中几何错误 host_cols={host_cols} "
+                  f"col={case_col} left={left_hit} c0={hit0} c1={hit1} wrongRow={wrong_row}",
+                  file=sys.stderr)
+            return 1
+    print("  [OK] 搜索框 Aa/aa 大小写标记：标记两列可 hover/点击，相邻列与其它行不误中。")
     return 0
 
 

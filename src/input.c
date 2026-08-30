@@ -3309,6 +3309,30 @@ static int handle_status_badge_mouse(MOUSE_EVENT_RECORD *me) {
     return 1;
 }
 
+/* 搜索框「Aa / aa」大小写标记的鼠标交互：悬停要重绘（标记加深底色提示可点），
+ * 左键点击切换 g_search_case_sensitive 并实时重算匹配（与 Alt+C 等价）。
+ * 命中几何与渲染共用 search_box_case_hit()，保证高亮哪里就能点哪里。 */
+static int handle_search_box_mouse(MOUSE_EVENT_RECORD *me) {
+    if (!g_search_mode) return 0;
+    int mx = me->dwMousePosition.X, my = me->dwMousePosition.Y;
+    int r = my + 1, c = mx + 1;
+    int over = search_box_case_hit(g_mux.host_cols, r, c);
+    if (mx != g_mouse_x || my != g_mouse_y) {
+        g_mouse_x = mx; g_mouse_y = my;
+        if (over) g_mux.needs_redraw = 1;
+    }
+    int pressed = (me->dwButtonState & (FROM_LEFT_1ST_BUTTON_PRESSED |
+                                        FROM_LEFT_2ND_BUTTON_PRESSED)) != 0;
+    if (over && pressed && (me->dwEventFlags == 0 || me->dwEventFlags == DOUBLE_CLICK)) {
+        g_search_case_sensitive = !g_search_case_sensitive;
+        search_preview_live();
+        g_mux.needs_redraw = 1;
+        return 1;
+    }
+    /* 点击搜索框其它区域：不关闭、不下发到终端（保持搜索态）。 */
+    return 0;
+}
+
 void handle_mouse(MOUSE_EVENT_RECORD *me) {
     if (!g_mouse_enabled) return;
     ui_modes_sync_pane();
@@ -3319,6 +3343,9 @@ void handle_mouse(MOUSE_EVENT_RECORD *me) {
     }
     int mx = me->dwMousePosition.X, my = me->dwMousePosition.Y;
     log_mouse_event("ev", me);
+    /* 搜索框大小写标记 Aa/aa 的点击/悬停：先于标签栏关闭逻辑与 body 区的
+     * 搜索态提前 return 处理，否则点 Aa/aa 会被当成「点外面关闭搜索框」。 */
+    if (g_search_mode && my >= 1 && handle_search_box_mouse(me)) return;
 
     if (mx != g_mouse_x || my != g_mouse_y) {
         int prev_in = g_mouse_prev_in_tabbar;

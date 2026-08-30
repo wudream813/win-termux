@@ -8,6 +8,19 @@ static void screen_put_cp(ScreenBuffer *s, unsigned int cp) {
     }
     int wide = is_wide_cp(cp);
     if (wide && s->cursor_x >= s->cols - 1) {
+        /* 宽字符在只剩一列（cursor_x == cols-1）时放不下，要整体移到下一行
+         * 行首。此时旧行最后一列（cursor_x == cols-1）放不下宽字的两格，
+         * 必须显式清成空格：否则它会保留上一帧的脏内容（可能是空格、旧字符，
+         * 甚至是 ConPTY 重绘时残留的宽字次格 0 / 主格）。吸附函数
+         * snap_left_to_char 只看「本格 ch==0 且左邻是宽字主格」就把该格认成
+         * 宽字次格而左退一列——一旦这条「因汉字换行」的脏行出现在块选里，
+         * 选区左沿在那一行被错误吸附；更常见的是脏末格被渲染/复制路径按宽字
+         * 处理，造成经过该行之后所有行的高亮整体错位一列。清成空格后它就是
+         * 普通空白，吸附与渲染都不会再误判。 */
+        if (s->cursor_x == s->cols - 1) {
+            WORD attr = build_attr(s);
+            screen_write_cell(s, s->cursor_y, s->cursor_x, L' ', attr);
+        }
         s->cursor_x = 0;
         screen_newline(s);
         s->wraparound_pending = 0;

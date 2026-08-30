@@ -180,6 +180,22 @@ check("item_color_hit(main_left, c)" in INPUT,
 # 鼠标停在格子右半边时不高亮却可点击。
 check("g_mouse_x <= col + SETTINGS_ROLE_COL_W - 3" in RENDER,
       "语义颜色网格 hover 列区间与点击命中未对齐（上界错位）")
+# v1.8.31：键位页整行 hover 不得覆盖右侧按钮列（[前缀]/[改]/[复位]），否则鼠标
+# 停在按钮上时行底色与按钮底色叠加（“文字 hover 带到按钮上”）。按钮高亮独立判断。
+check("int keys_on_btn" in RENDER and
+      "g_mouse_x < main_left + SETTINGS_KEYS_PREFIX_COL - 1" in RENDER and
+      "int row_under_mouse = (g_mouse_y == row - 1);" in RENDER and
+      'h_edit = (row_under_mouse' in RENDER and 'h_reset = (row_under_mouse' in RENDER,
+      "键位页整行 hover 未排除按钮列（文字 hover 会带到 [前缀]/[改]/[复位] 按钮上）")
+# 行为页 scrollback 行的 [-]/[+] 同理。
+check("int sb_on_btn" in RENDER and
+      "g_mouse_x < main_left + SETTINGS_SB_MINUS_COL - 1" in RENDER and
+      "h_minus = (sb_row_under_mouse" in RENDER and "h_plus = (sb_row_under_mouse" in RENDER,
+      "行为页 scrollback 整行 hover 未排除 [-]/[+] 按钮列")
+# 搜索框 Aa/aa 大小写标记必须可 hover/点击（render.c 提供命中几何，input.c 处理点击）。
+check("search_box_case_hit(" in RENDER and "search_box_case_hovered(" in RENDER and
+      "handle_search_box_mouse" in INPUT and "g_search_case_sensitive = !g_search_case_sensitive" in INPUT,
+      "搜索框大小写标记 Aa/aa 没有 hover 高亮 / 点击切换")
 check("(g_settings_field + 1) % 4" in INPUT and "(g_settings_field + 3) % 4" in INPUT,
       "Tab 没有把颜色行算成第 4 个字段")
 check("g_edit_color = (g_edit_color + 1) % 9" in INPUT and

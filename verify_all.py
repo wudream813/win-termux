@@ -37,6 +37,7 @@ CHECKS = (
     "verify_settings_ui.py",
     "verify_item_color.py",
     "verify_search_box.py",
+    "verify_wide_wrap.py",
 )
 
 
