@@ -38,6 +38,7 @@ CHECKS = (
     "verify_item_color.py",
     "verify_search_box.py",
     "verify_wide_wrap.py",
+    "verify_framediff_oom.py",
 )
 
 

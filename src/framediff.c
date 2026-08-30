@@ -89,9 +89,13 @@ void framediff_begin_frame(FrameDiff *fd, int host_rows) {
         if (nr) {
             for (int i = fd->rows_cap; i < newcap; i++) memset(&nr[i], 0, sizeof(nr[i]));
             fd->rows = nr;
-            fd->rows_cap = newcap;
         }
         if (nd) fd->dirty = nd;
+        /* rows 与 dirty 共用 rows_cap 容量，只有两者都扩容成功才提升容量：
+         * 若 nr 成功而 nd 失败（OOM），rows_cap 提前提升会让 row_count 超过
+         * dirty 旧数组长度，紧接着的 fd->dirty[i]=0 就越界写（ASAN 实测）。
+         * 容量不提升时本帧维持旧行数，安全退化，下一帧重试扩容。 */
+        if (nr && nd) fd->rows_cap = newcap;
     }
     fd->row_count = (fd->rows_cap >= host_rows) ? host_rows : fd->row_count;
     chunk_reset(&fd->always);

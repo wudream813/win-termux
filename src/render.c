@@ -1269,7 +1269,9 @@ void render_confirm_exit(char *out, int bs, int *posp, int host_rows, int host_c
     pos += snprintf(out + pos, bs - pos, "\x1b[0m%s│\x1b[0m", panel);
 
     palette_hline(out, bs, &pos, top + 3, left, w, "└", "┘");
-    pos += snprintf(out + pos, bs - pos, "\x1b[?25l");
+    /* 光标显隐由帧尾光标段统一处理（render_screen 的 cursor_pos 之后），这里
+     * 不再发 ?25l——它在 body 里会被脏区按行差分跳过（弹窗行内容不变时不发），
+     * 反而盖不住帧尾终端 pane 的 ?25h，导致弹窗上出现游离光标。 */
     *posp = pos;
 }
 
@@ -2467,7 +2469,14 @@ void render_screen(void) {
      * （标签栏 + 各内容行）做差分，光标段永远原样追加在增量帧末尾。 */
     int cursor_pos = pos;
 
-    if (g_search_mode) {
+    /* 帧尾光标段的分支必须与上面 body 弹层分支一一对应：body 里每个全屏/模态
+     * UI 都在这里决定光标显隐。否则缺失的模式会掉进下面的 active_pane 终端
+     * 分支而发出 ?25h，把弹窗本应隐藏的光标重新点亮（BUG-10：退出确认弹窗上
+     * 出现游离的终端光标）。分支顺序与 body 的 if/else-if 链保持一致。 */
+    if (g_mux.confirm_exit_mode) {
+        /* 退出确认是模态弹窗，没有输入光标，必须隐藏终端光标。 */
+        pos += snprintf(out + pos, bs - pos, "\x1b[?25l");
+    } else if (g_search_mode) {
         int row, left, input_col, box_w;
         search_box_layout(g_mux.host_cols, &row, &left, &input_col, &box_w);
         int scr_off = get_input_screen_offset(g_search_buf, g_search_len, g_search_pos, box_w);

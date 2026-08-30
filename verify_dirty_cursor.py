@@ -293,6 +293,48 @@ def main():
         "render.c: 行首 SGR 复位缺失（v1.8.13 背景修复）")
     print("[OK] render.c 光标尾分离 + 行首 SGR 复位在位。")
 
+    # BUG-10 分支覆盖：body 里每个模态弹层分支，帧尾光标段都必须有对应处理，
+    # 否则缺失的模式会掉进 active_pane 终端分支发 ?25h，把弹窗本应隐藏的光标
+    # 重新点亮（退出确认弹窗上游离光标）。
+    print("--- 源码不变量: body 弹层模式 ⊆ 帧尾光标分支 (BUG-10) ---")
+    body_i = src.index("if (g_mux.confirm_exit_mode) {")
+    body_seg = src[body_i:src.index("pos += snprintf(out + pos, bs - pos, \"\\x1b[0m\\x1b[1;1H\");", body_i)]
+    cur_i = src.index("int cursor_pos = pos;")
+    # 光标段到 framediff_scan 调用为止（之后是差分/写出逻辑）。
+    cur_end = src.index("framediff_scan(&g_frame_diff, out, (size_t)cursor_pos);", cur_i)
+    cur_seg = src[cur_i:cur_end]
+
+    def modes_in(seg):
+        out = set()
+        for m in ["g_mux.confirm_exit_mode", "g_search_mode", "g_mux.palette_mode",
+                  "g_mux.chooser_mode", "g_mux.ctx_mode", "g_mux.rename_mode",
+                  "g_mux.custom_cmd_mode", "g_copy_mode"]:
+            if m in seg:
+                out.add(m)
+        return out
+
+    body_modes = modes_in(body_seg)
+    cursor_modes = modes_in(cur_seg)
+    # chooser/ctx/help 共用帧尾的藏光标分支（?25l），ctx_mode 只要出现即可。
+    missing = body_modes - cursor_modes
+    assert not missing, (
+        "render.c: 帧尾光标段漏了 body 弹层模式 %s —— 这些弹窗会掉进终端 "
+        "active_pane 分支发出 ?25h，弹窗上出现游离光标（BUG-10）" % sorted(missing))
+    # confirm_exit 必须显式藏光标（不能只靠兜底），且 body 里的弹窗渲染函数内
+    # 不再各自发 ?25l（那会被脏区按行差分吞掉）。
+    conf_branch = cur_seg[cur_seg.index("if (g_mux.confirm_exit_mode)"):cur_seg.index("else if", cur_seg.index("if (g_mux.confirm_exit_mode)"))]
+    assert "?25l" in conf_branch, "帧尾 confirm_exit 分支必须发 ?25l 隐藏光标"
+    rc_start = src.index("void render_confirm_exit(")
+    rc_end = src.index("void render_search_box(", rc_start)
+    rc_body = src[rc_start:rc_end]
+    # 只看实际输出语句（snprintf 里的 ?25l），注释里提到不算。
+    rc_emits_hide = any("?25l" in line and "snprintf" in line for line in rc_body.splitlines())
+    assert not rc_emits_hide, (
+        "render_confirm_exit() 内部不应再 snprintf 发 ?25l：它在 body 里会被脏区"
+        "按行差分跳过，光标显隐统一由帧尾光标段处理")
+    print("[OK] body 弹层模式 %s 在帧尾光标段都有对应分支；confirm_exit 帧尾藏光标、"
+          "body 内不发 ?25l。" % sorted(body_modes))
+
 
 if __name__ == "__main__":
     main()
