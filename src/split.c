@@ -355,6 +355,42 @@ static void set_tab_root(int anchor, int root) {
         if (g_tab_anchor[i] == anchor) { g_tab_root[i] = root; return; }
 }
 
+/* 把 pane 从它所属 tab 的分屏树中摘除（多叶子树）。返回 1 发生了树收缩；
+ * *survivor 回填存活兄弟（视觉次序第一个叶子）。处理锚点提升。 */
+static int remove_pane_from_tree(int pane, int *survivor) {
+    if (survivor) *survivor = -1;
+    int anchor = split_tab_of_pane(pane);
+    if (anchor < 0) return 0;
+    int slot = -1;
+    for (int i = 0; i < MAX_PANES; i++)
+        if (g_tab_anchor[i] == anchor) { slot = i; break; }
+    if (slot < 0) return 0;
+    int root = g_tab_root[slot];
+    if (root < 0 || split_count_leaves(root) < 2) return 0;   /* 单叶子：整 tab 关闭 */
+    int leaf = split_find_leaf(root, pane);
+    if (leaf < 0) return 0;
+    int removed = -1;
+    int new_root = split_remove_leaf(root, leaf, &removed);
+    (void)removed;
+    g_tab_root[slot] = new_root;
+
+    /* 选存活兄弟（视觉次序第一个叶子）接管焦点 / 锚点。 */
+    int surv = split_first_leaf(new_root);
+    if (survivor) *survivor = surv;
+
+    /* 关掉的是锚点 pane：把存活兄弟提升为新锚点，保证标签页不从标签栏消失。 */
+    if (pane == anchor && surv >= 0 && surv < g_mux.pane_count) {
+        g_mux.panes[surv].is_split_child = 0;
+        g_tab_anchor[slot] = surv;
+    }
+    g_mux.needs_redraw = 1;
+    return 1;
+}
+
+int split_remove_pane(int pane, int *survivor) {
+    return remove_pane_from_tree(pane, survivor);
+}
+
 int split_active_root(void) {
     if (g_mux.active_pane < 0) return -1;
     int anchor = split_tab_of_pane(g_mux.active_pane);
@@ -391,25 +427,5 @@ int split_split_active(int dir, int new_pane) {
 }
 
 int split_close_active_pane(int *survivor) {
-    int root = split_active_root();
-    if (root < 0) return 0;
-    int leaves = split_count_leaves(root);
-    int leaf = split_find_leaf(root, g_mux.active_pane);
-    if (leaf < 0) return 0;
-    if (leaves <= 1) return 0;   /* tab 唯一 pane：交给常规关 tab 流程 */
-
-    int removed = -1;
-    int new_root = split_remove_leaf(root, leaf, &removed);
-    int anchor = split_tab_of_pane(g_mux.active_pane);
-    if (anchor >= 0 && new_root >= 0) set_tab_root(anchor, new_root);
-
-    /* 选一个存活的兄弟 pane 接管焦点（视觉次序里下一个叶子）。 */
-    int focus = -1;
-    if (new_root >= 0) {
-        int first = split_first_leaf(new_root);
-        focus = (first >= 0) ? first : -1;
-    }
-    if (survivor) *survivor = focus;
-    g_mux.needs_redraw = 1;
-    return 1;
+    return split_remove_pane(g_mux.active_pane, survivor);
 }

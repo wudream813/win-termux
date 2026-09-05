@@ -2324,7 +2324,10 @@ static void render_split_pane(char *out, int bs, int *posp, int leaf, PaneRect *
 static void render_split(char *out, int bs, int *posp) {
     static PaneRect rects[MAX_PANES];
     int n = split_compute_rects(rects);
-    if (n < 2) return;   /* 实际没分屏：交回整屏路径 */
+    /* n==0：没分屏（交回整屏路径）。n==1 也可能发生——zoom（全屏缩放）时只有
+     * 活动窗格可见且铺满，此时仍要把它画出来（否则内容区空白，表现为「缩放后
+     * 屏幕空了」）；n>=2 为正常多窗格。 */
+    if (n < 1) return;
     int pos = *posp;
     /* 先清整个内容区。 */
     for (int r = 0; r < g_mux.host_rows; r++)
@@ -2347,16 +2350,26 @@ void render_screen(void) {
 
     if (g_mux.help_mode) {
         render_help_content(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
-    } else if (!g_mux.settings_mode && !g_mux.palette_mode &&
+    } else if (!g_mux.settings_mode &&
                split_is_split() &&
                g_mux.active_pane >= 0 && !g_mux.panes[g_mux.active_pane].is_settings &&
                !g_mux.panes[g_mux.active_pane].is_about) {
         /* 分屏：当前标签页有 >=2 个窗格，走多窗格矩形渲染（整屏路径只画一个）。
-         * 模态弹层（chooser/ctx/rename/search/confirm）打开时也继续画分屏底图，
-         * 弹层在之后叠画。 */
+         * 模态弹层（命令面板/chooser/ctx/rename/search/confirm）打开时也继续画
+         * 分屏底图（窗格+分隔边框），弹层在 body 之后叠画；否则开命令面板会退回
+         * 整屏路径，把分屏边框抹掉（BUG：面板一开中间分屏条就消失）。 */
         render_split(out, bs, &pos);
     } else if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
         Pane *pane = &g_mux.panes[g_mux.active_pane];
+        /* 分屏收缩回单窗格（关闭窗格 / 取消 zoom 后树只剩 1 叶子）时，残留的
+         * pane 屏幕还是分屏时的小尺寸；这里补回整屏尺寸，否则整屏路径只在左上
+         * 小区域渲染、右边/下边大片残留（BUG：关闭到只剩一个窗格后显示不全）。 */
+        if (!pane->is_settings && !pane->is_about &&
+            (pane->screen.cols != g_mux.host_cols || pane->screen.rows != g_mux.host_rows)) {
+            int sroot = split_root_for_tab(split_tab_of_pane(g_mux.active_pane));
+            if (sroot >= 0 && split_count_leaves(sroot) == 1 && !g_split_zoom)
+                pane_resize_to(g_mux.active_pane, g_mux.host_cols, g_mux.host_rows);
+        }
         if (pane->is_settings) {
             render_settings_panel(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
         } else {
@@ -2682,7 +2695,15 @@ void render_screen(void) {
         for (int i = 0; i < MAX_PANES; i++) rects[i].valid = 0;
         int root = split_active_root();
         if (root >= 0) split_layout(root, 0, 0, g_mux.host_cols, g_mux.host_rows, split_nodes(), rects);
+        /* zoom（全屏缩放）时活动窗格铺满内容区，光标矩形也要用全尺寸，否则
+         * 光标仍停在缩放前的小窗格矩形里。 */
+        PaneRect zoom_rc;
         PaneRect *rc = &rects[g_mux.active_pane];
+        if (g_split_zoom) {
+            zoom_rc.c0 = 0; zoom_rc.r0 = 0;
+            zoom_rc.cols = g_mux.host_cols; zoom_rc.rows = g_mux.host_rows; zoom_rc.valid = 1;
+            rc = &zoom_rc;
+        }
         if (rc->valid && s->cursor_visible && ap->scroll_offset == 0 && !g_copy_mode) {
             int cx = s->cursor_x, cy = s->cursor_y;
             if (cx >= rc->cols) cx = rc->cols - 1;

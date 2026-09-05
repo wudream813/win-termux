@@ -80,6 +80,12 @@ int  split_close_active_pane(int *survivor);
 int  split_active_root(void);
 /* 当前活动 tab 是否真正分了屏（叶子数 >= 2）。 */
 int  split_is_split(void);
+/* 统一的「某 pane 即将关闭」处理：若它在某棵多叶子分屏树里，就把它的叶子从树中
+ * 摘除、树收缩；若关掉的恰好是该 tab 的锚点 pane，则把存活的兄弟提升为新锚点
+ * （清掉 is_split_child，保证标签页不丢）。*survivor 回填一个存活兄弟（用于接管
+ * 焦点），返回 1 表示发生了树收缩（调用方不应再把它当普通整 tab 关闭）。
+ * 单叶子树（独立标签页/关于/设置）不在树里，返回 0，走原有关闭流程。 */
+int  split_remove_pane(int pane, int *survivor);
 
 int  split_neighbor_pane(int root, int from_pane, char where);
 int  split_next_pane(int root, int from_pane, int forward);

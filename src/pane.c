@@ -3,6 +3,9 @@
 #include "input.h"
 #include "split.h"
 
+/* input.c 定义：分屏全屏缩放（zoom）标志。窗格死亡时若处于 zoom 需要清掉。 */
+extern int g_split_zoom;
+
 void write_to_pane_internal(Pane *pane, const char *data, int len) {
     if (!pane || !pane->active) return;
     DWORD w;
@@ -19,18 +22,14 @@ void pane_mark_dead(int idx) {
     EnterCriticalSection(&g_mux.cs);
     Pane *pane = &g_mux.panes[idx];
     if (!pane->active) { LeaveCriticalSection(&g_mux.cs); return; }
-    /* 分屏子窗格死亡：若它在某棵分屏树里且不是该 tab 唯一 pane，先从树中摘除，
-     * 焦点交给同 tab 里存活的兄弟；若是 tab 内唯一 pane（锚点），则按普通标签
-     * 关闭处理（整 tab 消失）。 */
+    /* 分屏窗格死亡：统一从它所属 tab 的分屏树里摘除（活动/非活动都处理）。
+     *  - 在多叶子树里：树收缩，survivor 为存活兄弟；若关掉的是锚点 pane，
+     *    split_remove_pane 会把兄弟提升为新锚点，标签页不丢。
+     *  - 单叶子树（独立标签页唯一 pane）：返回 0，按普通整 tab 关闭处理。 */
     int split_survivor = -1;
-    int was_split_child = pane->is_split_child;
-    if (was_split_child && idx == g_mux.active_pane) {
-        (void)split_close_active_pane(&split_survivor);
-    } else if (was_split_child) {
-        /* 非活动的分屏子 pane 死亡：直接从树里摘（不切焦点）。 */
-        int root = split_active_root();
-        (void)root;
-    }
+    int was_split = split_remove_pane(idx, &split_survivor);
+    (void)was_split;
+    if (was_split && g_split_zoom) g_split_zoom = 0;   /* 摘除窗格后退出 zoom */
     pane->active = 0;
     int next = -1;
     for (int i = 0; i < g_mux.pane_count; i++) if (g_mux.panes[i].active && i != idx) { next = i; break; }

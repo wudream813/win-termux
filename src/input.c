@@ -2859,6 +2859,7 @@ void action_execute(int action, int arg, DWORD ctrl) {
             int survivor = -1;
             if (split_close_active_pane(&survivor)) {
                 int dead = g_mux.active_pane;
+                g_split_zoom = 0;   /* 关窗格后退出 zoom，避免单窗格仍走分屏空白路径 */
                 if (survivor >= 0) g_mux.active_pane = survivor;
                 close_pane(dead);
                 if (survivor >= 0 && g_mux.panes[survivor].active) switch_pane(survivor);

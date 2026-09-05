@@ -35,6 +35,7 @@ HARNESS = r"""
 #include <stdio.h>
 #include <string.h>
 #include "split.h"
+#include "types.h"
 
 static int failures = 0;
 static void ck(const char *n, int cond) {
@@ -110,6 +111,42 @@ int main(void) {
     ck("set_frac 直接设 70", N[root_after].frac_pct == 70);
     split_resize_set_frac(root_after, 1, 'V', 70);  /* pane1 在 b：a 占比=30 */
     ck("set_frac 从 b 侧设 a=100-70", N[root_after].frac_pct == 30);
+
+    /* ---- 高层：split_remove_pane（统一摘除 / 锚点提升） ---- */
+    /* 新建一棵以 pane10 为锚点的标签树，切两刀得到 3 个叶子。 */
+    split_reset();
+    int anchor = 10;
+    split_init_tab(anchor);
+    g_mux.pane_count = 13;
+    for (int i = 0; i < 13; i++) { g_mux.panes[i].active = 1; g_mux.panes[i].is_split_child = 0; }
+    int ta = split_root_for_tab(anchor);
+    int ta_leaf_a = split_find_leaf(ta, anchor);
+    split_do(ta_leaf_a, SPLIT_V, 11);                 /* 左=10, 右=11 */
+    g_mux.panes[11].is_split_child = 1;
+    int leaf11 = split_find_leaf(split_root_for_tab(anchor), 11);
+    split_do(leaf11, SPLIT_H, 12);                   /* 右侧再上下：右上=11, 右下=12 */
+    g_mux.panes[12].is_split_child = 1;
+    ck("锚点树叶子数=3", split_count_leaves(split_root_for_tab(anchor)) == 3);
+
+    /* 关掉一个非锚点子窗格(12)：树收缩为 2 叶子，锚点仍是 10。 */
+    int surv12 = -1;
+    ck("remove 子窗格12 返回1", split_remove_pane(12, &surv12) == 1);
+    ck("remove 12 后叶子数=2", split_count_leaves(split_root_for_tab(10)) == 2);
+    ck("remove 12 后 12 不在树中", split_find_leaf(split_root_for_tab(10), 12) < 0);
+    ck("remove 12 后锚点仍=10", split_tab_of_pane(10) == 10);
+
+    /* 关掉锚点 pane(10)：存活兄弟应被提升为新锚点（is_split_child 清 0）。 */
+    int surv10 = -1;
+    ck("remove 锚点10 返回1", split_remove_pane(10, &surv10) == 1);
+    ck("remove 锚点后有存活兄弟", surv10 == 11);
+    ck("兄弟11 被提升为新锚点", split_tab_of_pane(11) == 11);
+    ck("新锚点 is_split_child 已清0", g_mux.panes[11].is_split_child == 0);
+    ck("新锚点树叶子数=1", split_count_leaves(split_root_for_tab(11)) == 1);
+
+    /* 单叶子（独立标签页）摘除返回 0（走整 tab 关闭流程）。 */
+    split_init_tab(20);
+    int surv20 = -1;
+    ck("单叶子摘除返回0", split_remove_pane(20, &surv20) == 0);
 
     if (failures) { printf("\n%d FAILURE(S)\n", failures); return 1; }
     printf("\nSPLIT TESTS PASSED\n");
