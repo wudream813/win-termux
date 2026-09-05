@@ -7,6 +7,7 @@
 #include "pane.h"
 #include "render.h"
 #include "input.h"
+#include "split.h"
 
 // Global variable definitions
 MuxState g_mux;
@@ -156,17 +157,23 @@ static void handle_resize(void) {
 
     EnterCriticalSection(&g_mux.cs);
     g_mux.host_cols = nc; g_mux.total_host_rows = nt; g_mux.host_rows = nr;
+    /* 分屏状态下各 pane 的尺寸由分屏矩形决定（渲染帧里 pane_resize_to 会按新
+     * 布局统一调整 screen + ConPTY），这里只重置 detect 计数；非分屏 pane 仍按
+     * 整屏尺寸 resize。 */
     int pane_cols = nc;
+    int split_now = split_is_split();
     for (int i = 0; i < g_mux.pane_count; i++) if (g_mux.panes[i].active) {
-        screen_resize(&g_mux.panes[i].screen, pane_cols, nr);
+        if (!split_now) {
+            screen_resize(&g_mux.panes[i].screen, pane_cols, nr);
+            if (g_mux.panes[i].scroll_offset > g_mux.panes[i].screen.hist_lines)
+                g_mux.panes[i].scroll_offset = g_mux.panes[i].screen.hist_lines;
+        }
         g_mux.panes[i].screen.detect_count = 0;
-        if (g_mux.panes[i].scroll_offset > g_mux.panes[i].screen.hist_lines)
-            g_mux.panes[i].scroll_offset = g_mux.panes[i].screen.hist_lines;
     }
     LeaveCriticalSection(&g_mux.cs);
 
     for (int i = 0; i < g_mux.pane_count; i++) if (g_mux.panes[i].active) {
-        if (g_mux.panes[i].hpc) {
+        if (!split_now && g_mux.panes[i].hpc) {
             COORD sz = {(SHORT)pane_cols, (SHORT)nr};
             ResizePseudoConsole(g_mux.panes[i].hpc, sz);
         }
@@ -298,12 +305,14 @@ int main(void) {
     else
         host_printf("\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l");
     g_mux.running = 1;
+    split_reset();
     int first = create_pane();
     if (first < 0) {
         host_printf("\x1b[31mFailed! Need Win10 1809+ and enough memory\x1b[0m\r\n");
         Sleep(3000);
         goto cleanup;
     }
+    split_init_tab(first);
     g_mux.active_pane = first;
     if (g_default_startup == 1) {
         g_mux.help_mode = 1;

@@ -85,6 +85,7 @@ typedef struct {
     int color;
     int is_settings;
     int is_about;
+    int is_split_child;   /* 分屏子窗格：不作为独立标签页出现在标签栏 */
     int exited_hold;
     DWORD exit_code;
     WCHAR input_history[256];

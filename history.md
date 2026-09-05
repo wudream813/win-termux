@@ -6,6 +6,16 @@
 
 ## 版本更新记录
 
+### v1.8.33
+- **新增分屏（split panes）**：在同一个标签页内把终端区域切成多个同时可见、同时运行的窗格（tmux 风格）。
+  - **切分**：前缀 `-`（左右）/ 前缀 `_`（Shift+-，上下），新窗格继承同一 shell。
+  - **切换焦点**：前缀 `Tab` / `Shift+Tab` 循环，前缀 `↑/↓/←/→` 切到对应方向的相邻窗格（按「重叠优先 + 最近边界」选格，与 tmux 一致）；也可**鼠标点击任意窗格**直接切换。
+  - **调整大小**：前缀 `Shift+方向` 微调分隔线，或**鼠标拖拽窗格间的分隔线**。
+  - **关闭 / 缩放**：前缀 `q` 关闭当前窗格（树收缩、兄弟自动接管焦点）；前缀 `z` 把当前窗格全屏缩放 / 还原；`x` 仍是关闭整个标签页。
+  - 窗格间画 1 行/列分隔边框，活动窗格边框高亮（蓝）。
+- **实现**：新增 `src/split.c` 分屏树（叶子= pane，内部节点=分隔方向+百分比），`split_layout()` 是纯函数（树+外接矩形 → 每 pane 矩形），不碰 Win32，便于 Linux 侧单测；渲染按矩形裁剪各 pane、ConPTY/screen 用 `ResizePseudoConsole` 跟随窗格尺寸；分屏子窗格标记 `is_split_child` 不单独占标签页；单窗格（无分屏）走原来的整屏路径，完全不受影响。窗口 resize 时分屏 pane 由每帧按新矩形统一 resize。
+- **验证**：新增 `verify_split.py`（编译真实 `split.c`，断言切分/布局/边框留白/方向导航重叠选择/Tab 循环/关闭收缩/拖线 frac）；stub 补 `VK_OEM_MINUS` 与分屏所需类型。单元测试 302 / 0 failed，`verify_all.py` **33 项**全过，MinGW gcc / g++ 双 `-Werror`。
+
 ### v1.8.32
 - **① 修复退出确认弹窗上的游离光标（BUG-10）**：帧尾「光标显隐段」的分支表漏了 `confirm_exit_mode`——body 弹层里退出确认是最高优先级，但帧尾光标段没有它，于是弹窗打开时掉进终端 pane 分支发出 `?25h`，把 body 里隐藏光标的 `?25l` 盖掉，弹窗上能看到一个停在底层 shell 位置的游离光标；脏区放大了它（弹窗行内容不变时连 body 的 `?25l` 都被差分跳过）。修复：帧尾光标段最前面补上 `confirm_exit_mode → ?25l` 分支（顺序与 body 的 if/else-if 链一致），并删掉 `render_confirm_exit()` body 内那句会被脏区吞掉的 `?25l`，光标显隐统一由帧尾无条件发出。
 - **② 修复 framediff 扩容时的堆溢出（BUG-11，ASAN 实测）**：`framediff_begin_frame()` 扩容时 `rows`（FrameChunk 数组）与 `dirty`（每行 1 字节）共用 `rows_cap` 容量，旧代码只在 `rows` realloc 成功时就提升容量；若 `rows` 成功而 `dirty` 因 OOM 失败，`rows_cap`/`row_count` 虚高、`dirty` 仍是旧小缓冲，紧接的 `fd->dirty[i]=0` 越界写。修复：只有**两者都成功**才 `rows_cap = newcap`，否则本帧维持旧行数安全退化、下一帧重试。

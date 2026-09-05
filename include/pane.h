@@ -24,5 +24,7 @@ unsigned __stdcall pane_read_thread(void *arg);
 void write_to_pane(const char *data, int len);
 void write_to_pane_internal(Pane *pane, const char *data, int len);
 void get_system_version_string(char *out, int max_len);
+/* 分屏：把某 pane 的屏幕缓冲与 ConPTY 调整到给定宽高（列/行）。 */
+void pane_resize_to(int idx, int cols, int rows);
 
 #endif // WIN_TERMUX_PANE_H

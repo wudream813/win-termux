@@ -39,6 +39,7 @@ CHECKS = (
     "verify_search_box.py",
     "verify_wide_wrap.py",
     "verify_framediff_oom.py",
+    "verify_split.py",
 )
 
 

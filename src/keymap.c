@@ -28,6 +28,20 @@ static const ActionInfo g_actions[] = {
     {ACT_TAB_COLOR_PREV,  "tab-color-prev",  "上一个标签颜色"},
     {ACT_SELECT_PANE,     "select-pane",     "按编号跳转 pane"},
     {ACT_NEXT_THEME,      "next-theme",      "切换下一个主题"},
+    {ACT_SPLIT_HORIZONTAL, "split-horizontal", "分屏：上下切分"},
+    {ACT_SPLIT_VERTICAL,   "split-vertical",   "分屏：左右切分"},
+    {ACT_SPLIT_NEXT,       "split-next",       "分屏：下一个窗格"},
+    {ACT_SPLIT_PREV,       "split-prev",       "分屏：上一个窗格"},
+    {ACT_SPLIT_CLOSE,      "split-close",      "分屏：关闭当前窗格"},
+    {ACT_SPLIT_ZOOM,       "split-zoom",       "分屏：当前窗格全屏缩放/还原"},
+    {ACT_SPLIT_UP,         "split-up",         "分屏：切换到上方窗格"},
+    {ACT_SPLIT_DOWN,       "split-down",       "分屏：切换到下方窗格"},
+    {ACT_SPLIT_LEFT,       "split-left",       "分屏：切换到左方窗格"},
+    {ACT_SPLIT_RIGHT,      "split-right",      "分屏：切换到右方窗格"},
+    {ACT_SPLIT_RESIZE_UP,  "split-resize-up",  "分屏：把分隔线上移"},
+    {ACT_SPLIT_RESIZE_DOWN,"split-resize-down","分屏：把分隔线下移"},
+    {ACT_SPLIT_RESIZE_LEFT,"split-resize-left","分屏：把分隔线左移"},
+    {ACT_SPLIT_RESIZE_RIGHT,"split-resize-right","分屏：把分隔线右移"},
 };
 static const int g_action_count = (int)(sizeof(g_actions) / sizeof(g_actions[0]));
 
@@ -90,6 +104,25 @@ static const KeyBinding g_default_bindings[] = {
     {VKEY_ANY(VK_NUMPAD7),         ACT_SELECT_PANE,     7},
     {VKEY_ANY(VK_NUMPAD8),         ACT_SELECT_PANE,     8},
     {VKEY_ANY(VK_NUMPAD9),         ACT_SELECT_PANE,     9},
+    /* ---- 分屏（前缀键之后） ---- */
+    {VKEY_SHIFT(VK_OEM_MINUS),     ACT_SPLIT_HORIZONTAL, 0},  /* 前缀 _ ：上下分屏 */
+    {CHR('-'),                     ACT_SPLIT_VERTICAL,   0},  /* 前缀 - ：左右分屏 */
+    {CHR('|'),                     ACT_SPLIT_VERTICAL,   0},  /* 前缀 | 兜底 */
+    {CHR('\t'),                    ACT_SPLIT_NEXT,       0},  /* 前缀 Tab */
+    {VKEY_SHIFT(VK_TAB),           ACT_SPLIT_PREV,       0},
+    /* 关闭分屏窗格用 q（quit-pane 语义），避免与关标签页的 x 冲突。 */
+    {VKEY_ANY('Q'),                ACT_SPLIT_CLOSE,      0},
+    /* z = 当前窗格全屏缩放 / 还原（z 未被占用）。 */
+    {VKEY_ANY('Z'),                ACT_SPLIT_ZOOM,       0},
+    /* 方向键切换窗格；Shift+方向 拖动分隔线。 */
+    {VKEY(VK_UP, 0),               ACT_SPLIT_UP,         0},
+    {VKEY(VK_DOWN, 0),             ACT_SPLIT_DOWN,       0},
+    {VKEY(VK_LEFT, 0),             ACT_SPLIT_LEFT,       0},
+    {VKEY(VK_RIGHT, 0),            ACT_SPLIT_RIGHT,      0},
+    {VKEY_SHIFT(VK_UP),            ACT_SPLIT_RESIZE_UP,  0},
+    {VKEY_SHIFT(VK_DOWN),          ACT_SPLIT_RESIZE_DOWN,0},
+    {VKEY_SHIFT(VK_LEFT),          ACT_SPLIT_RESIZE_LEFT,0},
+    {VKEY_SHIFT(VK_RIGHT),         ACT_SPLIT_RESIZE_RIGHT,0},
 };
 static const int g_default_count = (int)(sizeof(g_default_bindings) / sizeof(g_default_bindings[0]));
 

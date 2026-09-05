@@ -1,6 +1,127 @@
 #include "input.h"
 #include "cliphtml.h"
+#include "split.h"
 #include <ctype.h>
+
+/* 分屏：当前窗格全屏缩放（zoom）中。render.c 读取以只画活动窗格。 */
+int g_split_zoom = 0;
+
+/* 分屏边框拖拽状态：drag_dir='V' 拖竖线(左右调宽) / 'H' 拖横线(上下调高)。 */
+static int g_split_drag_pane = -1;   /* 拖拽时作为「a 侧」锚点的 pane */
+static char g_split_drag_dir = 0;    /* 'V' / 'H' / 0 */
+
+/* 算出当前各 pane 的内容区矩形（与 render 同源 split_layout）。 */
+static void split_mouse_rects(PaneRect *rects) {
+    for (int i = 0; i < MAX_PANES; i++) { rects[i].valid = 0; rects[i].cols = rects[i].rows = 0; }
+    int root = split_active_root();
+    if (root < 0) return;
+    split_layout(root, 0, 0, g_mux.host_cols, g_mux.host_rows, split_nodes(), rects);
+    for (int i = 0; i < MAX_PANES; i++)
+        if (i >= g_mux.pane_count || !g_mux.panes[i].active ||
+            g_mux.panes[i].is_settings || g_mux.panes[i].is_about)
+            rects[i].valid = 0;
+}
+
+/* 分屏模式下的鼠标：返回 1 表示已处理（不再走单 pane 终端鼠标）。
+ * 内容区坐标：mx/my 为控制台 0 基（my=0 是标签栏），pane 矩形 r0/c0 也是
+ * 内容区 0 基（与 my 同系：终端行 r0+2 = 内容 r0，对应鼠标 my = r0+1？
+ * 注意 render 里内容行 y 对应终端行 y+2，而控制台 my=0 是标签栏(终端行1)，
+ * 故内容区第 r0 行 = 终端行 r0+2 = 控制台 my = r0+1）。 */
+static int handle_split_mouse(MOUSE_EVENT_RECORD *me) {
+    if (!split_is_split() || g_split_zoom) return 0;
+    int mx = me->dwMousePosition.X, my = me->dwMousePosition.Y;
+    int content_y = my - 1;   /* 内容区 0 基行（标签栏占 my=0） */
+    int content_x = mx;       /* 内容区 0 基列 */
+    if (content_y < 0) return 0;
+
+    static PaneRect rects[MAX_PANES];
+    split_mouse_rects(rects);
+
+    int pressed = (me->dwButtonState & (FROM_LEFT_1ST_BUTTON_PRESSED |
+                                         FROM_LEFT_2ND_BUTTON_PRESSED)) != 0;
+
+    /* 1) 正在拖边框：根据鼠标移动调 frac。 */
+    if (g_split_drag_dir && g_split_drag_pane >= 0) {
+        if (!pressed) { g_split_drag_dir = 0; g_split_drag_pane = -1; return 1; }
+        int root = split_active_root();
+        if (g_split_drag_dir == 'V') {
+            /* 鼠标在锚点 pane 右边缘附近：以相对位置算目标百分比并 resize。 */
+            PaneRect *a = &rects[g_split_drag_pane];
+            if (a->valid) {
+                /* 找到该分隔的总宽 = a 宽 + 1 + 右邻宽。这里用边界当前位置推算。 */
+                int bx = content_x;            /* 期望竖线列 */
+                int total = a->cols + 1;
+                for (int i = 0; i < MAX_PANES; i++)
+                    if (rects[i].valid && rects[i].c0 == a->c0 + a->cols + 1) total += rects[i].cols;
+                int left_w = bx - a->c0;
+                int pct = total > 1 ? (left_w * 100) / (total - 1) : 50;
+                if (pct < 5) pct = 5;
+                if (pct > 95) pct = 95;
+                /* 直接设置锚点所在 V 分隔的 frac。 */
+                split_resize_set_frac(root, g_split_drag_pane, 'V', pct);
+                g_mux.needs_redraw = 1;
+            }
+        } else {
+            PaneRect *a = &rects[g_split_drag_pane];
+            if (a->valid) {
+                int by = content_y;
+                int total = a->rows + 1;
+                for (int i = 0; i < MAX_PANES; i++)
+                    if (rects[i].valid && rects[i].r0 == a->r0 + a->rows + 1) total += rects[i].rows;
+                int top_h = by - a->r0;
+                int pct = total > 1 ? (top_h * 100) / (total - 1) : 50;
+                if (pct < 5) pct = 5;
+                if (pct > 95) pct = 95;
+                split_resize_set_frac(root, g_split_drag_pane, 'H', pct);
+                g_mux.needs_redraw = 1;
+            }
+        }
+        return 1;
+    }
+
+    /* 2) 命中边框（竖线/横线 1 格宽）：按下即开始拖拽。 */
+    if (pressed && (me->dwEventFlags == 0 || me->dwEventFlags == DOUBLE_CLICK)) {
+        for (int i = 0; i < MAX_PANES; i++) {
+            if (!rects[i].valid) continue;
+            PaneRect *r = &rects[i];
+            /* 竖边框列 = r->c0 + r->cols（它右侧有邻 pane 才算分隔）。 */
+            int vx = r->c0 + r->cols;
+            int has_r = 0;
+            for (int j = 0; j < MAX_PANES; j++)
+                if (rects[j].valid && j != i && rects[j].c0 == vx + 1 &&
+                    content_y >= r->r0 && content_y < r->r0 + r->rows) has_r = 1;
+            if (has_r && content_x == vx && content_y >= r->r0 && content_y < r->r0 + r->rows) {
+                g_split_drag_dir = 'V'; g_split_drag_pane = i; return 1;
+            }
+            int hy = r->r0 + r->rows;
+            int has_d = 0;
+            for (int j = 0; j < MAX_PANES; j++)
+                if (rects[j].valid && j != i && rects[j].r0 == hy + 1 &&
+                    content_x >= r->c0 && content_x < r->c0 + r->cols) has_d = 1;
+            if (has_d && content_y == hy && content_x >= r->c0 && content_x < r->c0 + r->cols) {
+                g_split_drag_dir = 'H'; g_split_drag_pane = i; return 1;
+            }
+        }
+    }
+
+    /* 3) 命中某个 pane 内部：点击切换焦点；并把坐标换算到该 pane 本地，
+     *    改 active_pane 后交回常规终端鼠标流程（mouse tracking / 复制）。 */
+    for (int i = 0; i < MAX_PANES; i++) {
+        if (!rects[i].valid) continue;
+        PaneRect *r = &rects[i];
+        if (content_x >= r->c0 && content_x < r->c0 + r->cols &&
+            content_y >= r->r0 && content_y < r->r0 + r->rows) {
+            if (i != g_mux.active_pane && pressed) {
+                ui_modes_cancel();
+                switch_pane(i);
+                return 1;   /* 切换焦点这一下不下发给终端 */
+            }
+            return 0;   /* 已是活动 pane：坐标即本地（活动 pane 从 0,0 起画），继续常规处理 */
+        }
+    }
+    return 1;   /* 点在边框/空隙上，吞掉 */
+}
+
 
 void do_scroll(int d) {
     if (g_mux.active_pane < 0 || g_mux.active_pane >= g_mux.pane_count) return;
@@ -2656,6 +2777,73 @@ void action_execute(int action, int arg, DWORD ctrl) {
             if (arg >= 0 && arg < g_mux.pane_count && g_mux.panes[arg].active) switch_pane(arg);
             break;
         }
+        /* ---------------- 分屏 ---------------- */
+        case ACT_SPLIT_HORIZONTAL:
+        case ACT_SPLIT_VERTICAL: {
+            /* 先建 pane（与当前 pane 同目录/shell），再挂进分屏树。 */
+            Pane *cur = &g_mux.panes[g_mux.active_pane];
+            WCHAR wdir[256] = {0};
+            (void)cur;
+            int np = create_pane_shell_with_dir(L"cmd.exe", wdir[0] ? wdir : NULL);
+            if (np < 0) break;
+            int dir = (action == ACT_SPLIT_HORIZONTAL) ? SPLIT_H : SPLIT_V;
+            if (!split_split_active(dir, np)) {
+                close_pane(np);
+            } else {
+                ui_modes_cancel();
+                g_mux.needs_redraw = 1;
+            }
+            break;
+        }
+        case ACT_SPLIT_NEXT:
+        case ACT_SPLIT_PREV: {
+            int root = split_active_root();
+            if (root >= 0 && split_count_leaves(root) >= 2) {
+                int t = split_next_pane(root, g_mux.active_pane, action == ACT_SPLIT_NEXT);
+                if (t >= 0 && t != g_mux.active_pane) { ui_modes_cancel(); switch_pane(t); }
+            }
+            break;
+        }
+        case ACT_SPLIT_UP:
+        case ACT_SPLIT_DOWN:
+        case ACT_SPLIT_LEFT:
+        case ACT_SPLIT_RIGHT: {
+            if (!split_is_split()) break;
+            int root = split_active_root();
+            char w = (action==ACT_SPLIT_UP)?'U':(action==ACT_SPLIT_DOWN)?'D':
+                      (action==ACT_SPLIT_LEFT)?'L':'R';
+            int t = split_neighbor_pane(root, g_mux.active_pane, w);
+            if (t >= 0 && t != g_mux.active_pane) { ui_modes_cancel(); switch_pane(t); }
+            break;
+        }
+        case ACT_SPLIT_RESIZE_UP:
+        case ACT_SPLIT_RESIZE_DOWN:
+        case ACT_SPLIT_RESIZE_LEFT:
+        case ACT_SPLIT_RESIZE_RIGHT: {
+            if (!split_is_split()) break;
+            int root = split_active_root();
+            char w = (action==ACT_SPLIT_RESIZE_UP)?'U':(action==ACT_SPLIT_RESIZE_DOWN)?'D':
+                      (action==ACT_SPLIT_RESIZE_LEFT)?'L':'R';
+            split_resize_pane(root, g_mux.active_pane, w, 5);
+            g_mux.needs_redraw = 1;
+            break;
+        }
+        case ACT_SPLIT_ZOOM: {
+            g_split_zoom = !g_split_zoom;
+            g_mux.needs_redraw = 1;
+            break;
+        }
+        case ACT_SPLIT_CLOSE: {
+            int survivor = -1;
+            if (split_close_active_pane(&survivor)) {
+                int dead = g_mux.active_pane;
+                if (survivor >= 0) g_mux.active_pane = survivor;
+                close_pane(dead);
+                if (survivor >= 0 && g_mux.panes[survivor].active) switch_pane(survivor);
+                g_mux.needs_redraw = 1;
+            }
+            break;
+        }
         default:
             break;
     }
@@ -3622,9 +3810,28 @@ void handle_mouse(MOUSE_EVENT_RECORD *me) {
         return;
     }
     if (g_mux.active_pane < 0) return;
+    /* 分屏：先做窗格命中/边框拖拽。返回 1 表示事件被分屏层吞掉或已切换焦点。 */
+    if (handle_split_mouse(me)) return;
     Pane *p = &g_mux.panes[g_mux.active_pane];
     if (!p->active) return;
     ScreenBuffer *s = &p->screen;
+    /* 分屏下活动 pane 的原点在其矩形左上角：把控制台鼠标坐标换算成 pane 本地
+     * 坐标（单窗格时矩形 c0=0,r0=0，换算为恒等）。 */
+    if (split_is_split() && !g_split_zoom) {
+        PaneRect r0rect[MAX_PANES];
+        for (int i = 0; i < MAX_PANES; i++) r0rect[i].valid = 0;
+        int root = split_active_root();
+        if (root >= 0) split_layout(root, 0, 0, g_mux.host_cols, g_mux.host_rows, split_nodes(), r0rect);
+        PaneRect *rc = &r0rect[g_mux.active_pane];
+        if (rc->valid) {
+            int lx = mx - rc->c0;           /* 本地列（0 基） */
+            int ly = my - 1 - rc->r0;       /* 本地内容行（my=0 是标签栏） */
+            if (lx < 0 || ly < 0 || lx >= rc->cols || ly >= rc->rows) return; /* 点到边框/别处 */
+            me->dwMousePosition.X = (SHORT)lx;
+            me->dwMousePosition.Y = (SHORT)(ly + 1);  /* body 逻辑用 my，内容行从 1 起 */
+            mx = lx; my = ly + 1;
+        }
+    }
     if (me->dwButtonState & (FROM_LEFT_1ST_BUTTON_PRESSED | FROM_LEFT_2ND_BUTTON_PRESSED | RIGHTMOST_BUTTON_PRESSED)) {
         p->input_history_len = 0;
         p->input_history_pos = 0;

@@ -73,6 +73,7 @@ typedef long LONG;
 #define VK_F24     0x87
 #define VK_OEM_1   0xBA
 #define VK_OEM_PLUS 0xBB
+#define VK_OEM_MINUS 0xBD
 #define VK_OEM_2   0xBF
 #define VK_OEM_4   0xDB
 

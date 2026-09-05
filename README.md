@@ -5,7 +5,7 @@
 Windows 终端复用器（Terminal Multiplexer）—— 模块化 C 架构，基于 Windows ConPTY。
 在 Windows 控制台里管理多个 cmd / PowerShell 会话，像 tmux 一样分标签页。
 
-当前版本：**v1.8.32**
+当前版本：**v1.8.33**
 
 > ⚠️ **警告 / 注意事项**：
 > 控制台终端**必须配置使用等宽字体**（Monospace Font，例如 *Cascadia Code*、*Consolas*、*JetBrains Mono*、*Fira Code* 等）。
@@ -47,6 +47,12 @@ Windows 终端复用器（Terminal Multiplexer）—— 模块化 C 架构，基
 | `Ctrl+B d` | 退出 termux |
 | `Ctrl+B t` / `Shift+t` | 轮换标签颜色 |
 | `Ctrl+B 0-9` | 跳转到 pane（支持主键盘与小键盘数字） |
+| `Ctrl+B -` / `_` | 分屏：左右切分 / 上下切分（同一标签内多个终端同屏） |
+| `Ctrl+B Tab` / `Shift+Tab` | 分屏：切换到下一个 / 上一个窗格 |
+| `Ctrl+B ↑/↓/←/→` | 分屏：切换到对应方向的相邻窗格 |
+| `Ctrl+B Shift+方向` | 分屏：拖动分隔线调整窗格大小 |
+| `Ctrl+B q` | 分屏：关闭当前窗格（`x` 仍是关闭整个标签页） |
+| `Ctrl+B z` | 分屏：当前窗格全屏缩放 / 还原 |
 
 > 上表是默认键位；前缀键与每个动作的按键都可以在 `termux.ini` 的 `[keys]` 段里改，见下文。
 
@@ -146,6 +152,13 @@ default_startup = 0        # 0 = 启动进终端，1 = 启动显示帮助
 | `tab-color-next` / `tab-color-prev` | 轮换标签颜色 | `t` / `Shift+t` |
 | `select-pane` | 按编号跳转 pane | `0`-`9` |
 | `next-theme` | 切换下一个配色主题 | 未绑定 |
+| `split-horizontal` | 分屏：上下切分 | `_`（Shift+-） |
+| `split-vertical` | 分屏：左右切分 | `-` / `|` |
+| `split-next` / `split-prev` | 分屏：下一个 / 上一个窗格 | `Tab` / `Shift+Tab` |
+| `split-up` / `split-down` / `split-left` / `split-right` | 分屏：按方向切换窗格 | `↑` / `↓` / `←` / `→` |
+| `split-resize-up` / `split-resize-down` / `split-resize-left` / `split-resize-right` | 分屏：拖分隔线调整大小 | `Shift+↑/↓/←/→` |
+| `split-close` | 分屏：关闭当前窗格 | `q` |
+| `split-zoom` | 分屏：当前窗格全屏缩放 / 还原 | `z` |
 
 键位写法：`C-` = Ctrl，`M-`（或 `A-`）= Alt，`S-` = Shift；键名支持单个字符、`F1`-`F24`、
 `Space` / `Tab` / `Enter` / `Esc` / `Backspace` / `Up` / `Down` / `Left` / `Right` /

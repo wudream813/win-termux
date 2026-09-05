@@ -1,5 +1,7 @@
 #include "render.h"
 #include "framediff.h"
+#include "split.h"
+#include "pane.h"
 
 
 #define TB_BG        "\x1b[048;2;022;027;034m"
@@ -85,6 +87,8 @@ void draw_tab_bar(char *out, int bs, int *posp) {
     }
     for (int i = 0; i < g_mux.pane_count; i++) {
         if (!g_mux.panes[i].active) continue;
+        /* 分屏子窗格（is_split_child）不单独占一个标签页；关于/设置页也不进标签栏。 */
+        if (g_mux.panes[i].is_split_child) continue;
         char nm[64]; format_tab_title(nm, sizeof(nm), g_mux.panes[i].title[0] ? g_mux.panes[i].title : "cmd");
         char head[80];
         int hl = snprintf(head, sizeof(head), "[%s", nm);
@@ -2150,6 +2154,182 @@ static void snap_sel_row(ScreenBuffer *s, int row, int vo, int sel_active, int b
     }
 }
 
+/* =========================================================================
+ * 分屏渲染：把当前标签页的多窗格按矩形裁剪后画到内容区。
+ * 单窗格（整屏）路径完全不走这里——分屏状态下才调用。每个窗格的 screen 缓冲
+ * 尺寸由 pane_resize_to() 与它的矩形保持一致，因此这里逐格读出、按 (rc+1,cc+1)
+ * 绝对定位写出；窗格间 1 行/列画分隔边框，活动窗格边框高亮。
+ * ========================================================================= */
+
+/* 缩放（zoom）状态：非 0 时只把活动窗格铺满内容区，其余隐藏。全局由
+ * input.c 定义（ACT_SPLIT_ZOOM 切换）。 */
+extern int g_split_zoom;
+
+/* 计算内容区里每个可见 pane 的矩形，并同步 screen/ConPTY 尺寸。返回可见叶子数。
+ * zoom 时只让活动 pane 有效并铺满；其余 pane 标记为不可见（不 resize，保持原尺寸）。 */
+static int split_compute_rects(PaneRect *rects) {
+    for (int i = 0; i < MAX_PANES; i++) { rects[i].valid = 0; rects[i].cols = rects[i].rows = 0; }
+    int root = split_active_root();
+    if (root < 0) return 0;
+    /* 内容区：第 0 行标签栏已在上面画过；内容从第 1 行（终端行号 2）起。 */
+    split_layout(root, 0, 0, g_mux.host_cols, g_mux.host_rows, split_nodes(), rects);
+    int n = 0;
+    int active = g_mux.active_pane;
+    for (int i = 0; i < MAX_PANES; i++) {
+        if (!rects[i].valid) continue;
+        if (i >= g_mux.pane_count || !g_mux.panes[i].active) { rects[i].valid = 0; continue; }
+        if (g_split_zoom && i != active) { rects[i].valid = 0; continue; }
+        n++;
+        int cw = rects[i].cols, ch = rects[i].rows;
+        if (g_split_zoom && i == active) { cw = g_mux.host_cols; ch = g_mux.host_rows; rects[i].c0 = 0; rects[i].r0 = 0; }
+        if (cw >= 1 && ch >= 1)
+            pane_resize_to(i, cw, ch);
+    }
+    return n;
+}
+
+static void render_split_borders(char *out, int bs, int *posp, PaneRect *rects) {
+    int pos = *posp;
+    /* 收集所有行/列的分隔线：任意两 pane 之间留白的整列/整行画边框。 */
+    /* 列分隔：某一列 x 满足「左边有 pane 到 x-1、右边有 pane 从 x+1 开始」即画竖线。 */
+    const char *v_on  = "\x1b[048;2;033;038;045m\x1b[038;2;121;192;255;1m│\x1b[0m";
+    const char *v_off = "\x1b[048;2;022;027;034m\x1b[038;2;110;118;129m│\x1b[0m";
+    const char *h_on  = "\x1b[048;2;033;038;045m\x1b[038;2;121;192;255;1m─\x1b[0m";
+    const char *h_off = "\x1b[048;2;022;027;034m\x1b[038;2;110;118;129m─\x1b[0m";
+    /* 竖线列：pane 右沿 x=c0+cols（其右邻 pane 从 x+1 起）。 */
+    for (int i = 0; i < MAX_PANES; i++) {
+        if (!rects[i].valid) continue;
+        int bx = rects[i].c0 + rects[i].cols;   /* 0 基边框列 */
+        if (bx >= g_mux.host_cols - 1) continue;
+        int has_neighbor = 0;
+        for (int j = 0; j < MAX_PANES; j++)
+            if (rects[j].valid && j != i && rects[j].c0 == bx + 1) has_neighbor = 1;
+        if (!has_neighbor) continue;
+        for (int r = rects[i].r0; r < rects[i].r0 + rects[i].rows; r++) {
+            int active_border = (i == g_mux.active_pane);
+            const char *seg = active_border ? v_on : v_off;
+            pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s", r + 2, bx + 1, seg);
+        }
+    }
+    /* 横线行：pane 下沿 y=r0+rows。 */
+    for (int i = 0; i < MAX_PANES; i++) {
+        if (!rects[i].valid) continue;
+        int by = rects[i].r0 + rects[i].rows;   /* 0 基边框行 */
+        if (by >= g_mux.host_rows - 1) continue;
+        int has_neighbor = 0;
+        for (int j = 0; j < MAX_PANES; j++)
+            if (rects[j].valid && j != i && rects[j].r0 == by + 1) has_neighbor = 1;
+        if (!has_neighbor) continue;
+        int active_border = (i == g_mux.active_pane);
+        for (int c = rects[i].c0; c < rects[i].c0 + rects[i].cols; c++) {
+            const char *seg = active_border ? h_on : h_off;
+            pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s", by + 2, c + 1, seg);
+        }
+    }
+    *posp = pos;
+}
+
+/* 画单个 pane 的一个单元格（带真彩/16 色与宽字符处理），定位到内容区绝对坐标。 */
+static void render_split_cell(char *out, int bs, int *posp, ScreenBuffer *s,
+                              Pane *pane, int leaf, int px, int py, int rr, int cc) {
+    int pos = *posp;
+    int x = px, y = py;
+    int vo = pane->scroll_offset;
+    int ar = (vo > 0 && !s->in_alt_screen) ? screen_phys_row(s, y - vo) : -1;
+    CHAR_INFO *cell = (ar >= 0) ? ((s->lines && s->lines[ar].cells) ? &s->lines[ar].cells[x] : NULL)
+                                : screen_cell(s, y, x);
+    WCHAR wc = L' '; WORD attr = 0x07;
+    if (cell) { wc = cell->Char.UnicodeChar; attr = cell->Attributes; }
+    /* 空出的次格（宽字符占位）不写。 */
+    if (wc == 0) { *posp = pos; return; }
+    WORD frgb, brgb; int fgv, bgv;
+    cell_truecolor(s, y, x, ar, &frgb, &brgb, &fgv, &bgv);
+    int active = (leaf == g_mux.active_pane);
+
+    const char *ul = (attr & COMMON_LVB_UNDERSCORE) ? ";4" : "";
+    if (fgv || bgv) {
+        int fr, fg2, fb; rgb565_split(frgb, &fr, &fg2, &fb);
+        int br2, bg2, bb; rgb565_split(brgb, &br2, &bg2, &bb);
+        if (fgv && bgv)
+            pos += snprintf(out + pos, bs - pos, "\x1b[0%s;38;2;%d;%d;%d;48;2;%d;%d;%dm", ul, fr, fg2, fb, br2, bg2, bb);
+        else if (fgv)
+            pos += snprintf(out + pos, bs - pos, "\x1b[0%s;38;2;%d;%d;%dm", ul, fr, fg2, fb);
+        else
+            pos += snprintf(out + pos, bs - pos, "\x1b[0%s;48;2;%d;%d;%dm", ul, br2, bg2, bb);
+    } else {
+        static const int m8[8] = {0,4,2,6,1,5,3,7};
+        int fg = attr & 0x0F, bg = (attr >> 4) & 0x0F;
+        if (fg & 8) pos += snprintf(out + pos, bs - pos, "\x1b[0%s;1;%d;%dm", ul, 90 + m8[fg & 7], (bg & 8) ? 100 + m8[bg & 7] : 40 + m8[bg & 7]);
+        else        pos += snprintf(out + pos, bs - pos, "\x1b[0%s;%d;%dm", ul, 30 + m8[fg & 7], 40 + m8[bg & 7]);
+    }
+    (void)active;
+    /* 定位到内容区绝对坐标（终端行/列，1 基）。 */
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH", rr + 2, cc + 1);
+
+    /* 宽字符 emoji 代理对合成（与整屏路径一致）。 */
+    if (wc >= 0xD800 && wc <= 0xDBFF && x + 1 < (ar >= 0 ? s->cols : s->cols)) {
+        CHAR_INFO *next_cell = (ar >= 0) ? ((s->lines && s->lines[ar].cells) ? &s->lines[ar].cells[x + 1] : NULL)
+                                         : screen_cell(s, y, x + 1);
+        if (next_cell && next_cell->Char.UnicodeChar >= 0xDC00 && next_cell->Char.UnicodeChar <= 0xDFFF) {
+            WCHAR low = next_cell->Char.UnicodeChar;
+            unsigned int cp = 0x10000 + (((unsigned int)(wc & 0x3FF)) << 10) + (low & 0x3FF);
+            out[pos++] = (char)(0xF0 | (cp >> 18));
+            out[pos++] = (char)(0x80 | ((cp >> 12) & 0x3F));
+            out[pos++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+            out[pos++] = (char)(0x80 | (cp & 0x3F));
+            *posp = pos;
+            return;
+        }
+    }
+    if (wc >= 0xD800 && wc <= 0xDFFF) { out[pos++] = ' '; *posp = pos; return; }
+    if (wc < 0x80) out[pos++] = (char)wc;
+    else if (wc < 0x800) { out[pos++] = 0xC0 | (wc >> 6); out[pos++] = 0x80 | (wc & 0x3F); }
+    else { out[pos++] = 0xE0 | (wc >> 12); out[pos++] = 0x80 | ((wc >> 6) & 0x3F); out[pos++] = 0x80 | (wc & 0x3F); }
+    *posp = pos;
+}
+
+static void render_split_pane(char *out, int bs, int *posp, int leaf, PaneRect *rc) {
+    Pane *pane = &g_mux.panes[leaf];
+    ScreenBuffer *s = &pane->screen;
+    int pos = *posp;
+    if (pane->scroll_offset > s->hist_lines) pane->scroll_offset = s->hist_lines;
+    if (pane->scroll_offset < 0) pane->scroll_offset = 0;
+    int rows = rc->rows < s->rows ? rc->rows : s->rows;
+    int cols = rc->cols < s->cols ? rc->cols : s->cols;
+    /* 窗格先铺底色：把整矩形清成面板背景，避免残留。 */
+    for (int py = 0; py < rows; py++) {
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[0;048;2;022;027;034m",
+                        rc->r0 + py + 2, rc->c0 + 1);
+        for (int px = 0; px < cols; px++) pos += snprintf(out + pos, bs - pos, " ");
+    }
+    *posp = pos;
+    for (int py = 0; py < rows; py++) {
+        for (int px = 0; px < cols; px++) {
+            int rr = rc->r0 + py, cc = rc->c0 + px;
+            render_split_cell(out, bs, posp, s, pane, leaf, px, py, rr, cc);
+            pos = *posp;
+        }
+    }
+    /* 活动窗格的终端光标由帧尾光标段统一定位/显隐（见 render_screen 尾部的
+     * split_mode 分支），这里不再单独发 ?25h，避免重复定位。 */
+    (void)rows; (void)cols;
+    *posp = pos;
+}
+
+static void render_split(char *out, int bs, int *posp) {
+    static PaneRect rects[MAX_PANES];
+    int n = split_compute_rects(rects);
+    if (n < 2) return;   /* 实际没分屏：交回整屏路径 */
+    int pos = *posp;
+    /* 先清整个内容区。 */
+    for (int r = 0; r < g_mux.host_rows; r++)
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[0m\x1b[K", r + 2);
+    *posp = pos;
+    for (int i = 0; i < MAX_PANES; i++)
+        if (rects[i].valid) render_split_pane(out, bs, posp, i, &rects[i]);
+    render_split_borders(out, bs, posp, rects);
+}
+
 void render_screen(void) {
     EnterCriticalSection(&g_mux.cs);
     if (g_mux.host_cols < 1 || g_mux.host_rows < 1 || g_mux.total_host_rows < 1) { LeaveCriticalSection(&g_mux.cs); return; }
@@ -2162,6 +2342,14 @@ void render_screen(void) {
 
     if (g_mux.help_mode) {
         render_help_content(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
+    } else if (!g_mux.settings_mode && !g_mux.palette_mode &&
+               split_is_split() &&
+               g_mux.active_pane >= 0 && !g_mux.panes[g_mux.active_pane].is_settings &&
+               !g_mux.panes[g_mux.active_pane].is_about) {
+        /* 分屏：当前标签页有 >=2 个窗格，走多窗格矩形渲染（整屏路径只画一个）。
+         * 模态弹层（chooser/ctx/rename/search/confirm）打开时也继续画分屏底图，
+         * 弹层在之后叠画。 */
+        render_split(out, bs, &pos);
     } else if (g_mux.active_pane >= 0 && g_mux.active_pane < g_mux.pane_count && g_mux.panes[g_mux.active_pane].active) {
         Pane *pane = &g_mux.panes[g_mux.active_pane];
         if (pane->is_settings) {
@@ -2473,9 +2661,34 @@ void render_screen(void) {
      * UI 都在这里决定光标显隐。否则缺失的模式会掉进下面的 active_pane 终端
      * 分支而发出 ?25h，把弹窗本应隐藏的光标重新点亮（BUG-10：退出确认弹窗上
      * 出现游离的终端光标）。分支顺序与 body 的 if/else-if 链保持一致。 */
+    /* 分屏模式（无模态弹层）：活动窗格的终端光标已在 render_split_pane 内定位
+     * 并显隐；这里统一先把光标定位到活动窗格的终端光标处、置可见。有模态弹层
+     * （搜索/命令面板/改名等）时落到下面对应分支由弹层管光标。 */
+    int split_mode = (!g_mux.confirm_exit_mode && !g_search_mode && !g_mux.palette_mode &&
+                      !g_mux.chooser_mode && !g_mux.ctx_mode && !g_mux.rename_mode &&
+                      !g_mux.custom_cmd_mode && split_is_split());
     if (g_mux.confirm_exit_mode) {
         /* 退出确认是模态弹窗，没有输入光标，必须隐藏终端光标。 */
         pos += snprintf(out + pos, bs - pos, "\x1b[?25l");
+    } else if (split_mode) {
+        Pane *ap = &g_mux.panes[g_mux.active_pane];
+        ScreenBuffer *s = &ap->screen;
+        PaneRect rects[MAX_PANES];
+        for (int i = 0; i < MAX_PANES; i++) rects[i].valid = 0;
+        int root = split_active_root();
+        if (root >= 0) split_layout(root, 0, 0, g_mux.host_cols, g_mux.host_rows, split_nodes(), rects);
+        PaneRect *rc = &rects[g_mux.active_pane];
+        if (rc->valid && s->cursor_visible && ap->scroll_offset == 0 && !g_copy_mode) {
+            int cx = s->cursor_x, cy = s->cursor_y;
+            if (cx >= rc->cols) cx = rc->cols - 1;
+            if (cy >= rc->rows) cy = rc->rows - 1;
+            if (cx < 0) cx = 0;
+            if (cy < 0) cy = 0;
+            pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[?25h",
+                            rc->r0 + cy + 2, rc->c0 + cx + 1);
+        } else {
+            pos += snprintf(out + pos, bs - pos, "\x1b[?25l");
+        }
     } else if (g_search_mode) {
         int row, left, input_col, box_w;
         search_box_layout(g_mux.host_cols, &row, &left, &input_col, &box_w);

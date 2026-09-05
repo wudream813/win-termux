@@ -30,6 +30,20 @@ typedef enum {
     ACT_TAB_COLOR_PREV,
     ACT_SELECT_PANE,        /* arg = pane 序号 */
     ACT_NEXT_THEME,
+    ACT_SPLIT_HORIZONTAL,   /* 前缀 - ：上下分屏 */
+    ACT_SPLIT_VERTICAL,     /* 前缀 | ：左右分屏 */
+    ACT_SPLIT_NEXT,         /* 前缀 Tab：切换到下一个窗格 */
+    ACT_SPLIT_PREV,         /* 前缀 Shift+Tab：上一个窗格 */
+    ACT_SPLIT_CLOSE,        /* 前缀 X：关闭当前窗格 */
+    ACT_SPLIT_ZOOM,         /* 前缀 Z：当前窗格全屏缩放 / 还原 */
+    ACT_SPLIT_UP,           /* 前缀 ↑/k? 方向切换窗格 */
+    ACT_SPLIT_DOWN,
+    ACT_SPLIT_LEFT,
+    ACT_SPLIT_RIGHT,
+    ACT_SPLIT_RESIZE_UP,
+    ACT_SPLIT_RESIZE_DOWN,
+    ACT_SPLIT_RESIZE_LEFT,
+    ACT_SPLIT_RESIZE_RIGHT,
     ACT_COUNT
 } TermuxAction;
 

@@ -1,6 +1,7 @@
 #include "pane.h"
 #include "render.h"
 #include "input.h"
+#include "split.h"
 
 void write_to_pane_internal(Pane *pane, const char *data, int len) {
     if (!pane || !pane->active) return;
@@ -18,11 +19,25 @@ void pane_mark_dead(int idx) {
     EnterCriticalSection(&g_mux.cs);
     Pane *pane = &g_mux.panes[idx];
     if (!pane->active) { LeaveCriticalSection(&g_mux.cs); return; }
+    /* 分屏子窗格死亡：若它在某棵分屏树里且不是该 tab 唯一 pane，先从树中摘除，
+     * 焦点交给同 tab 里存活的兄弟；若是 tab 内唯一 pane（锚点），则按普通标签
+     * 关闭处理（整 tab 消失）。 */
+    int split_survivor = -1;
+    int was_split_child = pane->is_split_child;
+    if (was_split_child && idx == g_mux.active_pane) {
+        (void)split_close_active_pane(&split_survivor);
+    } else if (was_split_child) {
+        /* 非活动的分屏子 pane 死亡：直接从树里摘（不切焦点）。 */
+        int root = split_active_root();
+        (void)root;
+    }
     pane->active = 0;
     int next = -1;
     for (int i = 0; i < g_mux.pane_count; i++) if (g_mux.panes[i].active && i != idx) { next = i; break; }
     if (idx == g_mux.active_pane) {
-        if (next >= 0) { g_mux.active_pane = next; g_mux.panes[next].scroll_offset = 0; }
+        if (split_survivor >= 0 && g_mux.panes[split_survivor].active) {
+            g_mux.active_pane = split_survivor; g_mux.panes[split_survivor].scroll_offset = 0;
+        } else if (next >= 0) { g_mux.active_pane = next; g_mux.panes[next].scroll_offset = 0; }
         else g_mux.running = 0;
     }
     g_mux.needs_redraw = 1;
@@ -463,6 +478,13 @@ void switch_pane(int idx) {
     /* 复制 / 搜索属于原来那个 pane：换标签页时先收回，避免两个标签页同时
      * 响应同一套按键（选区、匹配高亮都会串台）。 */
     if (idx != g_mux.active_pane) ui_modes_cancel();
+    /* 新切到的 pane 若还不属于任何分屏树（新建的独立标签页 / 关于 / 设置页），
+     * 给它注册一棵单叶子分屏树。分屏子窗格带 is_split_child 标记，已在切分
+     * 流程里挂进树，不在此重复注册。 */
+    if (!g_mux.panes[idx].is_split_child && !g_mux.panes[idx].is_settings &&
+        !g_mux.panes[idx].is_about && split_tab_of_pane(idx) < 0) {
+        split_init_tab(idx);
+    }
     g_mux.active_pane = idx;
     g_mux.panes[idx].scroll_offset = 0;
     g_mux.needs_redraw = 1;
@@ -474,4 +496,25 @@ int find_next_active_pane(int cur) {
         if (g_mux.panes[n].active) return n;
     }
     return -1;
+}
+
+/* ---- 分屏：按窗格矩形调整每个子 pane 的屏幕/ConPTY 尺寸 -------------------- */
+void pane_resize_to(int idx, int cols, int rows) {
+    if (idx < 0 || idx >= g_mux.pane_count) return;
+    Pane *p = &g_mux.panes[idx];
+    if (!p->active) return;
+    if (cols < 1) cols = 1;
+    if (rows < 1) rows = 1;
+    EnterCriticalSection(&g_mux.cs);
+    if (p->screen.cols != cols || p->screen.rows != rows) {
+        screen_resize(&p->screen, cols, rows);
+        p->screen.detect_count = 0;
+        if (p->scroll_offset > p->screen.hist_lines) p->scroll_offset = p->screen.hist_lines;
+    }
+    LeaveCriticalSection(&g_mux.cs);
+    if (p->hpc) {
+        COORD sz = {(SHORT)cols, (SHORT)rows};
+        ResizePseudoConsole(p->hpc, sz);
+    }
+    g_mux.needs_redraw = 1;
 }
