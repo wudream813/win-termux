@@ -2357,9 +2357,18 @@ static void render_split(char *out, int bs, int *posp) {
      * 屏幕空了」）；n>=2 为正常多窗格。 */
     if (n < 1) return;
     int pos = *posp;
-    /* 先清整个内容区。 */
-    for (int r = 0; r < g_mux.host_rows; r++)
-        pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[0m\x1b[K", r + 2);
+    /* 先把整个内容区整行显式铺成面板底色（每一列都写显式空格，不只用 \x1b[K）。
+     * 布局变化——拖分隔线 / 关闭窗格——时，旧边框或旧窗格内容所在的列在本帧可能
+     * 没有任何新字符；framediff 按「整行字节块」差分，\x1b[K 清行尾在增量帧里不
+     * 能保证把这些列刷掉，结果旧背景色残留成「拖条/关窗后多出来的一块背景」。
+     * 显式铺满整行后，行块一定包含每一列的字节，布局一变整行必判脏、整行重建，
+     * 随后窗格铺底/单元格/边框再各自覆盖。 */
+    for (int r = 0; r < g_mux.host_rows; r++) {
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[0;048;2;022;027;034m", r + 2);
+        for (int c = 0; c < g_mux.host_cols; c++)
+            pos += snprintf(out + pos, bs - pos, " ");
+        pos += snprintf(out + pos, bs - pos, "\x1b[0m");
+    }
     *posp = pos;
     for (int i = 0; i < MAX_PANES; i++)
         if (rects[i].valid) render_split_pane(out, bs, posp, i, &rects[i]);
@@ -2614,7 +2623,13 @@ void render_screen(void) {
                     else { out[pos++] = 0xE0 | (wc >> 12); out[pos++] = 0x80 | ((wc >> 6) & 0x3F); out[pos++] = 0x80 | (wc & 0x3F); }
                     if (pos > bs - 256) break;
                 }
+                /* v1.8.37：正文末尾(text_rc)之后到屏幕右缘这一段本帧不被任何显式
+                 * 字符覆盖，必须用 \x1b[K 清行尾，否则布局收缩（关闭分屏窗格后
+                 * 活动窗格扩宽）时会残留上一帧的内容（右侧屏幕不重置）。 */
+                pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[K");
                 if (show_sb && dist <= 10) {
+                    /* 滚动条轨道画在最右列：先清行尾（上面已发 \x1b[K），再回到
+                     * 最右列画 thumb / track。 */
                     pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH", y + 2, g_mux.host_cols);
                     int in_thumb = (y >= sb_top && y < sb_bot);
                     if (in_thumb) {
@@ -2630,8 +2645,6 @@ void render_screen(void) {
                                         g_sb_grad[dist].track_fg_r, g_sb_grad[dist].track_fg_g, g_sb_grad[dist].track_fg_b);
                     }
                     la_attr = 0xFFFF;
-                } else if (!show_sb) {
-                    if (text_rc < g_mux.host_cols) pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[K");
                 }
                 if (pos > bs - 256) break;
             }
