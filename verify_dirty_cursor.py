@@ -306,7 +306,8 @@ def main():
 
     def modes_in(seg):
         out = set()
-        for m in ["g_mux.confirm_exit_mode", "g_search_mode", "g_mux.palette_mode",
+        for m in ["g_mux.confirm_exit_mode", "g_mux.confirm_close_mode",
+                  "g_search_mode", "g_mux.palette_mode",
                   "g_mux.chooser_mode", "g_mux.ctx_mode", "g_mux.rename_mode",
                   "g_mux.custom_cmd_mode", "g_copy_mode"]:
             if m in seg:
@@ -320,12 +321,14 @@ def main():
     assert not missing, (
         "render.c: 帧尾光标段漏了 body 弹层模式 %s —— 这些弹窗会掉进终端 "
         "active_pane 分支发出 ?25h，弹窗上出现游离光标（BUG-10）" % sorted(missing))
-    # confirm_exit 必须显式藏光标（不能只靠兜底），且 body 里的弹窗渲染函数内
-    # 不再各自发 ?25l（那会被脏区按行差分吞掉）。
-    conf_branch = cur_seg[cur_seg.index("if (g_mux.confirm_exit_mode)"):cur_seg.index("else if", cur_seg.index("if (g_mux.confirm_exit_mode)"))]
-    assert "?25l" in conf_branch, "帧尾 confirm_exit 分支必须发 ?25l 隐藏光标"
-    rc_start = src.index("void render_confirm_exit(")
-    rc_end = src.index("void render_search_box(", rc_start)
+    # 确认弹窗（退出 confirm_exit / 关闭窗格 confirm_close）必须显式藏光标（不能
+    # 只靠兜底），且 body 里的弹窗渲染函数内不再各自发 ?25l（会被脏区按行差分吞掉）。
+    conf_marker = "if (g_mux.confirm_exit_mode || g_mux.confirm_close_mode)"
+    assert conf_marker in cur_seg, "帧尾光标段缺 confirm_exit/confirm_close 藏光标分支"
+    conf_branch = cur_seg[cur_seg.index(conf_marker):cur_seg.index("else if", cur_seg.index(conf_marker))]
+    assert "?25l" in conf_branch, "帧尾确认弹窗分支必须发 ?25l 隐藏光标"
+    rc_start = src.index("void render_confirm_dialog(")
+    rc_end = src.index("void render_confirm_exit(", rc_start)
     rc_body = src[rc_start:rc_end]
     # 只看实际输出语句（snprintf 里的 ?25l），注释里提到不算。
     rc_emits_hide = any("?25l" in line and "snprintf" in line for line in rc_body.splitlines())

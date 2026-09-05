@@ -159,6 +159,7 @@ typedef struct {
     int palette_focus;
     int palette_field;
     int confirm_exit_mode;   /* confirm_on_exit = true 时的退出确认弹窗 */
+    int confirm_close_mode;  /* confirm_on_close = true 时的关闭窗格/标签确认弹窗 */
     int palette_edit_idx;
     int palette_edit_new;
     DWORD orig_in_mode, orig_out_mode;

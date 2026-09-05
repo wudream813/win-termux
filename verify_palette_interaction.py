@@ -354,22 +354,26 @@ def main() -> int:
           "int cols = utf8_cols(hdr" in RENDER and
           'palette_hline(out, bs, &pos, top + 3, left, CP_W, "└", "┘")' in RENDER,
           "颜色选择器面板没有按 CP_W 自适应收窄（右侧留大片空白）")
-    confirm_render = extract_func(RENDER, "void render_confirm_exit")
+    # 退出确认弹窗已泛化为通用确认弹窗 render_confirm_dialog(kind)：kind=0 退出、
+    # kind=1 关闭窗格（confirm_on_close）；render_confirm_exit 是 kind=0 的包装。
+    confirm_render = extract_func(RENDER, "void render_confirm_dialog")
     confirm_geom = extract_func(RENDER, "void confirm_exit_button_geom")
-    check("confirm_exit_button_geom" in RENDER_H and
+    check("render_confirm_exit" in RENDER and "render_confirm_dialog" in RENDER and
+          "confirm_exit_button_geom" in RENDER_H and
           "CONFIRM_YES_W" in confirm_geom and "CONFIRM_NO_W" in confirm_geom and
           "confirm_exit_button_geom(host_rows, host_cols, &row" in confirm_render and
           "confirm_pad(out, bs, &pos, interior - msg_cols)" in confirm_render and
           "confirm_pad(out, bs, &pos, (left + w - 1) - ne)" in confirm_render,
-          "退出确认对话框没有按面板宽度补齐（右边框会错位）")
-    check("handle_confirm_exit_mouse" in INPUT and
+          "确认对话框没有按面板宽度补齐（右边框会错位）")
+    check("handle_confirm_dialog_mouse" in INPUT and
           "confirm_exit_button_geom(g_mux.host_rows, g_mux.host_cols" in INPUT and
           "if (!g_mouse_enabled) return;" in INPUT and
-          "!g_mouse_enabled || g_mux.confirm_exit_mode" not in INPUT,
-          "退出确认对话框仍然吞掉全部鼠标事件")
+          "do_close_current_pane()" in INPUT,
+          "关闭窗格确认对话框没有正确接线鼠标 / 关闭动作")
     check("int yes_hover = (mrow == row && mcol >= ys && mcol < ye);" in confirm_render and
-          "int no_hover = (mrow == row && mcol >= ns && mcol < ne);" in confirm_render,
-          "退出确认按钮没有 hover 高亮")
+          "int no_hover = (mrow == row && mcol >= ns && mcol < ne);" in confirm_render and
+          'kind ? " 确定要关闭当前窗格吗？"' in confirm_render,
+          "确认按钮没有 hover 高亮 / 缺少关闭窗格文案")
     check("dc = c - (left + 2)" in INPUT and
           "g_mouse_x >= left + 1 + i * 4" in RENDER and
           "int mouse_row = row - 1" in RENDER,

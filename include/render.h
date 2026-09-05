@@ -18,7 +18,7 @@
 #define SETTINGS_ROLE_COL_W     34
 #define SETTINGS_KEYS_ROW0      6
 #define SETTINGS_BEHAVIOR_ROW0  6
-#define SETTINGS_BEHAVIOR_TOGGLES 4   /* mouse / copy_move_deselect / confirm_on_exit / search_case_sensitive */
+#define SETTINGS_BEHAVIOR_TOGGLES 5   /* mouse / copy_move_deselect / confirm_on_exit / confirm_on_close / search_case_sensitive */
 /* 相对 main_left 的按钮列偏移，渲染时用绝对定位写出，鼠标按同样的偏移命中 */
 #define SETTINGS_KEYS_PREFIX_COL 56   /* [前缀] / [直接] 切换 */
 
@@ -142,6 +142,8 @@ int search_box_case_hit(int host_cols, int r, int c);
 /* 大小写标记当前是否被鼠标悬停（渲染用，0 基 g_mouse_x/y）。 */
 int search_box_case_hovered(int host_cols);
 void render_confirm_exit(char *out, int bs, int *posp, int host_rows, int host_cols);
+/* 通用确认弹窗。kind=0 退出 termux（标题「退出确认」），kind=1 关闭窗格/标签。 */
+void render_confirm_dialog(char *out, int bs, int *posp, int host_rows, int host_cols, int kind);
 /* 顶栏右侧状态徽章（复制模式 / 搜索）。折叠时只有徽章本体与按钮，鼠标悬停
  * 才向左展开提示文字，所以按钮列不会随提示出现而漂移。 */
 typedef struct {

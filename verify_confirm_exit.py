@@ -65,6 +65,7 @@ HARNESS = "\n".join([
     extract_func(RENDER, "void confirm_exit_geom("),
     extract_func(RENDER, "void confirm_exit_button_geom("),
     extract_func(RENDER, "static void confirm_pad("),
+    extract_func(RENDER, "void render_confirm_dialog("),
     extract_func(RENDER, "void render_confirm_exit("),
     r'''
 static void dump(int rows, int cols, int mx, int my) {

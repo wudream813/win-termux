@@ -736,6 +736,7 @@ static void render_settings_behavior(char *out, int bs, int *posp, int host_rows
         {"mouse",           "鼠标支持（标签点击 / 拖选 / 滚轮）", g_mouse_enabled},
         {"copy_move_deselect", "复制模式直接移动（无 Shift/Alt）丢弃高亮", g_copy_move_deselect},
         {"confirm_on_exit", "退出 termux 前二次确认",             g_confirm_on_exit},
+        {"confirm_on_close", "关闭窗格 / 标签前二次确认",          g_confirm_on_close},
         {"search_case_sensitive", "搜索锁定大小写（区分大小写）",  g_search_case_sensitive},
     };
     for (int i = 0; i < SETTINGS_BEHAVIOR_TOGGLES; i++) {
@@ -1224,7 +1225,7 @@ static void confirm_pad(char *out, int bs, int *posp, int n) {
     *posp = pos;
 }
 
-void render_confirm_exit(char *out, int bs, int *posp, int host_rows, int host_cols) {
+void render_confirm_dialog(char *out, int bs, int *posp, int host_rows, int host_cols, int kind) {
     int pos = *posp, top, left, w, h;
     confirm_exit_geom(host_rows, host_cols, &top, &left, &w, &h);
     (void)h;
@@ -1232,7 +1233,7 @@ void render_confirm_exit(char *out, int bs, int *posp, int host_rows, int host_c
     if (interior < 0) interior = 0;
 
     const char *panel = "\x1b[048;2;033;038;045m";
-    const char *hdr = "┌─ 退出确认 ";
+    const char *hdr = kind ? "┌─ 关闭窗格确认 " : "┌─ 退出确认 ";
     int cols = utf8_cols(hdr, (int)strlen(hdr));
     pos += snprintf(out + pos, bs - pos,
         "\x1b[%d;%dH\x1b[038;2;255;255;255m\x1b[048;2;248;081;073m%s", top, left, hdr);
@@ -1241,7 +1242,7 @@ void render_confirm_exit(char *out, int bs, int *posp, int host_rows, int host_c
     }
     pos += snprintf(out + pos, bs - pos, "┐\x1b[0m");
 
-    const char *msg = " 确定要退出 termux 吗？";
+    const char *msg = kind ? " 确定要关闭当前窗格吗？" : " 确定要退出 termux 吗？";
     int msg_cols = utf8_cols(msg, (int)strlen(msg));
     pos += snprintf(out + pos, bs - pos,
         "\x1b[%d;%dH%s│%s\x1b[038;2;230;237;243m%s", top + 1, left, panel, panel, msg);
@@ -1277,6 +1278,10 @@ void render_confirm_exit(char *out, int bs, int *posp, int host_rows, int host_c
      * 不再发 ?25l——它在 body 里会被脏区按行差分跳过（弹窗行内容不变时不发），
      * 反而盖不住帧尾终端 pane 的 ?25h，导致弹窗上出现游离光标。 */
     *posp = pos;
+}
+
+void render_confirm_exit(char *out, int bs, int *posp, int host_rows, int host_cols) {
+    render_confirm_dialog(out, bs, posp, host_rows, host_cols, 0);
 }
 
 void render_search_box(char *out, int bs, int *posp, int host_rows, int host_cols) {
@@ -1336,11 +1341,11 @@ static const PaletteStaticItem g_palette_operation_items[] = {
     { "search-history",     "搜索历史",           "搜索当前终端的滚动历史",           "",           PALETTE_ACTION_SEARCH,             0, 5, 5 },
     { "switch-panel",       "切换 panel",         "按编号或标题选择并切换 panel",     "Enter 进入", PALETTE_ACTION_SWITCH_PANEL,       0, 6, 6 },
     { "copy-mode",          "进入复制模式",       "移动光标、行选/块选终端文本并复制",     "",           PALETTE_ACTION_COPY_MODE,          0, 7, 7 },
-    { "split-vertical",     "分屏：左右切分",     "在当前标签内右侧新建一个窗格",         "前缀 -",     PALETTE_ACTION_SPLIT_VERTICAL,     0, 14, 4 },
-    { "split-horizontal",   "分屏：上下切分",     "在当前标签内下方新建一个窗格",         "前缀 _",     PALETTE_ACTION_SPLIT_HORIZONTAL,   0, 15, 4 },
-    { "split-next",         "分屏：切换窗格",     "在当前标签的各窗格间循环切换焦点",     "前缀 Tab",   PALETTE_ACTION_SPLIT_NEXT,         0, 16, 6 },
-    { "split-zoom",         "分屏：全屏缩放",     "把当前窗格临时铺满全屏 / 还原",        "前缀 z",     PALETTE_ACTION_SPLIT_ZOOM,         0, 17, 3 },
-    { "split-close",        "分屏：关闭窗格",     "关闭当前窗格（保留同标签其它窗格）",   "前缀 q",     PALETTE_ACTION_SPLIT_CLOSE,        0, 18, 8 },
+    { "split-vertical",     "分屏：左右切分",     "在当前标签内右侧新建一个窗格（前缀 -）", "", PALETTE_ACTION_SPLIT_VERTICAL,     0, 14, 4 },
+    { "split-horizontal",   "分屏：上下切分",     "在当前标签内下方新建一个窗格（前缀 _）", "", PALETTE_ACTION_SPLIT_HORIZONTAL,   0, 15, 4 },
+    { "split-next",         "分屏：切换窗格",     "在当前标签的各窗格间循环切换焦点（前缀 Tab）", "", PALETTE_ACTION_SPLIT_NEXT,    0, 16, 6 },
+    { "split-zoom",         "分屏：全屏缩放",     "把当前窗格临时铺满全屏 / 还原（前缀 z）", "", PALETTE_ACTION_SPLIT_ZOOM,        0, 17, 3 },
+    { "split-close",        "分屏：关闭窗格",     "关闭当前窗格，仅一个窗格时关闭整个标签（前缀 q）", "", PALETTE_ACTION_SPLIT_CLOSE, 0, 18, 8 },
     { "reload",             "热重载",             "重新加载 termux.ini 配置文件",      "",           PALETTE_ACTION_RELOAD,             0, 8, 5 },
     { "open-settings-page", "打开设置页面",       "进入图形化设置页面",               "Enter 打开", PALETTE_ACTION_GRAPHICAL_SETTINGS, 0, 9, 4 },
     { "settings-command-panel", "打开设置命令面板", "切换到设置命令面板",           "Enter 进入", PALETTE_ACTION_OPEN_SETTINGS,     0, 10, 6 },
@@ -1435,12 +1440,30 @@ static int palette_match_score(const PaletteItemInfo *item, const char *query, i
     return best;
 }
 
+/* 分屏项的快捷键：把静态占位「前缀 x」替换成真实组合（随用户配置的前缀键而变，
+ * 例如默认 Ctrl+B 时显示 "Ctrl+B -"），从键位表动态生成，不写死。 */
+static char g_split_shortcut_buf[24];
+static const char *palette_split_shortcut(PaletteAction a) {
+    int act = ACT_NONE;
+    switch (a) {
+        case PALETTE_ACTION_SPLIT_VERTICAL:   act = ACT_SPLIT_VERTICAL;   break;
+        case PALETTE_ACTION_SPLIT_HORIZONTAL: act = ACT_SPLIT_HORIZONTAL; break;
+        case PALETTE_ACTION_SPLIT_NEXT:       act = ACT_SPLIT_NEXT;       break;
+        case PALETTE_ACTION_SPLIT_CLOSE:      act = ACT_SPLIT_CLOSE;      break;
+        case PALETTE_ACTION_SPLIT_ZOOM:       act = ACT_SPLIT_ZOOM;       break;
+        default: return NULL;
+    }
+    keymap_describe(act, g_split_shortcut_buf, sizeof(g_split_shortcut_buf));
+    return g_split_shortcut_buf[0] ? g_split_shortcut_buf : NULL;
+}
+
 static int palette_copy_static(const PaletteStaticItem *src, PaletteItemInfo *out) {
     if (!src || !out) return 0;
     out->id = src->id;
     out->title = src->title;
     out->desc = src->desc;
-    out->shortcut = src->shortcut;
+    const char *sc = palette_split_shortcut(src->action);
+    out->shortcut = sc ? sc : src->shortcut;
     out->action = src->action;
     out->value = src->value;
     out->number = src->number;
@@ -1945,6 +1968,11 @@ static const HelpShortcut g_help_shortcuts[] = {
     {ACT_NEW_PANE,        NULL,         "新建默认 pane"},
     {ACT_NEW_PANE_MENU,   NULL,         "新建 pane 菜单 (选择/自定义命令行)"},
     {ACT_COPY_MODE,       NULL,         "进入复制模式 (Shift/Alt+方向选择, Enter/Ctrl+C 复制)"},
+    {ACT_SPLIT_HORIZONTAL,NULL,         "分屏：上下切分（同标签新建窗格）"},
+    {ACT_SPLIT_VERTICAL,  NULL,         "分屏：左右切分（同标签新建窗格）"},
+    {ACT_SPLIT_NEXT,      "Shift 反向", "分屏：循环切换窗格"},
+    {ACT_SPLIT_ZOOM,      NULL,         "分屏：当前窗格全屏缩放 / 还原"},
+    {ACT_SPLIT_CLOSE,     NULL,         "分屏：关闭当前窗格（单窗格则关闭标签）"},
     {ACT_SEARCH,          NULL,         "搜索滚动历史 (n/N 跳转匹配, Esc 退出)"},
     {ACT_NEXT_PANE,       NULL,         "下一个 pane"},
     {ACT_PREV_PANE,       NULL,         "上一个 pane"},
@@ -2620,6 +2648,8 @@ void render_screen(void) {
 
     if (g_mux.confirm_exit_mode) {
         render_confirm_exit(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
+    } else if (g_mux.confirm_close_mode) {
+        render_confirm_dialog(out, bs, &pos, g_mux.host_rows, g_mux.host_cols, 1);
     } else if (g_search_mode) {
         render_search_box(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
     } else if (g_mux.palette_mode) {
@@ -2682,11 +2712,12 @@ void render_screen(void) {
     /* 分屏模式（无模态弹层）：活动窗格的终端光标已在 render_split_pane 内定位
      * 并显隐；这里统一先把光标定位到活动窗格的终端光标处、置可见。有模态弹层
      * （搜索/命令面板/改名等）时落到下面对应分支由弹层管光标。 */
-    int split_mode = (!g_mux.confirm_exit_mode && !g_search_mode && !g_mux.palette_mode &&
+    int split_mode = (!g_mux.confirm_exit_mode && !g_mux.confirm_close_mode &&
+                      !g_search_mode && !g_mux.palette_mode &&
                       !g_mux.chooser_mode && !g_mux.ctx_mode && !g_mux.rename_mode &&
                       !g_mux.custom_cmd_mode && split_is_split());
-    if (g_mux.confirm_exit_mode) {
-        /* 退出确认是模态弹窗，没有输入光标，必须隐藏终端光标。 */
+    if (g_mux.confirm_exit_mode || g_mux.confirm_close_mode) {
+        /* 确认弹窗（退出 / 关闭窗格）是模态弹窗，没有输入光标，必须隐藏终端光标。 */
         pos += snprintf(out + pos, bs - pos, "\x1b[?25l");
     } else if (split_mode) {
         Pane *ap = &g_mux.panes[g_mux.active_pane];

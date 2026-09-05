@@ -6,6 +6,46 @@
 /* 分屏：当前窗格全屏缩放（zoom）中。render.c 读取以只画活动窗格。 */
 int g_split_zoom = 0;
 
+/* 真正执行「关闭当前窗格」：
+ *  - 处于分屏且当前标签有 >=2 个窗格：从树里摘除活动叶子（树收缩、兄弟接管焦点）；
+ *  - 否则（单窗格 / 独立标签页）：关闭整个标签页（原 ACT_CLOSE_PANE 行为）。
+ * 这样「关闭窗格」在只有一个窗格时也有效（关掉整个标签），不再静默无效。 */
+static void do_close_current_pane(void) {
+    int survivor = -1;
+    if (split_is_split() && split_close_active_pane(&survivor)) {
+        int dead = g_mux.active_pane;
+        g_split_zoom = 0;
+        if (survivor >= 0) g_mux.active_pane = survivor;
+        close_pane(dead);
+        if (survivor >= 0 && g_mux.panes[survivor].active) switch_pane(survivor);
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    /* 单窗格：关闭整个标签页（复用原 CLOSE_PANE 流程）。 */
+    int c = g_mux.active_pane, n = find_next_active_pane(c);
+    close_pane(c);
+    if (n >= 0 && g_mux.panes[n].active) switch_pane(n);
+    else {
+        int f = 0;
+        for (int i = 0; i < g_mux.pane_count; i++)
+            if (g_mux.panes[i].active) { switch_pane(i); f = 1; break; }
+        if (!f) g_mux.running = 0;
+    }
+}
+
+static void dismiss_overlays(void);   /* 定义于 action_execute 之前 */
+
+/* 「关闭窗格/标签」动作入口：若设置了 confirm_on_close 则弹确认框，否则直接关闭。 */
+static void request_close_current_pane(void) {
+    if (g_confirm_on_close) {
+        dismiss_overlays();
+        g_mux.confirm_close_mode = 1;
+        g_mux.needs_redraw = 1;
+    } else {
+        do_close_current_pane();
+    }
+}
+
 /* 命令面板分屏项 -> 键位动作（命令面板与快捷键复用同一 action_execute 路径）。 */
 static int PALETTE_TO_SPLIT_ACT(int a) {
     switch (a) {
@@ -1923,7 +1963,8 @@ static void settings_behavior_toggle(int idx) {
     if (idx == 0) g_mouse_enabled = !g_mouse_enabled;
     else if (idx == 1) g_copy_move_deselect = !g_copy_move_deselect;
     else if (idx == 2) g_confirm_on_exit = !g_confirm_on_exit;
-    else if (idx == 3) {
+    else if (idx == 3) g_confirm_on_close = !g_confirm_on_close;
+    else if (idx == 4) {
         g_search_case_sensitive = !g_search_case_sensitive;
         if (g_search_active) execute_search();   /* 立刻按新规则重新匹配 */
     }
@@ -2752,15 +2793,8 @@ void action_execute(int action, int arg, DWORD ctrl) {
             break;
         }
         case ACT_CLOSE_PANE: {
-            int c = g_mux.active_pane, n = find_next_active_pane(c);
-            close_pane(c);
-            if (n >= 0 && g_mux.panes[n].active) switch_pane(n);
-            else {
-                int f = 0;
-                for (int i = 0; i < g_mux.pane_count; i++)
-                    if (g_mux.panes[i].active) { switch_pane(i); f = 1; break; }
-                if (!f) g_mux.running = 0;
-            }
+            /* 关闭当前标签页（受 confirm_on_close 二次确认设置控制）。 */
+            request_close_current_pane();
             break;
         }
         case ACT_QUIT: {
@@ -2856,15 +2890,9 @@ void action_execute(int action, int arg, DWORD ctrl) {
             break;
         }
         case ACT_SPLIT_CLOSE: {
-            int survivor = -1;
-            if (split_close_active_pane(&survivor)) {
-                int dead = g_mux.active_pane;
-                g_split_zoom = 0;   /* 关窗格后退出 zoom，避免单窗格仍走分屏空白路径 */
-                if (survivor >= 0) g_mux.active_pane = survivor;
-                close_pane(dead);
-                if (survivor >= 0 && g_mux.panes[survivor].active) switch_pane(survivor);
-                g_mux.needs_redraw = 1;
-            }
+            /* 关闭当前窗格：分屏时摘除叶子；只有一个窗格时关闭整个标签页
+             * （受 confirm_on_close 二次确认设置控制）。 */
+            request_close_current_pane();
             break;
         }
         default:
@@ -2952,6 +2980,17 @@ void handle_key(KEY_EVENT_RECORD *ke) {
             g_mux.running = 0;
         } else if (uc == 'n' || uc == 'N' || vk == VK_ESCAPE) {
             g_mux.confirm_exit_mode = 0;
+            g_mux.needs_redraw = 1;
+        }
+        return;
+    }
+
+    if (g_mux.confirm_close_mode) {
+        if (uc == 'y' || uc == 'Y' || vk == VK_RETURN) {
+            g_mux.confirm_close_mode = 0;
+            do_close_current_pane();
+        } else if (uc == 'n' || uc == 'N' || vk == VK_ESCAPE) {
+            g_mux.confirm_close_mode = 0;
             g_mux.needs_redraw = 1;
         }
         return;
@@ -3464,7 +3503,8 @@ void handle_key(KEY_EVENT_RECORD *ke) {
 /* The exit confirmation used to swallow every mouse event, so its buttons
  * looked clickable but were not.  Hit testing reuses confirm_exit_button_geom
  * so the highlight and the click target are the same rectangle. */
-static void handle_confirm_exit_mouse(MOUSE_EVENT_RECORD *me) {
+/* kind=0 退出确认（确认即退出），kind=1 关闭窗格确认（确认即关闭当前窗格）。 */
+static void handle_confirm_dialog_mouse(MOUSE_EVENT_RECORD *me, int kind) {
     int mx = me->dwMousePosition.X, my = me->dwMousePosition.Y;
     if (mx != g_mouse_x || my != g_mouse_y) {
         g_mouse_x = mx;
@@ -3481,12 +3521,13 @@ static void handle_confirm_exit_mouse(MOUSE_EVENT_RECORD *me) {
     int r = my + 1, c = mx + 1;
     if (r != row) return;
     if (c >= ys && c < ye) {
-        g_mux.confirm_exit_mode = 0;
-        g_mux.running = 0;
+        if (kind == 0) { g_mux.confirm_exit_mode = 0; g_mux.running = 0; }
+        else           { g_mux.confirm_close_mode = 0; do_close_current_pane(); }
         return;
     }
     if (c >= ns && c < ne) {
-        g_mux.confirm_exit_mode = 0;
+        if (kind == 0) g_mux.confirm_exit_mode = 0;
+        else           g_mux.confirm_close_mode = 0;
         g_mux.needs_redraw = 1;
     }
 }
@@ -3549,7 +3590,11 @@ void handle_mouse(MOUSE_EVENT_RECORD *me) {
     ui_modes_sync_pane();
     if (handle_status_badge_mouse(me)) return;
     if (g_mux.confirm_exit_mode) {
-        handle_confirm_exit_mouse(me);
+        handle_confirm_dialog_mouse(me, 0);
+        return;
+    }
+    if (g_mux.confirm_close_mode) {
+        handle_confirm_dialog_mouse(me, 1);
         return;
     }
     int mx = me->dwMousePosition.X, my = me->dwMousePosition.Y;

@@ -5,7 +5,7 @@
 Windows 终端复用器（Terminal Multiplexer）—— 模块化 C 架构，基于 Windows ConPTY。
 在 Windows 控制台里管理多个 cmd / PowerShell 会话，像 tmux 一样分标签页。
 
-当前版本：**v1.8.35**
+当前版本：**v1.8.36**
 
 > ⚠️ **警告 / 注意事项**：
 > 控制台终端**必须配置使用等宽字体**（Monospace Font，例如 *Cascadia Code*、*Consolas*、*JetBrains Mono*、*Fira Code* 等）。
@@ -24,7 +24,7 @@ Windows 终端复用器（Terminal Multiplexer）—— 模块化 C 架构，基
 - **可配置的键位**：前缀键（默认 `Ctrl+B`）与每个动作的按键都能在 `termux.ini` 的 `[keys]` 段里改，每个动作还能单独设为「不带前缀的直接键」（`noprefix`，设置页键位表里按 `P` 或点 `[前缀]/[直接]` 列切换）；帮助页显示的快捷键跟着配置实时变化
 - **右上角状态徽章**：搜索输入框与复制/搜索状态全部收在右上角，不再占用任何一整行终端内容；复制模式与历史搜索都折叠成右上角一枚小徽章（`[复制模式 行选区]` / `[搜索 "err" 3/12]`），鼠标悬停时才向左展开完整操作提示，不再长期占据一整行
 - **配色主题**：内置 `github-dark` / `one-dark` / `nord` / `gruvbox-dark` / `dracula`，也可在 `[theme]` 段按语义角色单独覆盖任意一种颜色；`Ctrl+B` → 设置命令面板 → 切换配色主题 可即时轮换
-- **行为开关**：`scrollback` 滚动行数、`mouse` 鼠标开关、`copy_on_select` 拖选自动复制、`confirm_on_exit` 退出二次确认
+- **行为开关**：`scrollback` 滚动行数、`mouse` 鼠标开关、`copy_on_select` 拖选自动复制、`confirm_on_exit` 退出二次确认、`confirm_on_close` 关闭窗格/标签二次确认
 - **每个菜单项可配启动默认颜色**：菜单项详情页（以及命令面板的 panel 编辑器）多了一条颜色选择条，`←/→`、数字 `0-8` 或鼠标点选即可指定这一项新建标签页时的颜色，写回 `termux.ini` 的 `color=` 字段
 - **图形化设置页**：`Ctrl+B s` 打开，侧栏含「启动 / 菜单项 / 外观·主题 / 键位 / 行为」五类；主题可即时预览切换、语义色可改十六进制、键位支持**按键录制**，改完即时写回 `termux.ini`
 - **诊断日志**：`TERMUX_DUMP=1` 时输出原始 ConPTY 流 / 渲染输出 / 鼠标事件
@@ -51,7 +51,7 @@ Windows 终端复用器（Terminal Multiplexer）—— 模块化 C 架构，基
 | `Ctrl+B Tab` / `Shift+Tab` | 分屏：切换到下一个 / 上一个窗格 |
 | `Ctrl+B ↑/↓/←/→` | 分屏：切换到对应方向的相邻窗格 |
 | `Ctrl+B Shift+方向` | 分屏：拖动分隔线调整窗格大小 |
-| `Ctrl+B q` | 分屏：关闭当前窗格（`x` 仍是关闭整个标签页） |
+| `Ctrl+B q` | 分屏：关闭当前窗格（同标签只剩一个窗格时关闭整个标签页；可在设置里开启关闭二次确认） |
 | `Ctrl+B z` | 分屏：当前窗格全屏缩放 / 还原 |
 
 > 上表是默认键位；前缀键与每个动作的按键都可以在 `termux.ini` 的 `[keys]` 段里改，见下文。
@@ -106,6 +106,7 @@ scrollback = 10000         # 每个 pane 的滚动历史行数 (200 - 500000)
 mouse = true               # 关掉后标签点击 / 拖选 / 滚轮全部停用
 copy_on_select = true      # 鼠标拖选松开时自动复制到剪贴板
 confirm_on_exit = false    # 退出 termux 前弹出 Y/N 二次确认
+confirm_on_close = false   # 关闭窗格 / 标签前弹出 Y/N 二次确认
 search_case_sensitive = false  # 历史搜索是否锁定大小写（false = 忽略大小写）
 default_startup = 0        # 0 = 启动进终端，1 = 启动显示帮助
 
@@ -175,7 +176,7 @@ default_startup = 0        # 0 = 启动进终端，1 = 启动显示帮助
 | 菜单项 `[1]`-`[9]` | 单个条目的名称 / 命令行 / 启动目录 | `Tab` 切换输入框，`Enter` 保存 |
 | **外观 / 主题** | 上下选择内置主题，`Enter`/点击**立即应用并写盘**；下方 16 个语义色带色块与十六进制值，`Enter` 进入编辑（6 位 hex），`R` 复位当前项，`Ctrl+R` 清除全部自定义 | 启动页按 `F2` |
 | **键位设置** | 第一行是前缀键，下面是全部 17 个动作；`Enter` 或点击 `[改]` 进入**按键录制**（直接按你想要的组合键即可），`R` 或 `[复位]` 恢复默认，`Ctrl+R` 全部复位 | 启动页按 `F3` / `K` |
-| **行为开关** | `mouse` / `copy_on_select` / `confirm_on_exit` 三个开关，`scrollback` 用 `←/→` 或 `[-] [+]` 按 1000 步进调整 | 启动页按 `F4` / `B` |
+| **行为开关** | `mouse` / `copy_on_select` / `confirm_on_exit` / `confirm_on_close` 四个开关，`scrollback` 用 `←/→` 或 `[-] [+]` 按 1000 步进调整 | 启动页按 `F4` / `B` |
 
 侧栏用鼠标点，或在任意分类页按 `Ctrl+↑ / Ctrl+↓` 依次切换；`Esc` 从分类页返回启动页。
 自定义过的语义色行尾会带 `*`，自定义过的键位 `[复位]` 按钮会变红。
