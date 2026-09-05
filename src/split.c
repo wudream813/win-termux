@@ -407,6 +407,26 @@ int split_is_split(void) {
     return root >= 0 && split_count_leaves(root) >= 2;
 }
 
+int split_tab_panes(int anchor, int *out, int max) {
+    if (!out || max <= 0) return 0;
+    int root = split_root_for_tab(anchor);
+    if (root < 0) {
+        /* 锚点没有分屏树（关于/设置页等）：单独成一段。 */
+        out[0] = anchor;
+        return 1;
+    }
+    int leaves[MAX_PANES];
+    int n = collect_leaves(g_split_nodes, root, leaves, MAX_PANES, 0);
+    int cnt = 0;
+    for (int i = 0; i < n && cnt < max; i++) {
+        int p = leaves[i];
+        if (p >= 0 && p < g_mux.pane_count && g_mux.panes[p].active)
+            out[cnt++] = p;
+    }
+    if (cnt == 0) { out[0] = anchor; return 1; }
+    return cnt;
+}
+
 int split_split_active(int dir, int new_pane) {
     if (new_pane < 0 || new_pane >= g_mux.pane_count) return 0;
     int root = split_active_root();

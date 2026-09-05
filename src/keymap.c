@@ -411,8 +411,13 @@ int keymap_set_action_prefix(int action, int use_prefix) {
 static void spec_text(const KeySpec *s, char *out, int out_size) {
     char keyname[24];
     if (s->ch) {
-        if (s->ch < 128) snprintf(keyname, sizeof(keyname), "%c", (char)s->ch);
-        else snprintf(keyname, sizeof(keyname), "%s", "键");
+        /* Tab 等控制字符必须用字面名（"Tab"），直接 %c 会输出原始控制符 0x09，
+         * 命令面板按 utf8 宽度补 pad 时错位，表现为「切换窗格右侧多一个空格」。 */
+        if (s->ch == '\t')                 snprintf(keyname, sizeof(keyname), "%s", "Tab");
+        else if (s->ch == ' ')             snprintf(keyname, sizeof(keyname), "%s", "Space");
+        else if (s->ch == '\r' || s->ch == '\n') snprintf(keyname, sizeof(keyname), "%s", "Enter");
+        else if (s->ch < 128)              snprintf(keyname, sizeof(keyname), "%c", (char)s->ch);
+        else                               snprintf(keyname, sizeof(keyname), "%s", "键");
     } else if (s->vk >= VK_F1 && s->vk <= VK_F24) {
         snprintf(keyname, sizeof(keyname), "F%d", s->vk - VK_F1 + 1);
     } else if ((s->vk >= 'A' && s->vk <= 'Z') || (s->vk >= '0' && s->vk <= '9')) {

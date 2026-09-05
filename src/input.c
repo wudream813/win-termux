@@ -2700,6 +2700,43 @@ static void dismiss_overlays(void) {
     g_mux.palette_mode = 0;
 }
 
+/* 立即关闭指定 pane（标签栏 × / 中键调用，不经二次确认弹窗——点 × 本身就是确认）。
+ * 与 do_close_current_pane() 同一套顺序：先从分屏树摘除（若有 >=2 叶子），
+ * 再 close_pane()（读线程退出时 pane_mark_dead 会发现叶子已不在树里，安全幂等）。
+ * 关闭非活动窗格时焦点不动；关活动窗格时由存活兄弟 / 下一标签接管。 */
+static void close_pane_target(int target) {
+    if (target < 0 || target >= g_mux.pane_count || !g_mux.panes[target].active) return;
+    int was_active = (target == g_mux.active_pane);
+    int survivor = -1;
+    /* split_remove_pane 只在「该 pane 所在树有 >=2 叶子」时摘除，返回 1。 */
+    int in_split = split_remove_pane(target, &survivor);
+    if (in_split) {
+        if (was_active) {
+            g_split_zoom = 0;
+            if (survivor >= 0) g_mux.active_pane = survivor;
+            close_pane(target);
+            if (survivor >= 0 && g_mux.panes[survivor].active) switch_pane(survivor);
+        } else {
+            close_pane(target);
+        }
+        g_mux.needs_redraw = 1;
+        return;
+    }
+    /* 单窗格 / 独立标签：关闭整个标签页（复用原 CLOSE_PANE 焦点接管逻辑）。 */
+    int n = was_active ? find_next_active_pane(target) : -1;
+    close_pane(target);
+    if (was_active) {
+        if (n >= 0 && g_mux.panes[n].active) switch_pane(n);
+        else {
+            int f = 0;
+            for (int k = 0; k < g_mux.pane_count; k++)
+                if (g_mux.panes[k].active) { switch_pane(k); f = 1; break; }
+            if (!f) g_mux.running = 0;
+        }
+    }
+    g_mux.needs_redraw = 1;
+}
+
 void action_execute(int action, int arg, DWORD ctrl) {
     switch (action) {
         case ACT_SEND_PREFIX: {
@@ -3699,21 +3736,8 @@ void handle_mouse(MOUSE_EVENT_RECORD *me) {
                 if (mx < t->start_col || mx >= t->end_col) continue;
 
                 if (mbtn == 1 && t->pane_idx >= 0) {
-                    int ci = t->pane_idx;
-                    int was_active = (ci == g_mux.active_pane);
-                    close_pane(ci);
-                    if (was_active) {
-                        int n = find_next_active_pane(ci);
-                        if (n >= 0) { g_mux.active_pane = n; g_mux.panes[n].scroll_offset = 0; }
-                        else {
-                            int f = -1;
-                            for (int k = 0; k < g_mux.pane_count; k++) if (g_mux.panes[k].active) { f = k; break; }
-                            g_mux.active_pane = f;
-                            if (f < 0) { g_mux.running = 0; return; }
-                            g_mux.panes[f].scroll_offset = 0;
-                        }
-                    }
-                    g_mux.needs_redraw = 1;
+                    /* 中键关闭：分屏标签段只关该窗格，普通标签关整个标签。 */
+                    close_pane_target(t->pane_idx);
                     return;
                 }
                 if (t->pane_idx == -2) {
@@ -3758,21 +3782,9 @@ void handle_mouse(MOUSE_EVENT_RECORD *me) {
                 if (mbtn != 0) return;
                 if (!g_mux.panes[t->pane_idx].active) continue;
                 if (mx >= t->close_start && mx < t->close_end) {
-                    int ci = t->pane_idx;
-                    int was_active = (ci == g_mux.active_pane);
-                    close_pane(ci);
-                    if (was_active) {
-                        int n = find_next_active_pane(ci);
-                        if (n >= 0) { g_mux.active_pane = n; g_mux.panes[n].scroll_offset = 0; }
-                        else {
-                            int f = -1;
-                            for (int k = 0; k < g_mux.pane_count; k++) if (g_mux.panes[k].active) { f = k; break; }
-                            g_mux.active_pane = f;
-                            if (f < 0) { g_mux.running = 0; return; }
-                            g_mux.panes[f].scroll_offset = 0;
-                        }
-                    }
-                    g_mux.needs_redraw = 1;
+                    /* 左键 ×：分屏标签段只关该窗格（树收缩、兄弟接管焦点），
+                     * 普通标签关整个标签页。 */
+                    close_pane_target(t->pane_idx);
                     return;
                 }
                 g_mux.help_mode = 0;

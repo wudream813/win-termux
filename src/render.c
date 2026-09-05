@@ -85,42 +85,54 @@ void draw_tab_bar(char *out, int bs, int *posp) {
             g_mux.tab_count++;
         }
     }
-    for (int i = 0; i < g_mux.pane_count; i++) {
-        if (!g_mux.panes[i].active) continue;
-        /* 分屏子窗格（is_split_child）不单独占一个标签页；关于/设置页也不进标签栏。 */
-        if (g_mux.panes[i].is_split_child) continue;
-        char nm[64]; format_tab_title(nm, sizeof(nm), g_mux.panes[i].title[0] ? g_mux.panes[i].title : "cmd");
-        char head[80];
-        int hl = snprintf(head, sizeof(head), "[%s", nm);
-        int hc = utf8_cols(head, hl);
-        int lc = hc + 1;
-        if (col + lc + 4 + 4 > g_mux.host_cols) break;
-        int hovering = (!popup_open && g_mouse_y == 0 &&
-                        g_mouse_x >= col + hc && g_mouse_x < col + lc);
-        g_mux.tab_info[g_mux.tab_count].start_col = col;
-        g_mux.tab_info[g_mux.tab_count].pane_idx = i;
-        int act = (i == g_mux.active_pane);
-        int ci = g_mux.panes[i].color;
-        if (ci < 0 || ci > 8) ci = 0;
-        const char *actbg = TAB_COLOR_BG[ci];
-        const char *dimbg = TAB_COLOR_BG_DIM[ci];
-        if (act)
-            pos += snprintf(out + pos, bs - pos, "%s" TAB_ACT_FG "\x1b[1m%s\x1b[22m", actbg, head);
-        else
-            pos += snprintf(out + pos, bs - pos, "%s\x1b[038;2;139;148;158m%s", dimbg, head);
-        if (hovering)
-            pos += snprintf(out + pos, bs - pos, X_RED_BG "\x1b[038;2;255;255;255m\xc3\x97");
-        else
-            pos += snprintf(out + pos, bs - pos, X_RED "\xc3\x97");
-        if (act)
-            pos += snprintf(out + pos, bs - pos, "%s" TAB_ACT_FG "]", actbg);
-        else
-            pos += snprintf(out + pos, bs - pos, "%s\x1b[038;2;139;148;158m]", dimbg);
-        g_mux.tab_info[g_mux.tab_count].close_start = col + hc;
-        g_mux.tab_info[g_mux.tab_count].close_end = col + hc + 1;
-        col += lc + 1;
-        g_mux.tab_info[g_mux.tab_count].end_col = col;
-        g_mux.tab_count++;
+    /* 标签按「标签页锚点」枚举：一个分屏标签的所有窗格（含 is_split_child）都
+     * 画成连排的 [pane×] 段（[cmd×][cmd×]…），可直接点段切换窗格。关于/设置页
+     * （is_about/is_settings）不进标签栏。 */
+    for (int anchor = 0; anchor < g_mux.pane_count; anchor++) {
+        if (!g_mux.panes[anchor].active) continue;
+        if (g_mux.panes[anchor].is_split_child) continue;   /* 子窗格由其锚点统一枚举 */
+        if (g_mux.panes[anchor].is_about || g_mux.panes[anchor].is_settings) continue;
+        int group[MAX_PANES];
+        int gn = split_tab_panes(anchor, group, MAX_PANES);
+        if (gn <= 0) continue;
+        int tab_full = 0;
+        for (int gi = 0; gi < gn; gi++) {
+            int i = group[gi];
+            if (i < 0 || i >= g_mux.pane_count || !g_mux.panes[i].active) continue;
+            char nm[64]; format_tab_title(nm, sizeof(nm), g_mux.panes[i].title[0] ? g_mux.panes[i].title : "cmd");
+            char head[80];
+            int hl = snprintf(head, sizeof(head), "[%s", nm);
+            int hc = utf8_cols(head, hl);
+            int lc = hc + 1;
+            if (col + lc + 4 + 4 > g_mux.host_cols) { col = g_mux.host_cols; tab_full = 1; break; }
+            int hovering = (!popup_open && g_mouse_y == 0 &&
+                            g_mouse_x >= col + hc && g_mouse_x < col + lc);
+            g_mux.tab_info[g_mux.tab_count].start_col = col;
+            g_mux.tab_info[g_mux.tab_count].pane_idx = i;
+            int act = (i == g_mux.active_pane);
+            int ci = g_mux.panes[anchor].color;   /* 整组沿用锚点（标签）颜色 */
+            if (ci < 0 || ci > 8) ci = 0;
+            const char *actbg = TAB_COLOR_BG[ci];
+            const char *dimbg = TAB_COLOR_BG_DIM[ci];
+            if (act)
+                pos += snprintf(out + pos, bs - pos, "%s" TAB_ACT_FG "\x1b[1m%s\x1b[22m", actbg, head);
+            else
+                pos += snprintf(out + pos, bs - pos, "%s\x1b[038;2;139;148;158m%s", dimbg, head);
+            if (hovering)
+                pos += snprintf(out + pos, bs - pos, X_RED_BG "\x1b[038;2;255;255;255m\xc3\x97");
+            else
+                pos += snprintf(out + pos, bs - pos, X_RED "\xc3\x97");
+            if (act)
+                pos += snprintf(out + pos, bs - pos, "%s" TAB_ACT_FG "]", actbg);
+            else
+                pos += snprintf(out + pos, bs - pos, "%s\x1b[038;2;139;148;158m]", dimbg);
+            g_mux.tab_info[g_mux.tab_count].close_start = col + hc;
+            g_mux.tab_info[g_mux.tab_count].close_end = col + hc + 1;
+            col += lc + 1;
+            g_mux.tab_info[g_mux.tab_count].end_col = col;
+            g_mux.tab_count++;
+        }
+        if (tab_full) break;   /* 标签栏宽度用尽：后续锚点整体不再绘制 */
     }
     if (col < g_mux.host_cols - 4) { pos += snprintf(out + pos, bs - pos, TB_BG " "); col++; }
     if (col + 3 <= g_mux.host_cols - 4) {

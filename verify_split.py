@@ -128,6 +128,26 @@ int main(void) {
     g_mux.panes[12].is_split_child = 1;
     ck("锚点树叶子数=3", split_count_leaves(split_root_for_tab(anchor)) == 3);
 
+    /* v1.8.38：标签栏据 split_tab_panes 把一个分屏标签画成连排 [pane×] 段，
+     * 返回视觉左->右/上->下次序的存活 pane；无树时只返回锚点自己。 */
+    {
+        int out[16], gn;
+        gn = split_tab_panes(anchor, out, 16);
+        ck("tab_panes 3 窗格返回 3", gn == 3);
+        ck("tab_panes 视觉次序 10,11,12", gn == 3 && out[0] == 10 && out[1] == 11 && out[2] == 12);
+        /* 关掉 12 后（置 active=0 模拟已死）枚举只剩存活窗格。 */
+        g_mux.panes[12].active = 0;
+        gn = split_tab_panes(anchor, out, 16);
+        ck("tab_panes 死掉的 12 被过滤", gn == 2 && out[0] == 10 && out[1] == 11);
+        g_mux.panes[12].active = 1;
+        /* max 截断。 */
+        gn = split_tab_panes(anchor, out, 2);
+        ck("tab_panes 受 max 截断", gn == 2 && out[0] == 10 && out[1] == 11);
+        /* 无分屏树的 pane：单独返回它自己。 */
+        gn = split_tab_panes(7, out, 16);
+        ck("tab_panes 无树只返回锚点", gn == 1 && out[0] == 7);
+    }
+
     /* 关掉一个非锚点子窗格(12)：树收缩为 2 叶子，锚点仍是 10。 */
     int surv12 = -1;
     ck("remove 子窗格12 返回1", split_remove_pane(12, &surv12) == 1);

@@ -458,6 +458,44 @@ int screen_resize(ScreenBuffer *s, int nc, int nr) {
     s->cols = nc;
     s->rows = nr;
     s->total_lines = nt;
+    /* 尺寸扩大（拖分屏条 / 拉大窗口）时，新扩出的列默认是「无真彩、纯黑底」空白，
+     * 而窗格内 shell 已绘制区域是 ConPTY 的真彩色背景（深色但非纯黑），两者交界会
+     * 显出一条颜色不同的带（拖条时「右侧多一块背景」）。标准终端 resize 会把旧行
+     * 右缘的背景向右延展，因此这里把每行已迁移部分最右格的属性/前景/背景真彩复制
+     * 给新增列（字符保持空格），新增行没有可继承的旧格则维持默认。 */
+    if (nc > cc) {
+        for (int idx = 0; idx < nt; idx++) {
+            ScreenLine *ln = &nl[idx];
+            if (!ln->cells || cc < 1) continue;
+            int src = cc - 1;
+            for (int x = cc; x < nc; x++) {
+                ln->cells[x].Char.UnicodeChar = L' ';
+                ln->cells[x].Attributes = ln->cells[src].Attributes;
+                if (ln->fg_rgb) ln->fg_rgb[x] = ln->fg_rgb[src];
+                if (ln->bg_rgb) ln->bg_rgb[x] = ln->bg_rgb[src];
+                if (ln->rgb_valid) ln->rgb_valid[x] = ln->rgb_valid[src];
+            }
+        }
+    }
+    if (nr > cr) {
+        /* 新增的可见行：用旧最底可见行的属性延展，避免底边纯黑带。 */
+        int src_row = -1;
+        if (cr >= 1) src_row = nst + (cr - 1);
+        for (int y = cr; y < nr; y++) {
+            int idx = (nst + y) % nt;
+            ScreenLine *ln = &nl[idx];
+            if (!ln->cells) continue;
+            ScreenLine *sl = (src_row >= 0 && nl[src_row].cells) ? &nl[src_row] : NULL;
+            for (int x = 0; x < nc; x++) {
+                ln->cells[x].Char.UnicodeChar = L' ';
+                ln->cells[x].Attributes = sl ? sl->cells[x < cc ? x : cc - 1].Attributes
+                                             : (s->current_attr ? s->current_attr : 0x07);
+                if (sl && sl->fg_rgb) ln->fg_rgb[x] = sl->fg_rgb[x < cc ? x : cc - 1];
+                if (sl && sl->bg_rgb) ln->bg_rgb[x] = sl->bg_rgb[x < cc ? x : cc - 1];
+                if (sl && sl->rgb_valid) ln->rgb_valid[x] = sl->rgb_valid[x < cc ? x : cc - 1];
+            }
+        }
+    }
     s->scroll_top = nst;
     s->hist_lines = old_hist;
     if (s->alt_hist_lines > nt - nr) s->alt_hist_lines = nt - nr;

@@ -267,6 +267,18 @@ static void test_keymap_describe(void) {
     keymap_describe(ACT_TAB_COLOR_PREV, buf, sizeof(buf));
     check_str(buf, "Ctrl+B Shift+T", "Shift 组合的描述");
 
+    /* v1.8.38：Tab/Space/Enter 等控制字符必须输出字面键名，不能把原始 0x09
+     * 控制符塞进描述串（命令面板按 utf8 宽度补 pad 会错位，右侧多一个空格）。 */
+    keymap_describe(ACT_SPLIT_NEXT, buf, sizeof(buf));
+    check_str(buf, "Ctrl+B Tab", "split-next(\\t) 描述为字面 Tab");
+    {
+        int has_ht = 0;
+        for (size_t bi = 0; bi < strlen(buf); bi++) if ((unsigned char)buf[bi] == 0x09) has_ht = 1;
+        check(!has_ht, "split-next 描述串不含原始 HT(0x09) 控制符");
+    }
+    keymap_describe(ACT_SPLIT_PREV, buf, sizeof(buf));
+    check_str(buf, "Ctrl+B Shift+tab", "split-prev(Shift+Tab) 描述");
+
     keymap_describe(ACT_SEND_PREFIX, buf, sizeof(buf));
     check_str(buf, "Ctrl+B Ctrl+B", "未绑定时 send-prefix 显示为连按两次前缀");
     keymap_bind("send-prefix", "q");

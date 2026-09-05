@@ -80,6 +80,10 @@ int  split_close_active_pane(int *survivor);
 int  split_active_root(void);
 /* 当前活动 tab 是否真正分了屏（叶子数 >= 2）。 */
 int  split_is_split(void);
+/* 枚举某标签页（锚点 pane）分屏树里所有存活 pane，按视觉左->右/上->下次序填入
+ * out（最多 max 个），返回数量。无分屏树时仅返回锚点自己。标签栏据此把一个分屏
+ * 标签画成连排的多个 [pane] 段，可直接点标签切换窗格。 */
+int  split_tab_panes(int anchor, int *out, int max);
 /* 统一的「某 pane 即将关闭」处理：若它在某棵多叶子分屏树里，就把它的叶子从树中
  * 摘除、树收缩；若关掉的恰好是该 tab 的锚点 pane，则把存活的兄弟提升为新锚点
  * （清掉 is_split_child，保证标签页不丢）。*survivor 回填一个存活兄弟（用于接管
