@@ -6,6 +6,18 @@
 /* 分屏：当前窗格全屏缩放（zoom）中。render.c 读取以只画活动窗格。 */
 int g_split_zoom = 0;
 
+/* 命令面板分屏项 -> 键位动作（命令面板与快捷键复用同一 action_execute 路径）。 */
+static int PALETTE_TO_SPLIT_ACT(int a) {
+    switch (a) {
+        case PALETTE_ACTION_SPLIT_VERTICAL:   return ACT_SPLIT_VERTICAL;
+        case PALETTE_ACTION_SPLIT_HORIZONTAL: return ACT_SPLIT_HORIZONTAL;
+        case PALETTE_ACTION_SPLIT_NEXT:       return ACT_SPLIT_NEXT;
+        case PALETTE_ACTION_SPLIT_CLOSE:      return ACT_SPLIT_CLOSE;
+        case PALETTE_ACTION_SPLIT_ZOOM:       return ACT_SPLIT_ZOOM;
+        default: return ACT_NONE;
+    }
+}
+
 /* 分屏边框拖拽状态：drag_dir='V' 拖竖线(左右调宽) / 'H' 拖横线(上下调高)。 */
 static int g_split_drag_pane = -1;   /* 拖拽时作为「a 侧」锚点的 pane */
 static char g_split_drag_dir = 0;    /* 'V' / 'H' / 0 */
@@ -575,6 +587,16 @@ void execute_palette_command(int item_index) {
         case PALETTE_ACTION_COPY_MODE:
             palette_open_copy_mode();
             break;
+        case PALETTE_ACTION_SPLIT_VERTICAL:
+        case PALETTE_ACTION_SPLIT_HORIZONTAL:
+        case PALETTE_ACTION_SPLIT_NEXT:
+        case PALETTE_ACTION_SPLIT_CLOSE:
+        case PALETTE_ACTION_SPLIT_ZOOM: {
+            int act = PALETTE_TO_SPLIT_ACT(item.action);
+            palette_close();
+            action_execute(act, 0, 0);
+            break;
+        }
         case PALETTE_ACTION_RELOAD:
             palette_close();
             load_config();

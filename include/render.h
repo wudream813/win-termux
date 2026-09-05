@@ -91,7 +91,12 @@ typedef enum {
     PALETTE_ACTION_NEXT_THEME,
     PALETTE_ACTION_OPEN_APPEARANCE,
     PALETTE_ACTION_OPEN_KEYS,
-    PALETTE_ACTION_OPEN_BEHAVIOR
+    PALETTE_ACTION_OPEN_BEHAVIOR,
+    PALETTE_ACTION_SPLIT_VERTICAL,    /* 分屏：左右切分 */
+    PALETTE_ACTION_SPLIT_HORIZONTAL,  /* 分屏：上下切分 */
+    PALETTE_ACTION_SPLIT_NEXT,        /* 分屏：切换到下一个窗格 */
+    PALETTE_ACTION_SPLIT_CLOSE,       /* 分屏：关闭当前窗格 */
+    PALETTE_ACTION_SPLIT_ZOOM         /* 分屏：当前窗格全屏缩放 / 还原 */
 } PaletteAction;
 
 typedef struct {
