@@ -89,9 +89,9 @@ void draw_tab_bar(char *out, int bs, int *posp) {
             g_mux.tab_count++;
         }
     }
-    /* 标签按「标签页锚点」枚举。单窗格标签画成 [cmd×]；分屏标签把同组所有窗格
-     * （含 is_split_child）包在一对外层方括号里，窗格各成一个 nm× 段，形如
-     * [[cmd×][cmd×]]，点段切窗格、点 × 关该窗格。关于/设置页不进标签栏。 */
+    /* 标签按「标签页锚点」枚举。单窗格标签画成 [cmd ×]；分屏标签把同组所有窗格
+     * （含 is_split_child）包在【一对】外层方括号里，窗格段之间用空格分隔，形如
+     * [cmd× cmd×]，点段切窗格、点 × 关该窗格。关于/设置页不进标签栏。 */
     for (int anchor = 0; anchor < g_mux.pane_count; anchor++) {
         if (!g_mux.panes[anchor].active) continue;
         if (g_mux.panes[anchor].is_split_child) continue;   /* 子窗格由其锚点统一枚举 */
@@ -99,60 +99,52 @@ void draw_tab_bar(char *out, int bs, int *posp) {
         int group[MAX_PANES];
         int gn = split_tab_panes(anchor, group, MAX_PANES);
         if (gn <= 0) continue;
-        int multi = (gn >= 2);
         int ci = g_mux.panes[anchor].color;   /* 整组沿用锚点（标签）颜色 */
         if (ci < 0 || ci > 8) ci = 0;
         const char *actbg = TAB_COLOR_BG[ci];
         const char *dimbg = TAB_COLOR_BG_DIM[ci];
-        /* 先预算整组宽度：单窗格 = [nm ×]；分屏 = [ + Σ(nm ×) + ]。
-         * 每段 = 标题 nm + 标题与 × 之间 1 空格 + ×。 */
-        int gw = multi ? 2 : 0;   /* 外层 [ 和 ] */
-        for (int gi = 0; gi < gn; gi++) {
-            int i = group[gi];
-            if (i < 0 || i >= g_mux.pane_count || !g_mux.panes[i].active) continue;
-            char nm[64]; format_tab_title(nm, sizeof(nm), g_mux.panes[i].title[0] ? g_mux.panes[i].title : "cmd");
-            int w = utf8_cols(nm, (int)strlen(nm)) + 2;   /* nm + 空格 + × */
-            gw += multi ? w : (w + 2);                    /* 单窗格再加自己的 [ ] */
-        }
-        if (col + gw + 4 + 4 > g_mux.host_cols) { col = g_mux.host_cols; break; }
-        /* 收集本组存活窗格（段循环里要用首/尾窗格登记外括号）。 */
+        /* 收集本组存活窗格。 */
         int alive[MAX_PANES], an = 0;
         for (int gi = 0; gi < gn; gi++) {
             int i = group[gi];
             if (i >= 0 && i < g_mux.pane_count && g_mux.panes[i].active) alive[an++] = i;
         }
         if (an < 1) continue;
-        int group_start = col;
-        if (multi) {
-            /* 外层左括号：组底色 + 暗灰字；登记为可点段（切到组内第一个窗格），
-             * × 热区置为不可命中（点外括号只切窗格、绝不关闭）。 */
-            pos += snprintf(out + pos, bs - pos, "%s\x1b[038;2;139;148;158m[", dimbg);
-            g_mux.tab_info[g_mux.tab_count].start_col = col;
-            g_mux.tab_info[g_mux.tab_count].end_col = col + 1;
-            g_mux.tab_info[g_mux.tab_count].pane_idx = alive[0];
-            g_mux.tab_info[g_mux.tab_count].close_start = 0;
-            g_mux.tab_info[g_mux.tab_count].close_end = 0;
-            g_mux.tab_count++;
-            col++;
+        int multi = (an >= 2);
+        /* 宽度预算：单窗格 = '[' + nm + ' ×]'（nm宽 + 3）；
+         * 分屏 = '[' + Σ(nm宽+1 含×) + (an-1 个段间空格) + ']'。 */
+        int gw = 0;
+        for (int gi = 0; gi < an; gi++) {
+            int i = alive[gi];
+            char nm[64]; format_tab_title(nm, sizeof(nm), g_mux.panes[i].title[0] ? g_mux.panes[i].title : "cmd");
+            int w = utf8_cols(nm, (int)strlen(nm)) + 1;   /* nm + × */
+            gw += w + (multi && gi + 1 < an ? 1 : 0);     /* 段间空格 */
         }
+        gw += multi ? 2 : 3;   /* 分屏: [ ]；单窗格: [ + 标题与×间空格 + ] = 3 */
+        if (col + gw + 4 + 4 > g_mux.host_cols) { col = g_mux.host_cols; break; }
+
+        /* 左括号（单/分屏都有）。 */
+        pos += snprintf(out + pos, bs - pos, "%s\x1b[038;2;139;148;158m[", dimbg);
+        int group_start = col;
+        col++;
         for (int gi = 0; gi < an; gi++) {
             int i = alive[gi];
             char nm[64]; format_tab_title(nm, sizeof(nm), g_mux.panes[i].title[0] ? g_mux.panes[i].title : "cmd");
             int nmc = utf8_cols(nm, (int)strlen(nm));
             int act = (i == g_mux.active_pane);
-            /* 段背景：活动段亮（白字加粗），非活动段组暗色（灰字）。 */
+            int first = (gi == 0), last = (gi == an - 1);
             if (act)
                 pos += snprintf(out + pos, bs - pos, "%s" TAB_ACT_FG "\x1b[1m", actbg);
             else
                 pos += snprintf(out + pos, bs - pos, "%s\x1b[038;2;139;148;158m", dimbg);
-            g_mux.tab_info[g_mux.tab_count].start_col = col;
-            if (!multi) { pos += snprintf(out + pos, bs - pos, "["); col++; }
+            /* 段起点：首段含左括号列（点击左括号=切到该窗格），其余段从标题起。 */
+            g_mux.tab_info[g_mux.tab_count].start_col = first ? group_start : col;
             pos += snprintf(out + pos, bs - pos, "%s", nm);
             col += nmc;
-            /* 标题与 × 之间留 1 个空格（[cmd ×]）。 */
-            pos += snprintf(out + pos, bs - pos, " ");
-            col++;
-            /* × 热区：空格后的一格。 */
+            /* 单窗格：标题与 × 之间留 1 空格（[cmd ×]）；分屏：段间用空格分隔
+             * （[cmd× cmd×]），段内标题与 × 之间不留空格。 */
+            if (!multi) { pos += snprintf(out + pos, bs - pos, " "); col++; }
+            /* × 热区：紧跟的一格。 */
             int hovering = (!popup_open && g_mouse_y == 0 && g_mouse_x == col);
             if (hovering)
                 pos += snprintf(out + pos, bs - pos, X_RED_BG "\x1b[038;2;255;255;255m\xc3\x97");
@@ -162,24 +154,23 @@ void draw_tab_bar(char *out, int bs, int *posp) {
             g_mux.tab_info[g_mux.tab_count].close_start = col;
             g_mux.tab_info[g_mux.tab_count].close_end = col + 1;
             col++;
-            pos += snprintf(out + pos, bs - pos, "%s", act ? (TAB_ACT_FG) : ("\x1b[038;2;139;148;158m"));
-            if (!multi) { pos += snprintf(out + pos, bs - pos, "]"); col++; }
-            g_mux.tab_info[g_mux.tab_count].end_col = col;
+            /* 段间空格（分屏且不是最后一段）：底色延续，点击归到下一段——该空格列
+             * 不算进本段 end_col，下段 start_col 会落在空格列上。 */
+            if (multi && !last) {
+                pos += snprintf(out + pos, bs - pos, "%s ", dimbg);
+                col++;
+                g_mux.tab_info[g_mux.tab_count].end_col = col - 1;  /* 本段止于 ×，空格归下段 */
+            } else {
+                g_mux.tab_info[g_mux.tab_count].end_col = col;      /* 末段止于 ×（右括号随后并入） */
+            }
             g_mux.tab_count++;
         }
-        if (multi) {
-            /* 外层右括号：组底色 + 暗灰字；登记为可点段（切到组内最后一个窗格）。 */
-            pos += snprintf(out + pos, bs - pos, "%s\x1b[038;2;139;148;158m]", dimbg);
-            g_mux.tab_info[g_mux.tab_count].start_col = col;
-            g_mux.tab_info[g_mux.tab_count].end_col = col + 1;
-            g_mux.tab_info[g_mux.tab_count].pane_idx = alive[an - 1];
-            g_mux.tab_info[g_mux.tab_count].close_start = 0;
-            g_mux.tab_info[g_mux.tab_count].close_end = 0;
-            g_mux.tab_count++;
-            col++;
-        }
-        (void)group_start;
+        /* 右括号：并入最后一段（点右括号=切到最后一个窗格）。 */
+        pos += snprintf(out + pos, bs - pos, "%s\x1b[038;2;139;148;158m]", dimbg);
+        col++;
+        g_mux.tab_info[g_mux.tab_count - 1].end_col = col;
     }
+            g_mux.tab_info[g_mux.tab_count].close_start = 0;
     if (col < g_mux.host_cols - 4) { pos += snprintf(out + pos, bs - pos, TB_BG " "); col++; }
     if (col + 3 <= g_mux.host_cols - 4) {
         g_mux.tab_info[g_mux.tab_count].start_col = col;
@@ -2485,20 +2476,25 @@ static void render_split_pane(char *out, int bs, int *posp, int leaf, PaneRect *
             if (my_row >= sb_top && my_row < sb_bot) mouse_on_thumb = 1;
             if (g_sb_dragging) mouse_on_thumb = 1;
         }
-        for (int py = 0; py < rows && pos < bs - 64; py++) {
-            int term_col = rc->c0 + cols;           /* 右缘列，1 基 */
-            int term_row = rc->r0 + py + 2;
-            int in_thumb = (py >= sb_top && py < sb_bot);
-            if (in_thumb) {
-                if (mouse_on_thumb)
-                    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[0;048;2;225;235;250m \x1b[0m", term_row, term_col);
-                else
-                    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[0;48;2;%d;%d;%dm \x1b[0m", term_row, term_col,
-                                    g_sb_grad[gi].thumb_r, g_sb_grad[gi].thumb_g, g_sb_grad[gi].thumb_b);
-            } else if (is_hover) {
-                pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[0;48;2;%d;%d;%dm\x1b[38;2;%d;%d;%dm│\x1b[0m", term_row, term_col,
-                                g_sb_grad[gi].track_bg_r, g_sb_grad[gi].track_bg_g, g_sb_grad[gi].track_bg_b,
-                                g_sb_grad[gi].track_fg_r, g_sb_grad[gi].track_fg_g, g_sb_grad[gi].track_fg_b);
+        /* 与整屏路径一致：只有鼠标悬停到该窗格右缘（或正在拖滚动条）才绘制滚动条；
+         * 否则整列什么都不画，滚动条「消失」（不常驻）。无历史（hist<=0）时 track
+         * 与 thumb 都没有意义，同样不画。 */
+        if (is_hover && s->hist_lines > 0) {
+            for (int py = 0; py < rows && pos < bs - 64; py++) {
+                int term_col = rc->c0 + cols;           /* 右缘列，1 基 */
+                int term_row = rc->r0 + py + 2;
+                int in_thumb = (py >= sb_top && py < sb_bot);
+                if (in_thumb) {
+                    if (mouse_on_thumb)
+                        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[0;048;2;225;235;250m \x1b[0m", term_row, term_col);
+                    else
+                        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[0;48;2;%d;%d;%dm \x1b[0m", term_row, term_col,
+                                        g_sb_grad[gi].thumb_r, g_sb_grad[gi].thumb_g, g_sb_grad[gi].thumb_b);
+                } else {
+                    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[0;48;2;%d;%d;%dm\x1b[38;2;%d;%d;%dm│\x1b[0m", term_row, term_col,
+                                    g_sb_grad[gi].track_bg_r, g_sb_grad[gi].track_bg_g, g_sb_grad[gi].track_bg_b,
+                                    g_sb_grad[gi].track_fg_r, g_sb_grad[gi].track_fg_g, g_sb_grad[gi].track_fg_b);
+                }
             }
         }
     }

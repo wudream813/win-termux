@@ -411,28 +411,69 @@ int screen_resize(ScreenBuffer *s, int nc, int nr) {
     if (old_hist > old_cap) old_hist = old_cap;
     if (old_hist > nt - nr) old_hist = nt - nr;
 
-    // Migrate history lines that were allocated
-    for (int h = 1; h <= old_hist; h++) {
-        int old_r = screen_phys_row(s, -h);
-        int new_r = (nst - h % nt + nt) % nt;
-        if (old_r >= 0 && old_r < s->total_lines && s->lines && s->lines[old_r].cells) {
-            if (line_alloc(&nl[new_r], nc, s->current_attr ? s->current_attr : 0x07))
-                line_copy(&nl[new_r], &s->lines[old_r], cc);
-        }
-    }
+    /* ---- 行迁移（顶部对齐 + 高度变化时历史/可见互转）----
+     * 可见区始终顶部对齐：新可见行 y 取旧可见行 y（y<cr 时两者都在）。
+     *  - 高度缩小（nr<rows）：旧可见区底部被裁的行（旧 rel cr..rows-1）不是丢弃，
+     *    而是「滚入」历史，排在旧历史之后（比旧历史更新），这样拖分屏条把窗格调矮
+     *    后再滚动能看到这些行（v1.8.42 修复：调分隔条大小后历史记录不见）。
+     *  - 高度放大（nr>rows）：多出来的可见行从历史顶部取（旧历史最新的那些提升为
+     *    可见），取不到的留空；历史相应变短。
+     * 历史缓冲排布：新历史位置 -h（-1=紧邻可见区上方=最新），自顶向下（h 从大到小）
+     * 为：[保留的旧历史行] + [缩小滚入的旧可见行]。 */
+    WORD fill_attr = s->current_attr ? s->current_attr : 0x07;
+    int newcap = nt - nr;
+    int dropped_vis = (s->rows > nr) ? (s->rows - nr) : 0;  /* 缩小：滚入历史的旧可见行数 */
+    int lifted = (nr > s->rows) ? (nr - s->rows) : 0;       /* 放大：提升为可见的历史行数 */
+    int new_hist = old_hist + dropped_vis - lifted;
+    if (new_hist > newcap) new_hist = newcap;
+    if (new_hist < 0) new_hist = 0;
 
-    // Migrate visible lines
-    for (int y = 0; y < cr; y++) {
+    /* 迁移新可见区（rel 0..nr-1）：y<cr 取旧可见 y；y>=cr（仅放大）取旧历史提升行
+     * （旧历史 -1,-2,.. 对应新可见 cr,cr+1,..），无则空白。 */
+    for (int y = 0; y < nr; y++) {
         int new_r = (nst + y) % nt;
-        int old_r = screen_phys_row(s, y);
+        int old_r = -1;
+        if (y < s->rows) {
+            old_r = screen_phys_row(s, y);                    /* 旧可见行 y（顶部对齐） */
+        } else {
+            /* 放大：旧可见占新可见 y=0..rows-1；其下方 y=rows..nr-1 接旧历史里被提升
+             * 的最新 lifted 行，按时间从上到下：y=rows 取其中最老一条（旧历史 -lifted），
+             * y 增大逐次到最新 -1（y=rows+lifted-1）。 */
+            int hk = lifted - (y - s->rows);
+            if (hk >= 1 && hk <= old_hist) old_r = screen_phys_row(s, -hk);
+        }
         if (old_r >= 0 && old_r < s->total_lines && s->lines && s->lines[old_r].cells) {
-            if (line_alloc(&nl[new_r], nc, s->current_attr ? s->current_attr : 0x07))
+            if (line_alloc(&nl[new_r], nc, fill_attr))
                 line_copy(&nl[new_r], &s->lines[old_r], cc);
         } else {
-            // Allocate blank visible line
-            line_alloc(&nl[new_r], nc, s->current_attr ? s->current_attr : 0x07);
+            line_alloc(&nl[new_r], nc, fill_attr);
         }
     }
+    /* 迁移新历史区（rel -1..-new_hist，-1 最新）。
+     *  - 放大（lifted>0）：旧历史最新 lifted 行已提升为可见，剩下的旧历史里
+     *    新历史 -1 接旧历史 -(lifted+1)、-2 接 -(lifted+2) ...（保留 older 部分）。
+     *  - 缩小（dropped_vis>0）：新历史 -1 起先是滚入的旧可见行（旧 rows-1,rows-2,...），
+     *    之后接旧历史 -1,-2,...。
+     *  - 仅宽度变化：新历史 -h 接旧历史 -h。 */
+    for (int h = 1; h <= new_hist; h++) {
+        int new_r = (nst - h % nt + nt) % nt;
+        int old_r = -1;
+        if (lifted > 0) {
+            int hk = h + lifted;                   /* 跳过已提升为可见的最新 lifted 行 */
+            if (hk <= old_hist) old_r = screen_phys_row(s, -hk);
+        } else if (h <= dropped_vis) {
+            int oy = s->rows - h;                  /* 滚入的旧可见行：-1->旧 rows-1 */
+            if (oy >= 0) old_r = screen_phys_row(s, oy);
+        } else {
+            int hk = h - dropped_vis;
+            if (hk >= 1 && hk <= old_hist) old_r = screen_phys_row(s, -hk);
+        }
+        if (old_r >= 0 && old_r < s->total_lines && s->lines && s->lines[old_r].cells) {
+            if (line_alloc(&nl[new_r], nc, fill_attr))
+                line_copy(&nl[new_r], &s->lines[old_r], cc);
+        }
+    }
+    (void)cr;
 
     // Migrate alt buffer
     /* BUG-8 (v1.8.11): 这里以前 rgb_valid 只搬了每行第 0 列（其余三个数组都搬了
@@ -477,27 +518,8 @@ int screen_resize(ScreenBuffer *s, int nc, int nr) {
             }
         }
     }
-    if (nr > cr) {
-        /* 新增的可见行：用旧最底可见行的属性延展，避免底边纯黑带。 */
-        int src_row = -1;
-        if (cr >= 1) src_row = nst + (cr - 1);
-        for (int y = cr; y < nr; y++) {
-            int idx = (nst + y) % nt;
-            ScreenLine *ln = &nl[idx];
-            if (!ln->cells) continue;
-            ScreenLine *sl = (src_row >= 0 && nl[src_row].cells) ? &nl[src_row] : NULL;
-            for (int x = 0; x < nc; x++) {
-                ln->cells[x].Char.UnicodeChar = L' ';
-                ln->cells[x].Attributes = sl ? sl->cells[x < cc ? x : cc - 1].Attributes
-                                             : (s->current_attr ? s->current_attr : 0x07);
-                if (sl && sl->fg_rgb) ln->fg_rgb[x] = sl->fg_rgb[x < cc ? x : cc - 1];
-                if (sl && sl->bg_rgb) ln->bg_rgb[x] = sl->bg_rgb[x < cc ? x : cc - 1];
-                if (sl && sl->rgb_valid) ln->rgb_valid[x] = sl->rgb_valid[x < cc ? x : cc - 1];
-            }
-        }
-    }
     s->scroll_top = nst;
-    s->hist_lines = old_hist;
+    s->hist_lines = new_hist;
     if (s->alt_hist_lines > nt - nr) s->alt_hist_lines = nt - nr;
     if (s->cursor_x >= nc) s->cursor_x = nc - 1;
     if (s->cursor_y >= nr) s->cursor_y = nr - 1;
