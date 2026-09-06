@@ -29,6 +29,7 @@ typedef enum {
     ACT_TAB_COLOR_NEXT,
     ACT_TAB_COLOR_PREV,
     ACT_SELECT_PANE,        /* arg = pane 序号 */
+    ACT_SWITCH_PANEL_PALETTE, /* 前缀 w：直接打开命令面板的「切换 panel」页 */
     ACT_NEXT_THEME,
     ACT_SPLIT_HORIZONTAL,   /* 前缀 - ：上下分屏 */
     ACT_SPLIT_VERTICAL,     /* 前缀 | ：左右分屏 */

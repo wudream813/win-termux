@@ -27,6 +27,7 @@ static const ActionInfo g_actions[] = {
     {ACT_TAB_COLOR_NEXT,  "tab-color-next",  "下一个标签颜色"},
     {ACT_TAB_COLOR_PREV,  "tab-color-prev",  "上一个标签颜色"},
     {ACT_SELECT_PANE,     "select-pane",     "按编号跳转 pane"},
+    {ACT_SWITCH_PANEL_PALETTE, "switch-panel", "打开命令面板并进入「切换 panel」"},
     {ACT_NEXT_THEME,      "next-theme",      "切换下一个主题"},
     {ACT_SPLIT_HORIZONTAL, "split-horizontal", "分屏：上下切分"},
     {ACT_SPLIT_VERTICAL,   "split-vertical",   "分屏：左右切分"},
@@ -83,17 +84,10 @@ static const KeyBinding g_default_bindings[] = {
     {VKEY_ANY('S'),                ACT_SETTINGS,        0},
     {VKEY_SHIFT('T'),              ACT_TAB_COLOR_PREV,  0},
     {VKEY('T', 0),                 ACT_TAB_COLOR_NEXT,  0},
-    /* pane 跳转：主键盘与小键盘数字 */
-    {VKEY_ANY('0'),                ACT_SELECT_PANE,     0},
-    {VKEY_ANY('1'),                ACT_SELECT_PANE,     1},
-    {VKEY_ANY('2'),                ACT_SELECT_PANE,     2},
-    {VKEY_ANY('3'),                ACT_SELECT_PANE,     3},
-    {VKEY_ANY('4'),                ACT_SELECT_PANE,     4},
-    {VKEY_ANY('5'),                ACT_SELECT_PANE,     5},
-    {VKEY_ANY('6'),                ACT_SELECT_PANE,     6},
-    {VKEY_ANY('7'),                ACT_SELECT_PANE,     7},
-    {VKEY_ANY('8'),                ACT_SELECT_PANE,     8},
-    {VKEY_ANY('9'),                ACT_SELECT_PANE,     9},
+    /* 打开「切换 panel」命令面板（tmux 惯例前缀 w = choose-window）。
+     * 主键盘数字 1-9/0 直接跳转的绑定已移除，统一改走这个可视化切换面板。 */
+    {VKEY_ANY('W'),                ACT_SWITCH_PANEL_PALETTE, 0},
+    /* pane 跳转：小键盘数字（主键盘数字已停用，改用切换 panel 面板） */
     {VKEY_ANY(VK_NUMPAD0),         ACT_SELECT_PANE,     0},
     {VKEY_ANY(VK_NUMPAD1),         ACT_SELECT_PANE,     1},
     {VKEY_ANY(VK_NUMPAD2),         ACT_SELECT_PANE,     2},
@@ -249,7 +243,8 @@ int keymap_bind(const char *action_name, const char *key_text) {
     if (g_user_count >= KEYMAP_MAX_USER_BINDINGS) return 0;
 
     /* select-pane 需要 "select-pane 3 = C-b 3" 形式的参数，这里用动作名后缀支持：
-     * select-pane 的绑定沿用默认（0-9），[keys] 中不单独重绑。 */
+     * select-pane 的默认绑定是小键盘 0-9（主键盘数字已改走 switch-panel 可视化切换），
+     * [keys] 中不单独重绑。 */
     KeySpec spec;
     if (!keymap_parse_key(key_text, &spec)) return 0;
 
@@ -410,6 +405,7 @@ int keymap_set_action_prefix(int action, int use_prefix) {
 
 static void spec_text(const KeySpec *s, char *out, int out_size) {
     char keyname[24];
+    int oem_sym = 0;   /* 1 = keyname 是可打印 OEM 符号（_ : ? 等），Shift 已体现在符号里 */
     if (s->ch) {
         /* Tab 等控制字符必须用字面名（"Tab"），直接 %c 会输出原始控制符 0x09，
          * 命令面板按 utf8 宽度补 pad 时错位，表现为「切换窗格右侧多一个空格」。 */
@@ -429,11 +425,35 @@ static void spec_text(const KeySpec *s, char *out, int out_size) {
         const char *nm = "?";
         for (int i = 0; i < g_named_key_count; i++)
             if (g_named_keys[i].vk == s->vk) { nm = g_named_keys[i].name; break; }
-        snprintf(keyname, sizeof(keyname), "%s", nm);
+        /* 可打印 OEM 键（- = ; / [ 等）按 Shift 状态显示实际打出的符号，
+         * 否则 Shift+- 这类绑定会落到 "?"（命令面板里 Ctrl+B Shift+? 误导）。 */
+        if (nm[0] == '?' && nm[1] == 0) {
+            static const struct { WORD vk; char plain; char shifted; } oem[] = {
+                {VK_OEM_MINUS, '-', '_'}, {VK_OEM_PLUS,  '=', '+'},
+                {VK_OEM_1,     ';', ':'}, {VK_OEM_2,     '/', '?'},
+                {VK_OEM_3,     '`', '~'}, {VK_OEM_4,     '[', '{'},
+                {VK_OEM_5,     '\\','|'}, {VK_OEM_6,     ']', '}'},
+                {VK_OEM_7,     '\'','"'}, {VK_OEM_COMMA, ',', '<'},
+                {VK_OEM_PERIOD,'.', '>'},
+            };
+            for (int i = 0; i < (int)(sizeof(oem)/sizeof(oem[0])); i++) {
+                if (oem[i].vk == s->vk) {
+                    keyname[0] = s->shift ? oem[i].shifted : oem[i].plain;
+                    keyname[1] = 0;
+                    oem_sym = 1;
+                    nm = NULL;
+                    break;
+                }
+            }
+        }
+        if (nm) snprintf(keyname, sizeof(keyname), "%s", nm);
     }
+    /* 可打印 OEM 符号（_ : ? + 等）本身已隐含 Shift 状态，不再重复加 "Shift+"：
+     * Shift+- 显示为 "_"（Ctrl+B _），而不是累赘的 "Shift+_"。命名键/字母
+     * （Tab/方向/T）仍显式标注 Shift+（如 Shift+Tab、Shift+T）。 */
     snprintf(out, out_size, "%s%s%s%s",
              s->ctrl ? "Ctrl+" : "", s->alt ? "Alt+" : "",
-             (s->shift && !s->shift_any) ? "Shift+" : "", keyname);
+             (s->shift && !s->shift_any && !oem_sym) ? "Shift+" : "", keyname);
 }
 
 void keymap_describe(int action, char *out, int out_size) {

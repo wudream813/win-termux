@@ -85,9 +85,9 @@ void draw_tab_bar(char *out, int bs, int *posp) {
             g_mux.tab_count++;
         }
     }
-    /* 标签按「标签页锚点」枚举：一个分屏标签的所有窗格（含 is_split_child）都
-     * 画成连排的 [pane×] 段（[cmd×][cmd×]…），可直接点段切换窗格。关于/设置页
-     * （is_about/is_settings）不进标签栏。 */
+    /* 标签按「标签页锚点」枚举。单窗格标签画成 [cmd×]；分屏标签把同组所有窗格
+     * （含 is_split_child）包在一对外层方括号里，窗格各成一个 nm× 段，形如
+     * [[cmd×][cmd×]]，点段切窗格、点 × 关该窗格。关于/设置页不进标签栏。 */
     for (int anchor = 0; anchor < g_mux.pane_count; anchor++) {
         if (!g_mux.panes[anchor].active) continue;
         if (g_mux.panes[anchor].is_split_child) continue;   /* 子窗格由其锚点统一枚举 */
@@ -95,44 +95,82 @@ void draw_tab_bar(char *out, int bs, int *posp) {
         int group[MAX_PANES];
         int gn = split_tab_panes(anchor, group, MAX_PANES);
         if (gn <= 0) continue;
-        int tab_full = 0;
+        int multi = (gn >= 2);
+        int ci = g_mux.panes[anchor].color;   /* 整组沿用锚点（标签）颜色 */
+        if (ci < 0 || ci > 8) ci = 0;
+        const char *actbg = TAB_COLOR_BG[ci];
+        const char *dimbg = TAB_COLOR_BG_DIM[ci];
+        /* 先预算整组宽度：单窗格 = [nm×]；分屏 = [ + Σ(nm×) + ]。 */
+        int gw = multi ? 2 : 0;   /* 外层 [ 和 ] */
         for (int gi = 0; gi < gn; gi++) {
             int i = group[gi];
             if (i < 0 || i >= g_mux.pane_count || !g_mux.panes[i].active) continue;
             char nm[64]; format_tab_title(nm, sizeof(nm), g_mux.panes[i].title[0] ? g_mux.panes[i].title : "cmd");
-            char head[80];
-            int hl = snprintf(head, sizeof(head), "[%s", nm);
-            int hc = utf8_cols(head, hl);
-            int lc = hc + 1;
-            if (col + lc + 4 + 4 > g_mux.host_cols) { col = g_mux.host_cols; tab_full = 1; break; }
-            int hovering = (!popup_open && g_mouse_y == 0 &&
-                            g_mouse_x >= col + hc && g_mouse_x < col + lc);
+            int w = utf8_cols(nm, (int)strlen(nm)) + 1;   /* nm + × */
+            gw += multi ? w : (w + 2);                    /* 单窗格再加自己的 [ ] */
+        }
+        if (col + gw + 4 + 4 > g_mux.host_cols) { col = g_mux.host_cols; break; }
+        /* 收集本组存活窗格（段循环里要用首/尾窗格登记外括号）。 */
+        int alive[MAX_PANES], an = 0;
+        for (int gi = 0; gi < gn; gi++) {
+            int i = group[gi];
+            if (i >= 0 && i < g_mux.pane_count && g_mux.panes[i].active) alive[an++] = i;
+        }
+        if (an < 1) continue;
+        int group_start = col;
+        if (multi) {
+            /* 外层左括号：组底色 + 暗灰字；登记为可点段（切到组内第一个窗格），
+             * × 热区置为不可命中（点外括号只切窗格、绝不关闭）。 */
+            pos += snprintf(out + pos, bs - pos, "%s\x1b[038;2;139;148;158m[", dimbg);
             g_mux.tab_info[g_mux.tab_count].start_col = col;
-            g_mux.tab_info[g_mux.tab_count].pane_idx = i;
+            g_mux.tab_info[g_mux.tab_count].end_col = col + 1;
+            g_mux.tab_info[g_mux.tab_count].pane_idx = alive[0];
+            g_mux.tab_info[g_mux.tab_count].close_start = 0;
+            g_mux.tab_info[g_mux.tab_count].close_end = 0;
+            g_mux.tab_count++;
+            col++;
+        }
+        for (int gi = 0; gi < an; gi++) {
+            int i = alive[gi];
+            char nm[64]; format_tab_title(nm, sizeof(nm), g_mux.panes[i].title[0] ? g_mux.panes[i].title : "cmd");
+            int nmc = utf8_cols(nm, (int)strlen(nm));
             int act = (i == g_mux.active_pane);
-            int ci = g_mux.panes[anchor].color;   /* 整组沿用锚点（标签）颜色 */
-            if (ci < 0 || ci > 8) ci = 0;
-            const char *actbg = TAB_COLOR_BG[ci];
-            const char *dimbg = TAB_COLOR_BG_DIM[ci];
+            /* 段背景：活动段亮（白字加粗），非活动段组暗色（灰字）。 */
             if (act)
-                pos += snprintf(out + pos, bs - pos, "%s" TAB_ACT_FG "\x1b[1m%s\x1b[22m", actbg, head);
+                pos += snprintf(out + pos, bs - pos, "%s" TAB_ACT_FG "\x1b[1m", actbg);
             else
-                pos += snprintf(out + pos, bs - pos, "%s\x1b[038;2;139;148;158m%s", dimbg, head);
+                pos += snprintf(out + pos, bs - pos, "%s\x1b[038;2;139;148;158m", dimbg);
+            g_mux.tab_info[g_mux.tab_count].start_col = col;
+            if (!multi) { pos += snprintf(out + pos, bs - pos, "["); col++; }
+            pos += snprintf(out + pos, bs - pos, "%s", nm);
+            col += nmc;
+            /* × 热区：紧跟标题后的一格。 */
+            int hovering = (!popup_open && g_mouse_y == 0 && g_mouse_x == col);
             if (hovering)
                 pos += snprintf(out + pos, bs - pos, X_RED_BG "\x1b[038;2;255;255;255m\xc3\x97");
             else
-                pos += snprintf(out + pos, bs - pos, X_RED "\xc3\x97");
-            if (act)
-                pos += snprintf(out + pos, bs - pos, "%s" TAB_ACT_FG "]", actbg);
-            else
-                pos += snprintf(out + pos, bs - pos, "%s\x1b[038;2;139;148;158m]", dimbg);
-            g_mux.tab_info[g_mux.tab_count].close_start = col + hc;
-            g_mux.tab_info[g_mux.tab_count].close_end = col + hc + 1;
-            col += lc + 1;
+                pos += snprintf(out + pos, bs - pos, "%s" X_RED "\xc3\x97", act ? actbg : dimbg);
+            g_mux.tab_info[g_mux.tab_count].pane_idx = i;
+            g_mux.tab_info[g_mux.tab_count].close_start = col;
+            g_mux.tab_info[g_mux.tab_count].close_end = col + 1;
+            col++;
+            pos += snprintf(out + pos, bs - pos, "%s", act ? (TAB_ACT_FG) : ("\x1b[038;2;139;148;158m"));
+            if (!multi) { pos += snprintf(out + pos, bs - pos, "]"); col++; }
             g_mux.tab_info[g_mux.tab_count].end_col = col;
             g_mux.tab_count++;
         }
-        if (tab_full) break;   /* 标签栏宽度用尽：后续锚点整体不再绘制 */
+        if (multi) {
+            /* 外层右括号：组底色 + 暗灰字；登记为可点段（切到组内最后一个窗格）。 */
+            pos += snprintf(out + pos, bs - pos, "%s\x1b[038;2;139;148;158m]", dimbg);
+            g_mux.tab_info[g_mux.tab_count].start_col = col;
+            g_mux.tab_info[g_mux.tab_count].end_col = col + 1;
+            g_mux.tab_info[g_mux.tab_count].pane_idx = alive[an - 1];
+            g_mux.tab_info[g_mux.tab_count].close_start = 0;
+            g_mux.tab_info[g_mux.tab_count].close_end = 0;
+            g_mux.tab_count++;
+            col++;
+        }
+        (void)group_start;
     }
     if (col < g_mux.host_cols - 4) { pos += snprintf(out + pos, bs - pos, TB_BG " "); col++; }
     if (col + 3 <= g_mux.host_cols - 4) {
@@ -473,7 +511,9 @@ void render_settings_presets(char *out, int bs, int *posp, int host_rows, int ho
                         r, left, bg, i + 1, bg);
         char preset_tag[16];
         snprintf(preset_tag, sizeof(preset_tag), "[%d]", i + 1);
-        cols = 1 + 2 + utf8_cols(preset_tag, (int)strlen(preset_tag));
+        /* │(1) + 两空格(2) + [n](tag宽) + tag 后分隔空格(1)；漏算这个空格会让
+         * pad_to_right_border 多补一格、整行右边框右突 1 列（右侧不对齐）。 */
+        cols = 1 + 2 + utf8_cols(preset_tag, (int)strlen(preset_tag)) + 1;
         append_padded_utf8(out, bs, &pos, &cols, g_presets[i].name, mnw);
         pos += snprintf(out + pos, bs - pos, "%s \x1b[038;2;139;148;158m", bg);
         cols += 1;
@@ -925,8 +965,11 @@ void render_settings_panel(char *out, int bs, int *posp, int host_rows, int host
             char row_tag[16];
             snprintf(row_tag, sizeof(row_tag), "[%d]", i + 1);
             int row_cols = 0;
-            pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s %s\x1b[038;2;210;153;034m%s\x1b[0m%s  ",
-                            r, main_left, row_bg, (row_focus ? "▶" : " "), row_tag, row_bg);
+            /* 行首标记统一 2 列宽：聚焦行 "▶ "(▶ 为宽字符占2列，必须补成和
+             * 非聚焦的两个半角空格一样宽)，否则聚焦行整行右移 1 列、按钮与硬编码
+             * 热区错位，行底色还会盖到 [↑] 按钮列上。 */
+            pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s%s\x1b[038;2;210;153;034m%s\x1b[0m%s  ",
+                            r, main_left, row_bg, (row_focus ? "▶" : "  "), row_tag, row_bg);
             row_cols = 2 + utf8_cols(row_tag, (int)strlen(row_tag)) + 2;
 
             /* %-Ns pads bytes, not terminal columns.  Build both fixed
@@ -941,10 +984,13 @@ void render_settings_panel(char *out, int bs, int *posp, int host_rows, int host
             pos += snprintf(out + pos, bs - pos, "\x1b[0m%s  ", row_bg);
             row_cols += 2;
 
-            pos += snprintf(out + pos, bs - pos, "%s[↑]\x1b[0m", h_up ? "\x1b[048;2;063;185;080m\x1b[038;2;013;017;023;1m" : "\x1b[038;2;063;185;080m");
-            pos += snprintf(out + pos, bs - pos, "%s[↓]\x1b[0m", h_dn ? "\x1b[048;2;217;119;054m\x1b[038;2;013;017;023;1m" : "\x1b[038;2;217;119;054m");
-            pos += snprintf(out + pos, bs - pos, "%s[改]\x1b[0m", h_ed ? "\x1b[048;2;121;192;255m\x1b[038;2;013;017;023;1m" : "\x1b[038;2;121;192;255m");
-            pos += snprintf(out + pos, bs - pos, "%s[删]\x1b[0m", h_del ? "\x1b[048;2;248;081;073m\x1b[038;2;255;255;255;1m" : "\x1b[038;2;248;081;073m");
+            /* 按钮非 hover 时也要给一块自己的面板底色（022;027;034），否则聚焦/悬停
+             * 行的整行底色会透过按钮文字格显示出来（行底色盖到 [↑] 上）；hover 时用
+             * 按钮各自的高亮底色，行底色与按钮底色不叠加（行 bg 已排除按钮列）。 */
+            pos += snprintf(out + pos, bs - pos, "%s[↑]\x1b[0m", h_up ? "\x1b[048;2;063;185;080m\x1b[038;2;013;017;023;1m" : TB_BG "\x1b[038;2;063;185;080m");
+            pos += snprintf(out + pos, bs - pos, "%s[↓]\x1b[0m", h_dn ? "\x1b[048;2;217;119;054m\x1b[038;2;013;017;023;1m" : TB_BG "\x1b[038;2;217;119;054m");
+            pos += snprintf(out + pos, bs - pos, "%s[改]\x1b[0m", h_ed ? "\x1b[048;2;121;192;255m\x1b[038;2;013;017;023;1m" : TB_BG "\x1b[038;2;121;192;255m");
+            pos += snprintf(out + pos, bs - pos, "%s[删]\x1b[0m", h_del ? "\x1b[048;2;248;081;073m\x1b[038;2;255;255;255;1m" : TB_BG "\x1b[038;2;248;081;073m");
         }
 
         int btn_r = 10 + g_chooser_item_count + 1;
@@ -2290,6 +2336,17 @@ static void render_split_cell(char *out, int bs, int *posp, ScreenBuffer *s,
     WORD frgb, brgb; int fgv, bgv;
     cell_truecolor(s, y, x, ar, &frgb, &brgb, &fgv, &bgv);
     int active = (leaf == g_mux.active_pane);
+
+    /* ConPTY 未填充的格子是「空格 + 无真彩 + 16 色纯黑底(0)」。拖分屏条时窗格
+     * ConPTY 实时 resize，新扩列/新行就是这种格；它会盖住 render_split 铺的面板
+     * 底色、显出一条纯黑带（拖条时「右侧多一块背景」）。把这种未填充黑底空白格
+     * 的背景统一按面板底色（022;027;034）输出，与窗格铺底无缝；shell 随后重绘
+     * 会覆盖成真背景。注意只动「无真彩且 16 色黑底的空白格」，黑底 vim/黑底程序
+     * 里真有内容的格子或显式真彩黑底不受影响。 */
+    int is_blank = (wc == L' ' || wc == 0);
+    int bg16 = (attr >> 4) & 0x0F;
+    if (is_blank && !bgv && (bg16 & 0x7) == 0)
+        bgv = 1, brgb = theme_role_rgb565(TH_BG1);   /* 面板底色 22,27,34 */
 
     const char *ul = (attr & COMMON_LVB_UNDERSCORE) ? ";4" : "";
     if (fgv || bgv) {

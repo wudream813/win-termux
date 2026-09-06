@@ -5,7 +5,7 @@
 Windows 终端复用器（Terminal Multiplexer）—— 模块化 C 架构，基于 Windows ConPTY。
 在 Windows 控制台里管理多个 cmd / PowerShell 会话，像 tmux 一样分标签页。
 
-当前版本：**v1.8.38**
+当前版本：**v1.8.39**
 
 > ⚠️ **警告 / 注意事项**：
 > 控制台终端**必须配置使用等宽字体**（Monospace Font，例如 *Cascadia Code*、*Consolas*、*JetBrains Mono*、*Fira Code* 等）。
@@ -151,7 +151,8 @@ default_startup = 0        # 0 = 启动进终端，1 = 启动显示帮助
 | `close-pane` | 关闭当前 pane | `x` |
 | `quit` | 退出 termux | `d` |
 | `tab-color-next` / `tab-color-prev` | 轮换标签颜色 | `t` / `Shift+t` |
-| `select-pane` | 按编号跳转 pane | `0`-`9` |
+| `switch-panel` | 打开命令面板并进入「切换 panel」页 | `w` |
+| `select-pane` | 按编号跳转 pane | 小键盘 `0`-`9` |
 | `next-theme` | 切换下一个配色主题 | 未绑定 |
 | `split-horizontal` | 分屏：上下切分 | `_`（Shift+-） |
 | `split-vertical` | 分屏：左右切分 | `-` / `|` |

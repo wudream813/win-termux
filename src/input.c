@@ -2764,6 +2764,16 @@ void action_execute(int action, int arg, DWORD ctrl) {
             open_command_palette();
             break;
         }
+        case ACT_SWITCH_PANEL_PALETTE: {
+            /* 快捷键直接打开命令面板并进入「切换 panel」页（替代旧的前缀+数字跳转）。 */
+            dismiss_overlays();
+            g_mux.help_mode = 0;
+            open_command_palette();
+            g_mux.palette_page = PALETTE_PAGE_SWITCH_PANEL;
+            g_mux.palette_stack_len = 0;
+            palette_reset_query();
+            break;
+        }
         case ACT_SEARCH: {
             g_mux.palette_mode = 0;
             g_search_mode = 1;

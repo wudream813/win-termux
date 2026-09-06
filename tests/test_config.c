@@ -200,7 +200,10 @@ static void test_keymap_defaults(void) {
     check(keymap_lookup(0, 0, '+', &arg) == ACT_NEW_PANE_MENU, "+ -> new-pane-menu");
     check(keymap_lookup(VK_ADD, 0, 0, &arg) == ACT_NEW_PANE_MENU, "小键盘 + -> new-pane-menu");
 
-    check(keymap_lookup('3', 0, '3', &arg) == ACT_SELECT_PANE && arg == 3, "3 -> select-pane 3");
+    /* v1.8.39：主键盘数字直接跳转已移除，改为 w 打开「切换 panel」面板；
+     * 小键盘数字仍保留 select-pane。 */
+    check(keymap_lookup('W', 0, 'w', &arg) == ACT_SWITCH_PANEL_PALETTE, "w -> switch-panel 面板");
+    check(keymap_lookup('3', 0, '3', &arg) == ACT_NONE, "主键盘 3 不再直接跳转");
     check(keymap_lookup(VK_NUMPAD7, 0, 0, &arg) == ACT_SELECT_PANE && arg == 7, "小键盘 7 -> select-pane 7");
     check(keymap_lookup(VK_F5, 0, 0, &arg) == ACT_NONE, "未绑定键返回 ACT_NONE");
 }
@@ -278,6 +281,13 @@ static void test_keymap_describe(void) {
     }
     keymap_describe(ACT_SPLIT_PREV, buf, sizeof(buf));
     check_str(buf, "Ctrl+B Shift+tab", "split-prev(Shift+Tab) 描述");
+
+    /* v1.8.39：可打印 OEM 键按 Shift 状态显示实际符号，Shift+- 是 _（上下分屏），
+     * 之前落到 "?" 显示成 Ctrl+B Shift+?。 */
+    keymap_describe(ACT_SPLIT_HORIZONTAL, buf, sizeof(buf));
+    check_str(buf, "Ctrl+B _", "split-horizontal(Shift+-) 描述为 _");
+    keymap_describe(ACT_SPLIT_VERTICAL, buf, sizeof(buf));
+    check_str(buf, "Ctrl+B -", "split-vertical(-) 描述为 -");
 
     keymap_describe(ACT_SEND_PREFIX, buf, sizeof(buf));
     check_str(buf, "Ctrl+B Ctrl+B", "未绑定时 send-prefix 显示为连按两次前缀");
