@@ -6,6 +6,14 @@
 
 ## 版本更新记录
 
+### v1.8.47
+把 v1.8.46 的逻辑行 reflow 引擎**接线到分屏历史渲染**（接线第一步）：分屏窗格向上滚动查看历史时，跨软换行的逻辑行现在按当前窗格宽度实时重排，窄窗格把长命令/输出折成多行完整显示、拖宽折回一行，不再被窗口边缘截断。
+- **物理行续行标志 `line_wrap`**：给 `ScreenBuffer` 增加按物理行的软换行标志数组（`screen_init`/`free`/`resize` 全程管理）。VT 自动折行（`wraparound_pending` 触发的换行、宽字符放不下整字换行）时用新接口 `screen_mark_softwrap()` 把当前物理行标记为「上一行的软换行续行」；普通回车/LF 不标记；滚动推进 `scroll_top` 时新暴露的空白行标志清零；resize 迁移时续行关系随行走。
+- **reflow 视图 `screen_reflow_view`**：自底向上扫描物理环形缓冲，按 `line_wrap` 把相邻物理行合并回逻辑行（段内字符保持正序、段间前插拼接，去物理行尾空格填充），再按视口宽做宽字符感知折行（CJK/emoji 不拆半个字、空行硬放），输出向上回看 vo 个显示行时的 `rows×width` 网格。自底向上只处理覆盖当前视口所需的逻辑行，时间与总历史量无关。
+- **分屏渲染接入**：`render_split_pane` 在向上回看（`scroll_offset>0` 且非 alt 屏）时每帧重建窗格的 reflow 网格缓存（Pane 新增 `rf_grid`，pane 销毁时释放），`render_split_cell` 改从该网格取字符/16 色/真彩（含 emoji 代理对合成）；实时屏（vo==0）仍直取 ConPTY 缓冲，行为不变。
+- **验证**：新增 reflow 视图纯函数回归（窄视口 10 字符逻辑行折 3 行 `abcd/efgh/ij`、宽视口折回一行、两段软换行物理行合并为 `abxyz`），纳入 `verify_screen_state.py`；测试替身 ScreenBuffer/ScreenLine 同步加 `line_wrap`/`len` 字段；单元测试 309 / 0 failed；`verify_all.py` 全过；MinGW gcc / g++ × x86_64 / i686 四套 `-Wall -Wextra -Werror`。
+- **后续（未在本版本接入）**：单窗格（非分屏）整屏历史渲染、复制模式选区坐标、历史搜索命中坐标切换到 reflow 显示行语义。
+
 ### v1.8.46
 为彻底解决「调整窗格宽度后历史排版」问题打地基——引入**逻辑行历史 + 本地 reflow 引擎**（本版本为独立地基模块，暂不改变显示行为，后续版本逐步接入渲染/复制/搜索的历史数据源）：
 - **为什么不用「子终端无限宽」**：把 pty 设成超宽会让全屏 TUI（vim/htop/less/man）按超宽做绝对定位，本地对线性字符流软换行无法重排二维画布，TUI 布局与鼠标坐标会错乱；命令行行编辑器（readline/PSReadLine）也会因宽度不符而花屏。现代终端（VTE/iTerm2/Alacritty/WezTerm）的做法是：实时屏让 pty 始终等于视口尺寸（保证 TUI 正确），滚动历史则存成**逻辑行**（按真实换行符切分，软换行折下来的物理行合并回同一行），resize 时只在本地对历史做宽字符感知的 reflow。

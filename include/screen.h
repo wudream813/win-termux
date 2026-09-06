@@ -26,6 +26,28 @@ void screen_write_cell(ScreenBuffer *s, int row, int col, WCHAR ch, WORD attr);
 void screen_scroll_up(ScreenBuffer *s, int top, int bottom, int count);
 void screen_scroll_down(ScreenBuffer *s, int top, int bottom, int count);
 void screen_newline(ScreenBuffer *s);
+void screen_mark_softwrap(ScreenBuffer *s);  /* 标记当前行=软换行续行（v1.8.47 reflow） */
+
+/* reflow 视图里的一个显示单元（字符 + 16 色属性 + 真彩）。 */
+typedef struct {
+    CHAR_INFO ci;
+    WORD fg, bg;
+    unsigned char v;
+} RGlyph;
+
+/* screen_reflow_view 的写入上下文（行主序缓冲 + 自底向上落位计数）。 */
+typedef struct {
+    RGlyph *out;
+    int out_rows;
+    int width;
+    int emitted;
+    int stop;
+} ScreenRfCtx;
+
+/* 生成滚动历史的 reflow 视图：把物理行按软换行标志合并成逻辑行、按 width 重新
+ * 折行，返回向上回看 vo 个显示行时、视口 rows×width 的内容到 out（行主序）。
+ * 返回有效行数；alt 屏/无 wrap 标志时返回 0（调用方回退到物理行直取）。 */
+int screen_reflow_view(ScreenBuffer *s, int vo, int rows, int width, RGlyph *out);
 void detect_conpty_width(ScreenBuffer *s, int written_len);
 WORD build_attr(ScreenBuffer *s);
 void cell_truecolor(ScreenBuffer *s, int row, int col, int ar, WORD *out_f, WORD *out_b, int *out_fv, int *out_bv);

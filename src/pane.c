@@ -468,6 +468,7 @@ void close_pane(int idx) {
     }
 
     EnterCriticalSection(&g_mux.cs);
+    free(pane->rf_grid); pane->rf_grid = NULL; pane->rf_valid = 0; pane->rf_rows = pane->rf_cols = 0;
     screen_free(&pane->screen);
     LeaveCriticalSection(&g_mux.cs);
 }

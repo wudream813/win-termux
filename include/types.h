@@ -33,6 +33,9 @@ typedef struct {
 typedef struct {
     ScreenLine *lines;
     int cols, rows, total_lines, scroll_top;
+    unsigned char *line_wrap;  /* 并行于环形缓冲：每物理行 1=该行是上一物理行因自动
+                                * 折行（软换行）折下来的续行；0=硬换行后的新行。
+                                * v1.8.47：历史渲染据此把物理行合并成逻辑行并 reflow。 */
     int cursor_x, cursor_y, cursor_visible;
     WORD current_attr;
     int fg_color, bg_color, bold, underline, reverse_video;
@@ -90,6 +93,11 @@ typedef struct {
     int is_split_child;   /* 分屏子窗格：不作为独立标签页出现在标签栏 */
     int exited_hold;
     DWORD exit_code;
+    /* v1.8.47：历史 reflow 视图缓存（渲染历史滚动时，逻辑行按当前窗格宽重排后
+     * 的可见网格）。rf_rows/rf_cols 为网格尺寸，rf_grid 行主序 RGlyph；仅在向上
+     * 回看（scroll_offset>0 且非 alt 屏）时有效，每帧由渲染侧重建。 */
+    int rf_rows, rf_cols, rf_valid;
+    void *rf_grid;
     WCHAR input_history[256];
     int input_history_len;
     int input_history_pos;

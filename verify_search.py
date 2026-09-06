@@ -105,6 +105,7 @@ typedef struct {
     unsigned char *alt_rgb_valid;
     int hist_lines;
     int alt_hist_lines;
+    unsigned char *line_wrap;
 } ScreenBuffer;
 
 typedef struct {

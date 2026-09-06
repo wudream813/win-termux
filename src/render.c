@@ -2371,19 +2371,32 @@ static void render_split_borders(char *out, int bs, int *posp, PaneRect *rects) 
 
 /* 画单个 pane 的一个单元格（带真彩/16 色与宽字符处理），定位到内容区绝对坐标。 */
 static void render_split_cell(char *out, int bs, int *posp, ScreenBuffer *s,
-                              Pane *pane, int leaf, int px, int py, int rr, int cc) {
+                              Pane *pane, int leaf, int px, int py, int rr, int cc,
+                              int use_rf) {
     int pos = *posp;
     int x = px, y = py;
     int vo = pane->scroll_offset;
-    int ar = (vo > 0 && !s->in_alt_screen) ? screen_phys_row(s, y - vo) : -1;
-    CHAR_INFO *cell = (ar >= 0) ? ((s->lines && s->lines[ar].cells) ? &s->lines[ar].cells[x] : NULL)
-                                : screen_cell(s, y, x);
     WCHAR wc = L' '; WORD attr = 0x07;
-    if (cell) { wc = cell->Char.UnicodeChar; attr = cell->Attributes; }
-    /* 空出的次格（宽字符占位）不写。 */
-    if (wc == 0) { *posp = pos; return; }
-    WORD frgb, brgb; int fgv, bgv;
-    cell_truecolor(s, y, x, ar, &frgb, &brgb, &fgv, &bgv);
+    WORD frgb = RGB565_WHITE, brgb = RGB565_BLACK; int fgv = 0, bgv = 0;
+    if (use_rf) {
+        /* 历史 reflow 视图：从窗格缓存网格取（逻辑行按当前宽重排后）。 */
+        RGlyph *grid = (RGlyph *)pane->rf_grid;
+        int cols = pane->rf_cols;
+        if (grid && cols > 0) {
+            RGlyph *g = &grid[y * cols + x];
+            wc = g->ci.Char.UnicodeChar; attr = g->ci.Attributes;
+            frgb = g->fg; brgb = g->bg; fgv = g->v & 1; bgv = (g->v >> 1) & 1;
+        }
+        if (wc == 0) { *posp = pos; return; }   /* 宽字符次格不写 */
+    } else {
+        int ar = (vo > 0 && !s->in_alt_screen) ? screen_phys_row(s, y - vo) : -1;
+        CHAR_INFO *cell = (ar >= 0) ? ((s->lines && s->lines[ar].cells) ? &s->lines[ar].cells[x] : NULL)
+                                    : screen_cell(s, y, x);
+        if (cell) { wc = cell->Char.UnicodeChar; attr = cell->Attributes; }
+        /* 空出的次格（宽字符占位）不写。 */
+        if (wc == 0) { *posp = pos; return; }
+        cell_truecolor(s, y, x, ar, &frgb, &brgb, &fgv, &bgv);
+    }
     int active = (leaf == g_mux.active_pane);
     (void)active;
 
@@ -2416,9 +2429,18 @@ static void render_split_cell(char *out, int bs, int *posp, ScreenBuffer *s,
     (void)active;
 
     /* 宽字符 emoji 代理对合成（与整屏路径一致）。 */
-    if (wc >= 0xD800 && wc <= 0xDBFF && x + 1 < (ar >= 0 ? s->cols : s->cols)) {
-        CHAR_INFO *next_cell = (ar >= 0) ? ((s->lines && s->lines[ar].cells) ? &s->lines[ar].cells[x + 1] : NULL)
-                                         : screen_cell(s, y, x + 1);
+    int cols_max = use_rf ? pane->rf_cols : s->cols;
+    if (wc >= 0xD800 && wc <= 0xDBFF && x + 1 < cols_max) {
+        CHAR_INFO next_ci;
+        const CHAR_INFO *next_cell = NULL;
+        if (use_rf) {
+            RGlyph *grid = (RGlyph *)pane->rf_grid;
+            if (grid) { next_ci = grid[y * pane->rf_cols + x + 1].ci; next_cell = &next_ci; }
+        } else {
+            int ar2 = (vo > 0 && !s->in_alt_screen) ? screen_phys_row(s, y - vo) : -1;
+            next_cell = (ar2 >= 0) ? ((s->lines && s->lines[ar2].cells) ? &s->lines[ar2].cells[x + 1] : NULL)
+                                   : screen_cell(s, y, x + 1);
+        }
         if (next_cell && next_cell->Char.UnicodeChar >= 0xDC00 && next_cell->Char.UnicodeChar <= 0xDFFF) {
             WCHAR low = next_cell->Char.UnicodeChar;
             unsigned int cp = 0x10000 + (((unsigned int)(wc & 0x3FF)) << 10) + (low & 0x3FF);
@@ -2453,10 +2475,37 @@ static void render_split_pane(char *out, int bs, int *posp, int leaf, PaneRect *
         for (int px = 0; px < cols; px++) pos += snprintf(out + pos, bs - pos, " ");
     }
     *posp = pos;
+    /* v1.8.47：向上回看（非 alt 屏、有历史、scroll_offset>0）时，用逻辑行 reflow
+     * 视图作为历史网格数据源：把跨软换行的逻辑行按当前窗格宽重排，窄窗格折成
+     * 多行、宽窗格折回一行。实时屏（vo==0）仍直取 ConPTY 缓冲。 */
+    int use_rf = (pane->scroll_offset > 0 && !s->in_alt_screen && s->line_wrap != NULL);
+    if (use_rf) {
+        int need = rows * cols;
+        RGlyph *grid = (RGlyph *)pane->rf_grid;
+        if (pane->rf_rows < rows || pane->rf_cols < cols) {
+            RGlyph *ng = (RGlyph *)realloc(grid, (size_t)(need + 1) * sizeof(RGlyph));
+            if (ng) { grid = ng; pane->rf_grid = grid; pane->rf_rows = rows; pane->rf_cols = cols; }
+        }
+        if (grid) {
+            for (int i = 0; i < need; i++) {
+                grid[i].ci.Char.UnicodeChar = L' ';
+                grid[i].ci.Attributes = 0x07;
+                grid[i].fg = RGB565_WHITE; grid[i].bg = RGB565_BLACK; grid[i].v = 0;
+            }
+            screen_reflow_view(s, pane->scroll_offset, rows, cols, grid);
+            pane->rf_valid = 1;
+        } else {
+            use_rf = 0;
+            pane->rf_valid = 0;
+        }
+    } else {
+        pane->rf_valid = 0;
+    }
+
     for (int py = 0; py < rows; py++) {
         for (int px = 0; px < cols; px++) {
             int rr = rc->r0 + py, cc = rc->c0 + px;
-            render_split_cell(out, bs, posp, s, pane, leaf, px, py, rr, cc);
+            render_split_cell(out, bs, posp, s, pane, leaf, px, py, rr, cc, use_rf);
             pos = *posp;
         }
     }

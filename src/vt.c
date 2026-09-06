@@ -4,6 +4,7 @@ static void screen_put_cp(ScreenBuffer *s, unsigned int cp) {
     if (s->wraparound_pending) {
         s->cursor_x = 0;
         screen_newline(s);
+        screen_mark_softwrap(s);   /* 自动折行：新物理行是上一行的软换行续行 */
         s->wraparound_pending = 0;
     }
     int wide = is_wide_cp(cp);
@@ -23,6 +24,7 @@ static void screen_put_cp(ScreenBuffer *s, unsigned int cp) {
         }
         s->cursor_x = 0;
         screen_newline(s);
+        screen_mark_softwrap(s);   /* 宽字符放不下整字换行：同样是软换行续行 */
         s->wraparound_pending = 0;
     }
     WORD attr = build_attr(s);

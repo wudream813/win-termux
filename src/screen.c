@@ -87,12 +87,13 @@ int screen_init(ScreenBuffer *s, int cols, int rows) {
     s->bg_color = 0;
 
     s->lines = (ScreenLine *)calloc(s->total_lines, sizeof(ScreenLine));
+    s->line_wrap = (unsigned char *)calloc(s->total_lines, 1);
     s->alt_buffer = (CHAR_INFO *)malloc(rows * cols * sizeof(CHAR_INFO));
     s->alt_fg_rgb = (WORD *)malloc(rows * cols * sizeof(WORD));
     s->alt_bg_rgb = (WORD *)malloc(rows * cols * sizeof(WORD));
     s->alt_rgb_valid = (unsigned char *)calloc(rows * cols, 1);
 
-    if (!s->lines || !s->alt_buffer || !s->alt_fg_rgb || !s->alt_bg_rgb || !s->alt_rgb_valid) {
+    if (!s->lines || !s->line_wrap || !s->alt_buffer || !s->alt_fg_rgb || !s->alt_bg_rgb || !s->alt_rgb_valid) {
         screen_free(s);
         return 0;
     }
@@ -126,6 +127,7 @@ void screen_free(ScreenBuffer *s) {
         free(s->lines);
         s->lines = NULL;
     }
+    free(s->line_wrap); s->line_wrap = NULL;
     free(s->alt_buffer); s->alt_buffer = NULL;
     free(s->alt_fg_rgb); s->alt_fg_rgb = NULL;
     free(s->alt_bg_rgb); s->alt_bg_rgb = NULL;
@@ -266,6 +268,9 @@ void screen_scroll_up(ScreenBuffer *s, int top, int bottom, int count) {
             if (s->lines && s->lines[pr].cells) {
                 line_fill_blank(&s->lines[pr], s->cols, s->current_attr);
             }
+            /* 该物理槽进入可见区作新行，软换行续行标志清零（它将是硬换行新行，
+             * 直到屏幕 put 逻辑再次自动折行时由 screen_mark_softwrap 标记）。 */
+            if (s->line_wrap) s->line_wrap[pr] = 0;
         }
         s->scroll_top = (s->scroll_top + count) % s->total_lines;
     } else {
@@ -354,6 +359,15 @@ void screen_newline(ScreenBuffer *s) {
         s->cursor_y++;
 }
 
+/* 标记「光标所在物理行」为上一行的软换行续行（自动折行折下来的，不是硬换行）。
+ * v1.8.47：历史 reflow 据此把相邻物理行合并回同一条逻辑行。在 vt.c 的自动折行
+ * 路径（wraparound_pending 触发的 newline）调用；普通回车 / LF / IND 不调用。 */
+void screen_mark_softwrap(ScreenBuffer *s) {
+    if (!s->line_wrap || s->in_alt_screen) return;
+    int pr = screen_phys_row(s, s->cursor_y);
+    if (pr >= 0 && pr < s->total_lines) s->line_wrap[pr] = 1;
+}
+
 void detect_conpty_width(ScreenBuffer *s, int written_len) {
     (void)written_len;
     if (s->in_alt_screen) return;
@@ -390,13 +404,14 @@ int screen_resize(ScreenBuffer *s, int nc, int nr) {
     int nt = nr + g_scrollback_lines;
 
     ScreenLine *nl = (ScreenLine *)calloc(nt, sizeof(ScreenLine));
+    unsigned char *nwrap = (unsigned char *)calloc(nt, 1);   /* v1.8.47 软换行标志 */
     CHAR_INFO *na = (CHAR_INFO *)calloc(nr * nc, sizeof(CHAR_INFO));
     WORD *nafr = (WORD *)malloc(nr * nc * sizeof(WORD));
     WORD *nabr = (WORD *)malloc(nr * nc * sizeof(WORD));
     unsigned char *nav = (unsigned char *)calloc(nr * nc, 1);
 
-    if (!nl || !na || !nafr || !nabr || !nav) {
-        free(nl); free(na); free(nafr); free(nabr); free(nav);
+    if (!nl || !nwrap || !na || !nafr || !nabr || !nav) {
+        free(nl); free(nwrap); free(na); free(nafr); free(nabr); free(nav);
         return 0;
     }
     for (int i = 0; i < nr * nc; i++) {
@@ -468,7 +483,16 @@ int screen_resize(ScreenBuffer *s, int nc, int nr) {
             int dst_w = nc > src_len ? nc : src_len;
             if (line_alloc(&nl[new_r], dst_w, fill_attr))
                 line_copy(&nl[new_r], &s->lines[old_r], src_len);
+            if (s->line_wrap) nwrap[new_r] = s->line_wrap[old_r];  /* 续行关系随行走 */
         }
+    }
+    /* 可见区迁移：同样把旧物理行的续行标志带过来（src>=0 旧可见、src<0 旧历史
+     * 回补）。 */
+    for (int y = 0; y < nr; y++) {
+        int new_r = (nst + y) % nt;
+        int src = y - k;
+        int old_r = RESIZE_OLD_ROW(src);
+        if (old_r >= 0 && s->line_wrap) nwrap[new_r] = s->line_wrap[old_r];
     }
     #undef RESIZE_OLD_ROW
     (void)cr;
@@ -487,9 +511,11 @@ int screen_resize(ScreenBuffer *s, int nc, int nr) {
         for (int i = 0; i < s->total_lines; i++) line_free(&s->lines[i]);
         free(s->lines);
     }
+    free(s->line_wrap);
     free(s->alt_buffer); free(s->alt_fg_rgb); free(s->alt_bg_rgb); free(s->alt_rgb_valid);
 
     s->lines = nl;
+    s->line_wrap = nwrap;
     s->alt_buffer = na;
     s->alt_fg_rgb = nafr;
     s->alt_bg_rgb = nabr;
@@ -668,4 +694,169 @@ void cell_truecolor(ScreenBuffer *s, int row, int col, int ar, WORD *out_f, WORD
         *out_f = s->lines[pr].fg_rgb[col];
         *out_b = s->lines[pr].bg_rgb[col];
     }
+}
+
+/* ---- v1.8.47：滚动历史的逻辑行 reflow 视图 --------------------------------
+ * 物理环形缓冲里每物理行可能是「上一行自动折行折下来的续行」（line_wrap==1）。
+ * 渲染滚动历史时，把相邻物理行按 wrap 标志合并回逻辑行，再按【当前视口宽】重新
+ * 折行：窄视口把一条长逻辑行折成多行完整显示、拖宽折回一行，内容不丢不重。
+ *
+ * screen_reflow_view：生成以「距最新（屏幕底部）第 vo+rows .. vo+1 个显示行」为
+ * 目标的 rows 条显示行，写入 out[y][x]（含字符/16色属性/真彩）。自底向上扫描物理
+ * 行并按需重排逻辑行，只处理覆盖目标视口所需的逻辑行段（时间与总历史量无关）。
+ *
+ * 返回实际有效行数（可能小于 rows——历史不够时顶部行留空，由调用方铺底色）。 */
+
+/* 单元宽度：高代理/宽 BMP=2，低代理/次格=0，窄=1（与 loghist 一致）。 */
+static int reflow_glyph_w(WCHAR ch) {
+    if (ch >= 0xDC00 && ch <= 0xDFFF) return 0;
+    if (ch >= 0xD800 && ch <= 0xDBFF) return 2;
+    if (ch == 0) return 0;
+    return is_wide_cp((unsigned int)ch) ? 2 : 1;
+}
+
+/* 把一条逻辑行（g[0..n-1]，已按逻辑顺序）按宽度 w 重排，生成 display rows；
+ * 用一个 emit 回调把每条显示行交给调用方。cb 返回非 0 时停止（目标视口已填满）。 */
+static int reflow_emit_rows(const RGlyph *g, int n, int w,
+                            int (*cb)(int rowidx, int total_rows,
+                                      const RGlyph *line, int cnt, void *ud),
+                            void *ud) {
+    if (w < 1) w = 1;
+    /* 先按贪心折行分段（空行硬放：col==0 时宽 glyph 夹到行内）。 */
+    int breaks[4096];
+    int nr = 0;
+    breaks[nr++] = 0;                 /* 第 0 段起点 */
+    int col = 0;
+    for (int k = 0; k < n; ) {
+        WCHAR ch = g[k].ci.Char.UnicodeChar;
+        int gw = reflow_glyph_w(ch);
+        if (gw <= 0) { k++; continue; }      /* 次格：随主格 */
+        int adv = (gw == 2 && k + 1 < n) ? 2 : 1;
+        if (col > 0 && col + gw > w) {       /* 非空行放不下 -> 折行 */
+            if (nr < 4096) breaks[nr] = k;
+            nr++;
+            col = 0;
+        }
+        col += gw;
+        k += adv;
+    }
+    for (int r = 0; r < nr; r++) {
+        int start = breaks[r];
+        int end   = (r + 1 < nr) ? breaks[r + 1] : n;
+        if (cb(r, nr, g + start, end - start, ud)) return 1;
+    }
+    return 0;
+}
+
+
+static int reflow_store_cb(int rowidx, int total_rows, const RGlyph *line, int cnt, void *ud) {
+    ScreenRfCtx *rf = (ScreenRfCtx *)ud;
+    if (rf->stop) return 1;
+    /* emitted 只在每条【逻辑行】完成时按其显示行数增加。一条逻辑行 reflow 出
+     * total_rows 个显示行，rowidx=0 是最老（最上）显示行、total_rows-1 最新（最下）。
+     * 逻辑行按新→老产出；已落位 emitted 条显示行属于更新的逻辑行（在更下方），
+     * 本逻辑行整体在其上方，故本逻辑行最新显示行位置 = out_rows-1-emitted，
+     * 第 rowidx 行位置 = 再上 (total_rows-1-rowidx) 行。 */
+    int oy = rf->out_rows - 1 - rf->emitted - (total_rows - 1 - rowidx);
+    if (oy < 0) {                            /* 顶部超出目标缓冲：跳过更老的显示行，
+                                              * 但同一逻辑行的后续更靠下行仍要落位 */
+        if (oy < 0 && rowidx < total_rows - 1) {
+            /* 本显示行在缓冲顶部之上，忽略；不计数、不停扫描。 */
+            return 0;
+        }
+        rf->stop = 1; return 1;
+    }
+    for (int x = 0; x < rf->width; x++) {
+        RGlyph *g = &rf->out[oy * rf->width + x];
+        g->ci.Char.UnicodeChar = L' ';
+        g->ci.Attributes = 0x07;
+        g->fg = RGB565_WHITE; g->bg = RGB565_BLACK; g->v = 0;
+    }
+    int n = cnt < rf->width ? cnt : rf->width;
+    for (int x = 0; x < n; x++) {
+        /* 宽字符次格（ch==0/低代理）占位也要落在主格右侧列，直接整 RGlyph 拷贝。 */
+        rf->out[oy * rf->width + x] = line[x];
+    }
+    /* 一条逻辑行的显示行全部落位后，按该逻辑行的显示行总数累计 emitted。 */
+    if (rowidx == total_rows - 1) {
+        rf->emitted += total_rows;
+        if (rf->emitted >= rf->out_rows) { rf->stop = 1; }
+    }
+    return 0;
+}
+
+int screen_reflow_view(ScreenBuffer *s, int vo, int rows, int width, RGlyph *out) {
+    if (!s || !s->line_wrap || s->in_alt_screen || rows <= 0 || width <= 0 || !out) return 0;
+
+    /* logrow 累积一条逻辑行的 glyph。自底向上（物理行新→老）扫描，故 logrow 里
+     * 先放更新的段；在逻辑行边界（wrap==0）翻转成 老→新 再 reflow。 */
+    int logcap = width > 256 ? width : 256;
+    RGlyph *logrow = (RGlyph *)malloc((size_t)logcap * sizeof(RGlyph));
+    if (!logrow) return 0;
+    int logn = 0;
+
+    /* 向上回看 vo 个显示行：先让回调把「最新 rows+vo 条显示行」下对齐写入临时
+     * 缓冲 big，再取其中 [vo .. vo+rows-1] 段拷到 out。这样视口跳过最新 vo 条。 */
+    int skip = vo;
+    int total_need = rows + (skip > 0 ? skip : 0);
+    RGlyph *big = (RGlyph *)malloc((size_t)total_need * width * sizeof(RGlyph));
+    if (!big) { free(logrow); return 0; }
+    ScreenRfCtx g_rf_ctx;
+    g_rf_ctx.out = big; g_rf_ctx.out_rows = total_need; g_rf_ctx.width = width; g_rf_ctx.emitted = 0; g_rf_ctx.stop = 0;
+
+    for (int rel = s->rows - 1; rel >= -(s->hist_lines); rel--) {
+        int pr = screen_phys_row(s, rel);
+        if (pr < 0 || pr >= s->total_lines || !s->lines[pr].cells) continue;
+        int len = s->lines[pr].len;
+        /* 去尾空格（空格填充不属于逻辑内容；宽字符次格 ch==0 不算空格）。 */
+        while (len > 0 && s->lines[pr].cells[len - 1].Char.UnicodeChar == L' ') len--;
+        /* 物理行扫描顺序为新→老。每个物理行是逻辑行的一段，段内字符保持正序；
+         * 把本段【前插】到 logrow 开头（memmove 腾出段空间），最终 logrow 即为
+         * 老→新的完整逻辑行，逻辑行边界无需翻转。 */
+        if (logn + len > logcap) {
+            while (logn + len > logcap) logcap *= 2;
+            RGlyph *nl = (RGlyph *)realloc(logrow, (size_t)logcap * sizeof(RGlyph));
+            if (!nl) { free(big); free(logrow); return g_rf_ctx.emitted; }
+            logrow = nl;
+        }
+        if (logn > 0) memmove(logrow + len, logrow, (size_t)logn * sizeof(RGlyph));
+        for (int x = 0; x < len; x++) {
+            RGlyph g;
+            g.ci = s->lines[pr].cells[x];
+            g.fg = s->lines[pr].fg_rgb ? s->lines[pr].fg_rgb[x] : RGB565_WHITE;
+            g.bg = s->lines[pr].bg_rgb ? s->lines[pr].bg_rgb[x] : RGB565_BLACK;
+            g.v  = s->lines[pr].rgb_valid ? s->lines[pr].rgb_valid[x] : 0;
+            logrow[x] = g;
+        }
+        logn += len;
+        if (!s->line_wrap[pr]) {
+            /* 逻辑行完整（logrow 已是老→新），直接 reflow 输出。 */
+            reflow_emit_rows(logrow, logn, width, reflow_store_cb, &g_rf_ctx);
+            logn = 0;
+            if (g_rf_ctx.stop) break;
+        }
+    }
+    /* 兜底：未闭合逻辑行（扫到最老仍 wrap==1）直接输出。 */
+    if (!g_rf_ctx.stop && logn > 0) {
+        reflow_emit_rows(logrow, logn, width, reflow_store_cb, &g_rf_ctx);
+    }
+    /* big 中下对齐存了 total_need 条显示行（最新在最底）。视口 vo 回看：
+     * 输出 rows 条 = big 下标 [skip .. skip+rows-1]（从下数），即 big 的
+     * (total_need-1-vo) 为视口底部行，往上 rows 行。拷贝到 out（out 上对齐）。 */
+    int bottom_big = total_need - 1 - skip;   /* big 中视口底部所在行 */
+    int valid = 0;
+    for (int y = 0; y < rows; y++) {
+        int sy = bottom_big - (rows - 1 - y);   /* big 中对应输出行 y 的行 */
+        for (int x = 0; x < width; x++) {
+            RGlyph dst;
+            if (sy >= 0 && sy < total_need) dst = big[sy * width + x];
+            else { dst.ci.Char.UnicodeChar = L' '; dst.ci.Attributes = 0x07;
+                   dst.fg = RGB565_WHITE; dst.bg = RGB565_BLACK; dst.v = 0; }
+            out[y * width + x] = dst;
+        }
+        if (sy >= 0) valid++;
+    }
+    free(big);
+    free(logrow);
+    return valid;
 }
