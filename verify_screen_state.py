@@ -485,85 +485,91 @@ static int test_reflow_view(void) {
     alloc_alt(&s, 10, 6);
     s.in_alt_screen = 0;
     s.line_wrap = (unsigned char *)calloc(s.total_lines, 1);
-    /* 构造：硬换行逻辑行 "abcdefghij"（10 字符），先作为可见行写满 10 列，
-     * 然后向下滚动一行，让它成为历史（物理行内就是这 10 字符；标记 wrap=0，
-     * 它是独立逻辑行）。 */
+    /* 宽 10 高 6。逻辑行 "abcdefghij"（10 字符，硬换行 wrap=0）写在可见行 0，
+     * 滚动 1 行后成为历史 -1；可见区变空白。 */
     for (int x = 0; x < 10; x++) screen_write_cell(&s, 0, x, (WCHAR)('a'+x), 0x07);
     screen_scroll_up(&s, 0, s.rows - 1, 1);
     if (s.hist_lines < 1) { fprintf(stderr, "FAIL: reflow 准备 hist<1\n"); return 1; }
 
-    /* 窄视口宽 4：历史里的逻辑行 10 字符应折成 3 条显示行（abcd/efgh/ij）。
-     * screen_reflow_view 只扫描历史、把历史显示行【顶对齐】填入 out，返回历史
-     * 行数 n。vo=0 时该逻辑行折 3 行 => n=3，out y0..y2 = abcd/efgh/ij；
-     * y3..y5 留空（由调用方回落实时屏）。 */
+    /* vo=2：跳过最新 2 显示行（ij、efgh），视口底部=abcd。 */
     RGlyph *out = (RGlyph *)calloc(6 * 4, sizeof(RGlyph));
-    int n = screen_reflow_view(&s, 0, 6, 4, out);
-    if (n != 3) { fprintf(stderr, "FAIL: reflow_view 窄视口应返回 3 历史行，得 %d\n", n); free(out); free_screen(&s); return 1; }
-    const char *exp[] = {"abcd", "efgh", "ij"};
-    for (int r = 0; r < 3; r++) {
-        for (int x = 0; x < 4; x++) {
-            char want = x < (int)strlen(exp[r]) ? exp[r][x] : ' ';
-            WCHAR got = out[r*4+x].ci.Char.UnicodeChar;
-            char gc = (got==0||got==L' ') ? ' ' : (char)got;
-            if (gc != want) {
-                fprintf(stderr, "FAIL: reflow 窄视口 顶对齐行%d 列%d: 得 '%c' want '%c'\n", r, x, gc, want);
-                free(out); free_screen(&s); return 1;
-            }
+    int n = screen_reflow_view(&s, 2, 6, 4, out);
+    if (n != 1) { fprintf(stderr, "FAIL: reflow_view 返回 %d（应1）\n", n); free(out); free_screen(&s); return 1; }
+    for (int x = 0; x < 4; x++) {
+        WCHAR got = out[5*4+x].ci.Char.UnicodeChar;
+        char gc = (got==0||got==L' ')?' ':(char)got;
+        char want = "abcd"[x];
+        if (gc != want) {
+            fprintf(stderr, "FAIL: vo=2 视口底部应=abcd 列%d 得 '%c' want '%c'\n", x, gc, want);
+            free(out); free_screen(&s); return 1;
         }
-    }
-    /* 实时区（y3..）必须留空（不被历史覆盖）。 */
-    if (out[3*4].ci.Char.UnicodeChar != L' ' && out[3*4].ci.Char.UnicodeChar != 0) {
-        fprintf(stderr, "FAIL: reflow 不应把历史写到实时区 y3\n");
-        free(out); free_screen(&s); return 1;
     }
     free(out);
-    /* 宽视口 20：折回一行 "abcdefghij" => n=1，顶行 y0 完整。 */
-    RGlyph *out2 = (RGlyph *)calloc(6 * 20, sizeof(RGlyph));
-    int n2 = screen_reflow_view(&s, 0, 6, 20, out2);
-    if (n2 != 1) { fprintf(stderr, "FAIL: reflow 宽视口应返回 1 历史行，得 %d\n", n2); free(out2); free_screen(&s); return 1; }
-    for (int x = 0; x < 10; x++) {
-        WCHAR got = out2[0*20+x].ci.Char.UnicodeChar;
-        if ((char)got != (char)('a'+x)) {
-            fprintf(stderr, "FAIL: reflow 宽视口 顶行列%d: 得 '%c' want '%c'\n", x, (char)got, 'a'+x);
-            free(out2); free_screen(&s); return 1;
+
+    /* vo=0：视口 y5=ij（命令行）、y4=efgh、y3=abcd，y2 空白。 */
+    RGlyph *out2 = (RGlyph *)calloc(6 * 4, sizeof(RGlyph));
+    screen_reflow_view(&s, 0, 6, 4, out2);
+    {
+        const char *r3 = "abcd", *r4 = "efgh", *r5 = "ij";
+        const char *rp[6] = {"","","",r3,r4,r5};
+        for (int y = 3; y < 6; y++) {
+            for (int x = 0; x < 4; x++) {
+                char want = x < (int)strlen(rp[y]) ? rp[y][x] : ' ';
+                WCHAR got = out2[y*4+x].ci.Char.UnicodeChar;
+                char gc = (got==0||got==L' ')?' ':(char)got;
+                if (gc != want) {
+                    fprintf(stderr, "FAIL: vo=0 y%d x%d: 得 '%c' want '%c'\n", y, x, gc, want);
+                    free(out2); free_screen(&s); return 1;
+                }
+            }
         }
+        WCHAR g2 = out2[2*4].ci.Char.UnicodeChar;
+        if (g2 != L' ' && g2 != 0) { fprintf(stderr, "FAIL: vo=0 y2 应空白，得 '%c'\n", (char)g2); free(out2); free_screen(&s); return 1; }
     }
     free(out2);
 
-    /* 软换行合并：两段物理行（第一段 wrap 语义——第一段硬、第二段 wrap=1）
-     * 合并成一条逻辑行。构造新缓冲：历史行 -1 = "xyz" 且其 line_wrap=1（续行），
-     * 历史行 -2 = "ab" wrap=0（起点），合并为 "abxyz"。 */
+    /* 宽视口 20：折 1 行 abcdefghij，vo=0 视口底部 y5=整行。 */
+    RGlyph *out3 = (RGlyph *)calloc(6 * 20, sizeof(RGlyph));
+    screen_reflow_view(&s, 0, 6, 20, out3);
+    for (int x = 0; x < 10; x++) {
+        WCHAR got = out3[5*20+x].ci.Char.UnicodeChar;
+        if ((char)got != (char)('a'+x)) {
+            fprintf(stderr, "FAIL: 宽视口 vo=0 底部 y5 列%d: 得 '%c' want '%c'\n", x, (char)got, 'a'+x);
+            free(out3); free_screen(&s); return 1;
+        }
+    }
+    free(out3);
+
+    /* 软换行合并：历史 -1="xyz"(wrap=1) + -2="ab"(wrap=0) => 逻辑行 "abxyz"，
+     * vo=0 视口底部 y3=abxyz（宽10折1行）。 */
     {
         ScreenBuffer t; memset(&t, 0, sizeof(t));
         alloc_alt(&t, 6, 4);
         t.in_alt_screen = 0;
         t.line_wrap = (unsigned char *)calloc(t.total_lines, 1);
-        /* 滚 2 行产生 2 条历史，再写内容到对应历史物理行。 */
         screen_scroll_up(&t, 0, t.rows-1, 2);
-        int r_new = screen_phys_row(&t, -1);  /* 最新历史（应为续行） */
-        int r_old = screen_phys_row(&t, -2);  /* 更老（起点） */
+        int r_new = screen_phys_row(&t, -1);
+        int r_old = screen_phys_row(&t, -2);
         for (int x=0;x<3;x++) t.lines[r_new].cells[x].Char.UnicodeChar = (WCHAR)('x'+x);
         for (int x=0;x<2;x++) t.lines[r_old].cells[x].Char.UnicodeChar = (WCHAR)('a'+x);
-        t.line_wrap[r_new] = 1;  /* -1 是 -2 的软换行续行 */
+        t.line_wrap[r_new] = 1;
         t.line_wrap[r_old] = 0;
         RGlyph *o = (RGlyph *)calloc(4*10, sizeof(RGlyph));
         int nn = screen_reflow_view(&t, 0, 4, 10, o);
-        /* 合并逻辑行 "abxyz" 5 字符，宽10下折 1 行；两条历史物理行合并为 1 条逻辑
-         * 行 => n=1，顶行 y0 = abxyz。 */
-        if (nn != 1) { fprintf(stderr, "FAIL: 软换行合并应返回 1 历史行，得 %d\n", nn); free(o); free_screen(&t); free_screen(&s); return 1; }
+        if (nn != 1) { fprintf(stderr, "FAIL: 软换行 reflow 返回 %d\n", nn); free(o); free_screen(&t); free_screen(&s); return 1; }
         const char *want = "abxyz";
         for (int x=0;x<5;x++) {
-            WCHAR got = o[0*10+x].ci.Char.UnicodeChar;
+            WCHAR got = o[3*10+x].ci.Char.UnicodeChar;
             if ((char)got != want[x]) {
-                fprintf(stderr, "FAIL: 软换行合并 顶行列%d: 得 '%c' want '%c'\n", x, (char)got, want[x]);
+                fprintf(stderr, "FAIL: 软换行合并 底部列%d: 得 '%c' want '%c'\n", x, (char)got, want[x]);
                 free(o); free_screen(&t); free_screen(&s); return 1;
             }
         }
         free(o); free_screen(&t);
     }
-   
+
     free_screen(&s);
-    printf("  v1.8.47: reflow 历史视图——窄视口折多行、宽视口折回、软换行合并\n");
+    printf("  v1.8.47: reflow 统一视图（历史+可见）——窄折多行/宽折回/软换行合并/vo窗口底部锚定\n");
     return 0;
 }
 

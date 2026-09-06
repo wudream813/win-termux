@@ -2475,34 +2475,26 @@ static void render_split_pane(char *out, int bs, int *posp, int leaf, PaneRect *
         for (int px = 0; px < cols; px++) pos += snprintf(out + pos, bs - pos, " ");
     }
     *posp = pos;
-    /* v1.8.47：向上回看（非 alt 屏、有历史、scroll_offset>0）时，用逻辑行 reflow
-     * 视图作为历史网格数据源：把跨软换行的逻辑行按当前窗格宽重排，窄窗格折成
-     * 多行、宽窗格折回一行。实时屏（vo==0）仍直取 ConPTY 缓冲。 */
+    /* v1.8.47/50：向上回看（非 alt 屏、scroll_offset>0）时，【整窗】统一用逻辑行
+     * reflow 网格——网格含「历史 + 当前可见」按视口宽重排、底部锚定，vo 跳过最新
+     * vo 个显示行，历史与实时内容在同一坐标系、边界连续不重复/不错位。vo==0（看
+     * 实时屏）仍直取 ConPTY 缓冲。 */
     int use_rf = (pane->scroll_offset > 0 && !s->in_alt_screen && s->line_wrap != NULL);
     if (use_rf) {
         RGlyph *grid = (RGlyph *)pane->rf_grid;
-        /* 网格行步长必须【恒等于】当前 cols：screen_reflow_view 按 cols 步长写、
-         * render_split_cell 按 rf_cols 步长读。只要 rows/cols 与缓存不一致（分屏
-         * 切换/拖条会让窗格变窄——新 cols < 旧 rf_cols），就必须按 rows×cols 重新
-         * 分配，否则读写步长错位、历史显示成乱码（v1.8.47 回归）。 */
+        /* 网格尺寸恒等于 rows×cols（读写同一步长），任何尺寸变化都重分配。 */
         if (pane->rf_rows != rows || pane->rf_cols != cols || !grid) {
             RGlyph *ng = (RGlyph *)realloc(grid, (size_t)rows * cols * sizeof(RGlyph));
             if (ng) grid = ng;
         }
         if (grid) {
             pane->rf_grid = grid;
-            pane->rf_rows = rows;   /* 记录当前网格尺寸（= 读时步长） */
+            pane->rf_rows = rows;
             pane->rf_cols = cols;
-            int need = rows * cols;
-            for (int i = 0; i < need; i++) {
-                grid[i].ci.Char.UnicodeChar = L' ';
-                grid[i].ci.Attributes = 0x07;
-                grid[i].fg = RGB565_WHITE; grid[i].bg = RGB565_BLACK; grid[i].v = 0;
-            }
-            /* 只对【历史显示行】reflow；返回视口顶部连续的历史行数 n——顶部 n 行
-             * 用 reflow 网格，其下 rows-n 行是实时屏（回落到 ConPTY 缓冲）。 */
-            pane->rf_n = screen_reflow_view(s, pane->scroll_offset, rows, cols, grid);
+            /* 整窗 reflow：返回 1 表示已填充整个视口。 */
+            screen_reflow_view(s, pane->scroll_offset, rows, cols, grid);
             pane->rf_valid = 1;
+            pane->rf_n = rows;
         } else {
             use_rf = 0;
             pane->rf_valid = 0;
@@ -2515,8 +2507,8 @@ static void render_split_pane(char *out, int bs, int *posp, int leaf, PaneRect *
     }
 
     for (int py = 0; py < rows; py++) {
-        /* py < rf_n 的顶部行是历史 reflow；其下是实时屏（use_rf_row=0）。 */
-        int use_rf_row = use_rf && (py < pane->rf_n);
+        /* vo>0 整窗走 reflow 网格；vo==0 走实时 ConPTY 缓冲。 */
+        int use_rf_row = use_rf;
         for (int px = 0; px < cols; px++) {
             int rr = rc->r0 + py, cc = rc->c0 + px;
             render_split_cell(out, bs, posp, s, pane, leaf, px, py, rr, cc, use_rf_row);

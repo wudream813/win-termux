@@ -182,8 +182,10 @@ void do_scroll(int d) {
     if (g_mux.active_pane < 0 || g_mux.active_pane >= g_mux.pane_count) return;
     Pane *p = &g_mux.panes[g_mux.active_pane];
     if (!p->active || p->screen.in_alt_screen) return;
-    int mx = p->screen.hist_lines;
-    if (mx <= 0) { p->scroll_offset = 0; return; }
+    /* scroll_offset 是「跳过最新多少个【显示行】」。reflow 后窄视口里历史显示行
+     * 数可多于物理行，故上限放宽到 hist_lines + rows（滚过头即显示空白顶部）。 */
+    int mx = p->screen.hist_lines + p->screen.rows;
+    if (p->screen.hist_lines <= 0) { p->scroll_offset = 0; return; }
     p->scroll_offset += d;
     if (p->scroll_offset > mx) p->scroll_offset = mx;
     if (p->scroll_offset < 0) p->scroll_offset = 0;
