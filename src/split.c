@@ -436,6 +436,30 @@ int split_split_active(int dir, int new_pane) {
     if (root < 0) return 0;
     int leaf = split_find_leaf(root, g_mux.active_pane);
     if (leaf < 0) return 0;
+
+    /* 空间不足检查：算出活动窗格当前矩形，若按该方向切分后两边放不下最小尺寸
+     * （左右切需要 2*SPLIT_MIN_COLS+1 列、上下切需要 2*SPLIT_MIN_ROWS+1 行），
+     * 不进行分割并提示（v1.8.43：窗格太小时再分割应警告、且最终不分）。 */
+    {
+        PaneRect rects[MAX_PANES];
+        for (int i = 0; i < MAX_PANES; i++) rects[i].valid = 0;
+        split_layout(root, 0, 0, g_mux.host_cols, g_mux.host_rows, g_split_nodes, rects);
+        int ap = g_mux.active_pane;
+        if (rects[ap].valid) {
+            if (dir == SPLIT_V) {
+                if (rects[ap].cols < SPLIT_MIN_COLS * 2 + 1) {
+                    toast_show("窗格太窄，无法左右切分", 2200);
+                    return 0;
+                }
+            } else {
+                if (rects[ap].rows < SPLIT_MIN_ROWS * 2 + 1) {
+                    toast_show("窗格太矮，无法上下切分", 2200);
+                    return 0;
+                }
+            }
+        }
+    }
+
     /* 标记新 pane 为分屏子窗格（不单独出现在标签栏）。 */
     g_mux.panes[new_pane].is_split_child = 1;
     /* split_do 把活动叶子【原地】变成内部节点（节点下标不变），整棵树的根索引

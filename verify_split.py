@@ -182,6 +182,7 @@ int main(void) {
     g_mux.pane_count = 8;
     for (int i = 0; i < 8; i++) { g_mux.panes[i].active = 1; g_mux.panes[i].is_split_child = 0; }
     g_mux.active_pane = 0;
+    g_mux.host_cols = 120; g_mux.host_rows = 30;   /* v1.8.43：split_split_active 空间检查用 */
     split_init_tab(0);
     /* 第一次：0 -> 0|1，焦点到新窗格 1。 */
     ck("第1次分屏成功", split_split_active(SPLIT_V, 1) == 1);
@@ -205,6 +206,25 @@ int main(void) {
         ck("4 个窗格都有有效矩形", rs[0].valid && rs[1].valid && rs[2].valid && rs[3].valid);
         ck("窗格外接宽之和+边框=总宽", rs[0].ocols+rs[1].ocols+rs[2].ocols+rs[3].ocols+3 == 120);
         ck("内容=外接(无内缩)", rs[0].cols==rs[0].ocols && rs[3].c0==rs[3].oc0 && rs[0].c0==0);
+    }
+
+    /* ---- v1.8.43：窗格太小再分割应拒绝（返回 0，不产生新窗格） ---- */
+    {
+        split_reset();
+        g_mux.pane_count = 8;
+        for (int i = 0; i < 8; i++) { g_mux.panes[i].active = 1; g_mux.panes[i].is_split_child = 0; }
+        g_mux.active_pane = 0;
+        split_init_tab(0);
+        /* 终端很窄（6 列）：左右切分（需 2*4+1=9 列）应失败。 */
+        g_mux.host_cols = 6; g_mux.host_rows = 30;
+        ck("窄到放不下左右切分 -> 拒绝", split_split_active(SPLIT_V, 1) == 0);
+        ck("拒绝后 1 不是子窗格", g_mux.panes[1].is_split_child == 0);
+        /* 终端很矮（3 行）：上下切分（需 2*2+1=5 行）应失败。 */
+        g_mux.host_cols = 80; g_mux.host_rows = 3;
+        ck("矮到放不下上下切分 -> 拒绝", split_split_active(SPLIT_H, 1) == 0);
+        /* 空间足够时正常切分。 */
+        g_mux.host_cols = 80; g_mux.host_rows = 24;
+        ck("空间足够 -> 左右切分成功", split_split_active(SPLIT_V, 1) == 1);
     }
 
     if (failures) { printf("\n%d FAILURE(S)\n", failures); return 1; }
@@ -258,7 +278,9 @@ def main() -> int:
             f.write(
                 '#include "common.h"\n#include "types.h"\n'
                 "MuxState g_mux;\n"
-                "int g_split_zoom_dummy;\n")
+                "int g_split_zoom_dummy;\n"
+                "/* v1.8.43：split_split_active 空间不足时调用 toast_show，harness 提供空实现。 */\n"
+                "void toast_show(const char *msg, unsigned int ms){(void)msg;(void)ms;}\n")
         open(h, "w", encoding="utf-8").write(HARNESS)
         cp = subprocess.run(
             ["gcc", "-O1", "-Wall", "-Wextra", "-Werror",

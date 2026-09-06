@@ -14,6 +14,15 @@ MuxState g_mux;
 int g_pop_anchor_x = -1;
 int g_mouse_x = -1, g_mouse_y = -1;
 int g_mouse_prev_in_tabbar = 0;
+char g_toast_msg[96] = {0};
+DWORD64 g_toast_until = 0;
+void toast_show(const char *msg, unsigned int ms) {
+    if (!msg) { g_toast_until = 0; return; }
+    strncpy(g_toast_msg, msg, sizeof(g_toast_msg) - 1);
+    g_toast_msg[sizeof(g_toast_msg) - 1] = 0;
+    g_toast_until = GetTickCount64() + ms;
+    g_mux.needs_redraw = 1;
+}
 WCHAR g_high_surrogate = 0;
 WCHAR g_orig_title[256] = {0};
 
@@ -193,6 +202,13 @@ static void handle_input(void) {
                 else if (rec[i].EventType == MOUSE_EVENT) handle_mouse(&rec[i].Event.MouseEvent);
                 else if (rec[i].EventType == WINDOW_BUFFER_SIZE_EVENT) handle_resize();
             }
+        }
+
+        // toast 到期自动消失：到点触发一次重绘让 toast 行被清掉。
+        if (g_toast_until && GetTickCount64() >= g_toast_until) {
+            g_toast_until = 0;
+            g_toast_msg[0] = 0;
+            g_mux.needs_redraw = 1;
         }
 
         // v1.1.5: hover preview 1.5s timer check

@@ -192,6 +192,12 @@ extern int g_hover_settings_cmd_active;
 extern int g_sb_dragging;
 extern int g_sb_grab_offset;
 
+/* 瞬时警告提示（toast）：分屏空间不足等操作失败时，在屏幕底部中央短暂显示一条
+ * 黄字消息。g_toast_until 为 GetTickCount64() 过期时刻（0=无提示）。 */
+extern char g_toast_msg[96];
+extern DWORD64 g_toast_until;
+void toast_show(const char *msg, unsigned int ms);
+
 // Copy Mode & Selection
 extern int g_copy_mode;
 extern int g_copy_sel_active;

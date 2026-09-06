@@ -111,8 +111,8 @@ void draw_tab_bar(char *out, int bs, int *posp) {
         }
         if (an < 1) continue;
         int multi = (an >= 2);
-        /* 宽度预算：单窗格 = '[' + nm + ' ×]'（nm宽 + 3）；
-         * 分屏 = '[' + Σ(nm宽+1 含×) + (an-1 个段间空格) + ']'。 */
+        /* 宽度预算：单窗格 = '[' + nm + '×]'（nm宽 + 2，标题与 × 间无空格）；
+         * 分屏 = '[' + Σ(nm宽+1 含×) + (an-1 个段间空格) + ']'（段间空格）。 */
         int gw = 0;
         for (int gi = 0; gi < an; gi++) {
             int i = alive[gi];
@@ -120,11 +120,22 @@ void draw_tab_bar(char *out, int bs, int *posp) {
             int w = utf8_cols(nm, (int)strlen(nm)) + 1;   /* nm + × */
             gw += w + (multi && gi + 1 < an ? 1 : 0);     /* 段间空格 */
         }
-        gw += multi ? 2 : 3;   /* 分屏: [ ]；单窗格: [ + 标题与×间空格 + ] = 3 */
-        if (col + gw + 4 + 4 > g_mux.host_cols) { col = g_mux.host_cols; break; }
+        gw += multi ? 2 : 2;   /* 两种都只有 [ 与 ] 两格（单窗格标题与×间不再加空格） */
+        /* 标签栏右端要常驻 [+] 与 [*] 两个按钮（各 3 列）+ 间隔，先预留这段空间。
+         * 当前标签组连同预留空间装不下时就停止加入后续标签——col 保持在已画完的
+         * 位置，不能强行置成 host_cols，否则会把 [+]/[*] 的位置判定挤乱，表现为
+         * 「标签太多时标签/按钮位置跳变」。装不下的标签这一帧不画（其 tab_info 不
+         * 登记，点击自然落空）。 */
+        int reserved = 1 + 3 + 1 + 3 + 1;   /* 间隔 + [+] + 间隔 + [*] + 余量 */
+        if (col + gw + reserved > g_mux.host_cols) break;
 
-        /* 左括号（单/分屏都有）。 */
-        pos += snprintf(out + pos, bs - pos, "%s\x1b[038;2;139;148;158m[", dimbg);
+        /* 左括号。单窗格且该窗格激活时，整个标签（含括号）用激活底色 + 白粗体；
+         * 单窗格未激活用暗色底 + 灰；分屏组括号统一用暗色底 + 灰（只高亮活动段）。 */
+        int single_act = (!multi && alive[0] == g_mux.active_pane);
+        if (single_act)
+            pos += snprintf(out + pos, bs - pos, "%s" TAB_ACT_FG "\x1b[1m[", actbg);
+        else
+            pos += snprintf(out + pos, bs - pos, "%s\x1b[038;2;139;148;158m[", dimbg);
         int group_start = col;
         col++;
         for (int gi = 0; gi < an; gi++) {
@@ -141,9 +152,9 @@ void draw_tab_bar(char *out, int bs, int *posp) {
             g_mux.tab_info[g_mux.tab_count].start_col = first ? group_start : col;
             pos += snprintf(out + pos, bs - pos, "%s", nm);
             col += nmc;
-            /* 单窗格：标题与 × 之间留 1 空格（[cmd ×]）；分屏：段间用空格分隔
-             * （[cmd× cmd×]），段内标题与 × 之间不留空格。 */
-            if (!multi) { pos += snprintf(out + pos, bs - pos, " "); col++; }
+            /* 单窗格与分屏段内，标题与 × 之间都不留空格（单窗格 [cmd×]、分屏
+             * [cmd× cmd×]）；分屏的空格只在段与段之间。 */
+            (void)multi;
             /* × 热区：紧跟的一格。 */
             int hovering = (!popup_open && g_mouse_y == 0 && g_mouse_x == col);
             if (hovering)
@@ -165,8 +176,12 @@ void draw_tab_bar(char *out, int bs, int *posp) {
             }
             g_mux.tab_count++;
         }
-        /* 右括号：并入最后一段（点右括号=切到最后一个窗格）。 */
-        pos += snprintf(out + pos, bs - pos, "%s\x1b[038;2;139;148;158m]", dimbg);
+        /* 右括号：并入最后一段（点右括号=切到最后一个窗格）。单窗格激活时括号
+         * 也用激活底色 + 白粗体（整框高亮）；否则暗色底 + 灰。 */
+        if (single_act)
+            pos += snprintf(out + pos, bs - pos, "%s" TAB_ACT_FG "\x1b[1m]", actbg);
+        else
+            pos += snprintf(out + pos, bs - pos, "%s\x1b[038;2;139;148;158m]", dimbg);
         col++;
         g_mux.tab_info[g_mux.tab_count - 1].end_col = col;
     }
@@ -693,12 +708,12 @@ static void render_settings_keys(char *out, int bs, int *posp, int host_rows, in
         main_left);
     {
         /* 表头与数据列严格对齐：列起点（相对 main_left，0 基）：
-         * 标记 0..2、动作名 3..18(宽16)、说明 19..34(宽16)、当前键位 35..54(宽20)、
-         * [前缀] 56、[改] 64、[复位] 69。 */
+         * 标记 0..2、动作名 3..14(宽12)、说明 15..38(宽24)、当前键位 39..58(宽20)、
+         * [前缀] 56、[改] 64、[复位] 69（按钮用绝对列，与表格列无关）。 */
         int hc = 0;
         pos += snprintf(out + pos, bs - pos, "\x1b[5;%dH\x1b[038;2;121;192;255;1m", main_left);
-        append_padded_utf8(out, bs, &pos, &hc, "   动作名", 19);
-        append_padded_utf8(out, bs, &pos, &hc, "说明", 16);
+        append_padded_utf8(out, bs, &pos, &hc, "   动作名", 15);
+        append_padded_utf8(out, bs, &pos, &hc, "说明", 24);
         append_padded_utf8(out, bs, &pos, &hc, "当前键位", 20);
         pos += snprintf(out + pos, bs - pos, "前缀   操作\x1b[0m");
     }
@@ -742,12 +757,15 @@ static void render_settings_keys(char *out, int bs, int *posp, int host_rows, in
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s %s ",
                         row, main_left, settings_row_style(selected, hovered), selected ? "▶" : " ");
         cols += 3;
-        /* 列宽：动作名 16 + 说明 16 + 当前键位 20。键位组合可能较长（如
-         * "Ctrl+B Shift+tab"=18 列、用户自定义 "Ctrl+Alt+Shift+..."），combo 列
-         * 过窄会把长组合直接截断；动作名/说明从 19 收到 16（中文说明最长约 14 列）
-         * 腾出空间，右侧 [前缀]/[改]/[复位] 按钮列位置（56/64/69）不变。 */
-        append_padded_utf8(out, bs, &pos, &cols, name, 16);
-        append_padded_utf8(out, bs, &pos, &cols, label, 16);
+        /* 列宽：动作名 12 + 说明 24 + 当前键位 20。动作名是英文短标识
+         * （如 split_vertical / new_pane，最长约 12 列）；说明是中文，过窄会被直接
+         * 截断（v1.8.43：说明列从 16 加宽到 24，最长中文说明约 22 列）。键位组合
+         * 可能较长（如 "Ctrl+B Shift+tab"=18 列），combo 列保持 20。三列起点相对
+         * main_left 的偏移：标记 0..2、动作名 3..14、说明 15..38、键位 39..58；
+         * 右侧 [前缀]/[改]/[复位] 按钮列位置（56/64/69）不变（按钮用绝对列定位，
+         * 与表格列宽互不影响）。 */
+        append_padded_utf8(out, bs, &pos, &cols, name, 12);
+        append_padded_utf8(out, bs, &pos, &cols, label, 24);
         pos += snprintf(out + pos, bs - pos, "%s", capturing ? "\x1b[038;2;210;153;034;1m" : "");
         append_padded_utf8(out, bs, &pos, &cols, combo, 20);
         pos += snprintf(out + pos, bs - pos, "\x1b[0m");
@@ -2372,6 +2390,12 @@ static void render_split_cell(char *out, int bs, int *posp, ScreenBuffer *s,
      * 空行、缩进、清屏区都是「空格 + 16 色黑底」，刷成深灰面板色会在黑色终端里
      * 冒出奇怪的深灰块。resize 新扩出的未填充区域由 render_split 的整行面板底色
      * 铺底覆盖（窗格矩形外）+ shell 随后重绘（窗格矩形内），不在逐格渲染时改色。 */
+    /* 必须【先】用 CUP 定位到本格，【再】发 SGR + 字符。若先设颜色再定位，当本格
+     * 背景与上一格不同（典型：窗格左缘第一格、或空格/黑底格），这段 SGR 的背景色
+     * 会把「上一格末列 → 本格 CUP 位置」之间的间隙格染成当前背景——分屏下窗格左缘
+     * （c0>0）这道间隙正好是窗格最左一列，表现为「移动窗格后每个窗格最左侧有一条
+     * 浅背景」。先定位后设色，SGR 只作用于定位点之后的本格，不回染左侧间隙。 */
+    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH", rr + 2, cc + 1);
     const char *ul = (attr & COMMON_LVB_UNDERSCORE) ? ";4" : "";
     if (fgv || bgv) {
         int fr, fg2, fb; rgb565_split(frgb, &fr, &fg2, &fb);
@@ -2389,8 +2413,6 @@ static void render_split_cell(char *out, int bs, int *posp, ScreenBuffer *s,
         else        pos += snprintf(out + pos, bs - pos, "\x1b[0%s;%d;%dm", ul, 30 + m8[fg & 7], 40 + m8[bg & 7]);
     }
     (void)active;
-    /* 定位到内容区绝对坐标（终端行/列，1 基）。 */
-    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH", rr + 2, cc + 1);
 
     /* 宽字符 emoji 代理对合成（与整屏路径一致）。 */
     if (wc >= 0xD800 && wc <= 0xDBFF && x + 1 < (ar >= 0 ? s->cols : s->cols)) {
@@ -2833,6 +2855,24 @@ void render_screen(void) {
         render_rename_box(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
     } else if (g_mux.custom_cmd_mode) {
         render_custom_cmd_box(out, bs, &pos, g_mux.host_rows, g_mux.host_cols);
+    }
+
+    /* 瞬时警告 toast：底部中央黄字深底，过期（或消息为空）则不画。 */
+    /* GetTickCount64() 单调递增，until 为绝对过期时刻；未过期则 now < until。 */
+    DWORD64 g_now_tick = GetTickCount64();
+    if (g_toast_msg[0] && g_toast_until && g_now_tick < g_toast_until) {
+        int tw = utf8_cols(g_toast_msg, (int)strlen(g_toast_msg));
+        int box_w = tw + 4;
+        int trow = g_mux.host_rows + 1;           /* 最后一行（终端 1 基） */
+        int tcol = (g_mux.host_cols - box_w) / 2 + 1;
+        if (tcol < 1) tcol = 1;
+        pos += snprintf(out + pos, bs - pos,
+                        "\x1b[%d;%dH\x1b[048;2;033;038;045m\x1b[038;2;210;153;034;1m  %s  \x1b[0m",
+                        trow, tcol, g_toast_msg);
+    } else if (g_toast_until) {
+        g_toast_until = 0;
+        g_toast_msg[0] = 0;
+        g_mux.needs_redraw = 1;
     }
 
     pos += snprintf(out + pos, bs - pos, "\x1b[0m\x1b[1;1H");

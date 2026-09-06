@@ -252,6 +252,52 @@ static char at_rel(ScreenBuffer *s, int rel) {
     if (pr < 0 || !s->lines[pr].cells) return '?';
     return (char)s->lines[pr].cells[0].Char.UnicodeChar;
 }
+/* v1.8.43: 宽窗格跑出历史后【收窄宽度】，历史必须逐行完整保留、内容不错位。 */
+static int test_resize_narrow_keeps_history(void) {
+    ScreenBuffer s;
+    memset(&s, 0, sizeof(s));
+    g_scrollback_lines = 1000;
+    alloc_alt(&s, 80, 10);
+    s.in_alt_screen = 0;
+    /* 写 10 行可见内容 A..J（可见行 0..9 各一行）。 */
+    for (int y = 0; y < 10; y++)
+        screen_write_cell(&s, y, 0, (WCHAR)('A' + y), 0x07);
+    /* 再滚 10 行、每行在新底行写 K..T，制造 10 行历史（A..J 进历史）。 */
+    for (int i = 0; i < 10; i++) {
+        screen_scroll_up(&s, 0, s.rows - 1, 1);
+        screen_write_cell(&s, s.rows - 1, 0, (WCHAR)('K' + i), 0x07);
+    }
+    if (s.hist_lines != 10) {
+        fprintf(stderr, "FAIL: 收窄前 hist 应为 10，实际 %d\n", s.hist_lines);
+        free_screen(&s); return 1;
+    }
+    /* 收窄宽度 80 -> 20（高度不变）。 */
+    assert(screen_resize(&s, 20, 10) == 1);
+    if (s.hist_lines != 10) {
+        fprintf(stderr, "FAIL: 收窄宽度后 hist 应仍为 10，实际 %d\n", s.hist_lines);
+        free_screen(&s); return 1;
+    }
+    /* 历史行内容（首列标记）必须与收窄前一致：可见 0..9 = K..T，历史 -1=J .. -10=A。 */
+    for (int y = 0; y < 10; y++) {
+        char want = (char)('K' + y);   /* 可见行 y 写的是 K+y（K..T） */
+        if (at_rel(&s, y) != want) {
+            fprintf(stderr, "FAIL: 收窄后可见行 %d 应为 %c，实际 %c\n", y, want, at_rel(&s, y));
+            free_screen(&s); return 1;
+        }
+    }
+    for (int h = 1; h <= 10; h++) {
+        char want = (char)('J' - h + 1);   /* 历史 -1=J,-2=I,...,-10=A */
+        if (at_rel(&s, -h) != want) {
+            fprintf(stderr, "FAIL: 收窄后历史 -%d 应为 %c，实际 %c（历史错位/丢失）\n",
+                    h, want, at_rel(&s, -h));
+            free_screen(&s); return 1;
+        }
+    }
+    free_screen(&s);
+    printf("  v1.8.43: 宽窗格 80 列收窄到 20 列，10 行历史逐行完整保留\n");
+    return 0;
+}
+
 static int test_resize_shrink_keeps_history(void) {
     ScreenBuffer s;
     memset(&s, 0, sizeof(s));
@@ -315,6 +361,7 @@ static int test_resize_shrink_keeps_history(void) {
 int main(void) {
     if (test_alt_resize_truecolor()) return 1;
     if (test_search_cur_after_drop()) return 1;
+    if (test_resize_narrow_keeps_history()) return 1;
     if (test_resize_shrink_keeps_history()) return 1;
     printf("  [OK] screen.c 状态迁移验证通过（alt 屏真彩色迁移 + 搜索当前项落点 + resize 保历史）。\n");
     return 0;
