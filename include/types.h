@@ -96,7 +96,7 @@ typedef struct {
     /* v1.8.47：历史 reflow 视图缓存（渲染历史滚动时，逻辑行按当前窗格宽重排后
      * 的可见网格）。rf_rows/rf_cols 为网格尺寸，rf_grid 行主序 RGlyph；仅在向上
      * 回看（scroll_offset>0 且非 alt 屏）时有效，每帧由渲染侧重建。 */
-    int rf_rows, rf_cols, rf_valid;
+    int rf_rows, rf_cols, rf_valid, rf_n;  /* rf_n=视口顶部连续历史(reflow)行数 */
     void *rf_grid;
     WCHAR input_history[256];
     int input_history_len;

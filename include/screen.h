@@ -35,15 +35,6 @@ typedef struct {
     unsigned char v;
 } RGlyph;
 
-/* screen_reflow_view 的写入上下文（行主序缓冲 + 自底向上落位计数）。 */
-typedef struct {
-    RGlyph *out;
-    int out_rows;
-    int width;
-    int emitted;
-    int stop;
-} ScreenRfCtx;
-
 /* 生成滚动历史的 reflow 视图：把物理行按软换行标志合并成逻辑行、按 width 重新
  * 折行，返回向上回看 vo 个显示行时、视口 rows×width 的内容到 out（行主序）。
  * 返回有效行数；alt 屏/无 wrap 标志时返回 0（调用方回退到物理行直取）。 */

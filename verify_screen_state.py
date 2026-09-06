@@ -53,8 +53,8 @@ for sig in ("static void line_free(",
             "void cell_truecolor(",
             "void screen_mark_softwrap(",
             "static int reflow_glyph_w(",
-            "static int reflow_emit_rows(",
-            "static int reflow_store_cb(",
+            "static int reflow_append_rows(",
+            "static int reflow_acc_cb(",
             "int screen_reflow_view("):
     PIECES.append(extract_func(src, sig))
 
@@ -124,12 +124,9 @@ typedef struct {
 } RGlyph;
 
 typedef struct {
-    RGlyph *out;
-    int out_rows;
-    int width;
-    int emitted;
-    int stop;
-} ScreenRfCtx;
+    RGlyph *buf;
+    int cap, count, width;
+} RfAcc;
 
 /* reflow 片段里宽字符判定：stub 只给 CJK/全角常见区间，足够测试（ASCII 窄）。 */
 static int is_wide_cp(unsigned int cp) {
@@ -495,37 +492,39 @@ static int test_reflow_view(void) {
     screen_scroll_up(&s, 0, s.rows - 1, 1);
     if (s.hist_lines < 1) { fprintf(stderr, "FAIL: reflow 准备 hist<1\n"); return 1; }
 
-    /* 窄视口宽 4：逻辑行 10 字符应折成 3 条显示行（abcd/efgh/ij）。
-     * vo=0 看视口底部 6 行；历史逻辑行在视口最底显示行之下是「更老」，实际
-     * 视口底部对齐最新（空白可见行），所以这条历史在视口里的位置取决于其在
-     * 显示流中距离底部的行数。我们改用 vo 让它出现在视口：逻辑行折 3 行，
-     * 其最新显示行（ij）在视口最底部时 vo 使得…… 直接取 vo=6 把视口对准历史。
-     */
+    /* 窄视口宽 4：历史里的逻辑行 10 字符应折成 3 条显示行（abcd/efgh/ij）。
+     * screen_reflow_view 只扫描历史、把历史显示行【顶对齐】填入 out，返回历史
+     * 行数 n。vo=0 时该逻辑行折 3 行 => n=3，out y0..y2 = abcd/efgh/ij；
+     * y3..y5 留空（由调用方回落实时屏）。 */
     RGlyph *out = (RGlyph *)calloc(6 * 4, sizeof(RGlyph));
-    int n = screen_reflow_view(&s, 6, 6, 4, out);
-    if (n <= 0) { fprintf(stderr, "FAIL: reflow_view 返回 %d\n", n); free(out); free_screen(&s); return 1; }
-    /* 该逻辑行 3 条显示行应出现在输出底部 3 行（行3=abcd, 行4=efgh, 行5=ij）。 */
+    int n = screen_reflow_view(&s, 0, 6, 4, out);
+    if (n != 3) { fprintf(stderr, "FAIL: reflow_view 窄视口应返回 3 历史行，得 %d\n", n); free(out); free_screen(&s); return 1; }
     const char *exp[] = {"abcd", "efgh", "ij"};
     for (int r = 0; r < 3; r++) {
-        int oy = 3 + r;
         for (int x = 0; x < 4; x++) {
             char want = x < (int)strlen(exp[r]) ? exp[r][x] : ' ';
-            WCHAR got = out[oy*4+x].ci.Char.UnicodeChar;
+            WCHAR got = out[r*4+x].ci.Char.UnicodeChar;
             char gc = (got==0||got==L' ') ? ' ' : (char)got;
             if (gc != want) {
-                fprintf(stderr, "FAIL: reflow 窄视口 行%d 列%d: 得 '%c' want '%c'\n", oy, x, gc, want);
+                fprintf(stderr, "FAIL: reflow 窄视口 顶对齐行%d 列%d: 得 '%c' want '%c'\n", r, x, gc, want);
                 free(out); free_screen(&s); return 1;
             }
         }
     }
+    /* 实时区（y3..）必须留空（不被历史覆盖）。 */
+    if (out[3*4].ci.Char.UnicodeChar != L' ' && out[3*4].ci.Char.UnicodeChar != 0) {
+        fprintf(stderr, "FAIL: reflow 不应把历史写到实时区 y3\n");
+        free(out); free_screen(&s); return 1;
+    }
     free(out);
-    /* 宽视口 20：折回一行 "abcdefghij"。 */
+    /* 宽视口 20：折回一行 "abcdefghij" => n=1，顶行 y0 完整。 */
     RGlyph *out2 = (RGlyph *)calloc(6 * 20, sizeof(RGlyph));
-    screen_reflow_view(&s, 6, 6, 20, out2);
+    int n2 = screen_reflow_view(&s, 0, 6, 20, out2);
+    if (n2 != 1) { fprintf(stderr, "FAIL: reflow 宽视口应返回 1 历史行，得 %d\n", n2); free(out2); free_screen(&s); return 1; }
     for (int x = 0; x < 10; x++) {
-        WCHAR got = out2[5*20+x].ci.Char.UnicodeChar;
+        WCHAR got = out2[0*20+x].ci.Char.UnicodeChar;
         if ((char)got != (char)('a'+x)) {
-            fprintf(stderr, "FAIL: reflow 宽视口 底行列%d: 得 '%c' want '%c'\n", x, (char)got, 'a'+x);
+            fprintf(stderr, "FAIL: reflow 宽视口 顶行列%d: 得 '%c' want '%c'\n", x, (char)got, 'a'+x);
             free(out2); free_screen(&s); return 1;
         }
     }
@@ -548,13 +547,15 @@ static int test_reflow_view(void) {
         t.line_wrap[r_new] = 1;  /* -1 是 -2 的软换行续行 */
         t.line_wrap[r_old] = 0;
         RGlyph *o = (RGlyph *)calloc(4*10, sizeof(RGlyph));
-        screen_reflow_view(&t, 4, 4, 10, o);
-        /* 合并逻辑行 "abxyz" 5 字符，折在宽10下 1 行；位于视口底部行。 */
+        int nn = screen_reflow_view(&t, 0, 4, 10, o);
+        /* 合并逻辑行 "abxyz" 5 字符，宽10下折 1 行；两条历史物理行合并为 1 条逻辑
+         * 行 => n=1，顶行 y0 = abxyz。 */
+        if (nn != 1) { fprintf(stderr, "FAIL: 软换行合并应返回 1 历史行，得 %d\n", nn); free(o); free_screen(&t); free_screen(&s); return 1; }
         const char *want = "abxyz";
         for (int x=0;x<5;x++) {
-            WCHAR got = o[3*10+x].ci.Char.UnicodeChar;
+            WCHAR got = o[0*10+x].ci.Char.UnicodeChar;
             if ((char)got != want[x]) {
-                fprintf(stderr, "FAIL: 软换行合并 底行列%d: 得 '%c' want '%c'\n", x, (char)got, want[x]);
+                fprintf(stderr, "FAIL: 软换行合并 顶行列%d: 得 '%c' want '%c'\n", x, (char)got, want[x]);
                 free(o); free_screen(&t); free_screen(&s); return 1;
             }
         }

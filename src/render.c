@@ -2499,21 +2499,27 @@ static void render_split_pane(char *out, int bs, int *posp, int leaf, PaneRect *
                 grid[i].ci.Attributes = 0x07;
                 grid[i].fg = RGB565_WHITE; grid[i].bg = RGB565_BLACK; grid[i].v = 0;
             }
-            screen_reflow_view(s, pane->scroll_offset, rows, cols, grid);
+            /* 只对【历史显示行】reflow；返回视口顶部连续的历史行数 n——顶部 n 行
+             * 用 reflow 网格，其下 rows-n 行是实时屏（回落到 ConPTY 缓冲）。 */
+            pane->rf_n = screen_reflow_view(s, pane->scroll_offset, rows, cols, grid);
             pane->rf_valid = 1;
         } else {
             use_rf = 0;
             pane->rf_valid = 0;
             pane->rf_rows = pane->rf_cols = 0;
+            pane->rf_n = 0;
         }
     } else {
         pane->rf_valid = 0;
+        pane->rf_n = 0;
     }
 
     for (int py = 0; py < rows; py++) {
+        /* py < rf_n 的顶部行是历史 reflow；其下是实时屏（use_rf_row=0）。 */
+        int use_rf_row = use_rf && (py < pane->rf_n);
         for (int px = 0; px < cols; px++) {
             int rr = rc->r0 + py, cc = rc->c0 + px;
-            render_split_cell(out, bs, posp, s, pane, leaf, px, py, rr, cc, use_rf);
+            render_split_cell(out, bs, posp, s, pane, leaf, px, py, rr, cc, use_rf_row);
             pos = *posp;
         }
     }

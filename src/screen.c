@@ -701,162 +701,157 @@ void cell_truecolor(ScreenBuffer *s, int row, int col, int ar, WORD *out_f, WORD
  * 渲染滚动历史时，把相邻物理行按 wrap 标志合并回逻辑行，再按【当前视口宽】重新
  * 折行：窄视口把一条长逻辑行折成多行完整显示、拖宽折回一行，内容不丢不重。
  *
- * screen_reflow_view：生成以「距最新（屏幕底部）第 vo+rows .. vo+1 个显示行」为
- * 目标的 rows 条显示行，写入 out[y][x]（含字符/16色属性/真彩）。自底向上扫描物理
- * 行并按需重排逻辑行，只处理覆盖目标视口所需的逻辑行段（时间与总历史量无关）。
- *
- * 返回实际有效行数（可能小于 rows——历史不够时顶部行留空，由调用方铺底色）。 */
+ * 实现（正序、追加式，避免倒序/游标底填的行号错误）：
+ *   1) 自老→新扫描物理行（最老历史 -hist_lines 到最新可见 rows-1），按 line_wrap
+ *      把续行并入当前逻辑行（段内正序、段间尾接），硬换行结束一条逻辑行；
+ *   2) 每条逻辑行按视口宽宽字符感知折行，折出的显示行【正向追加】到动态数组
+ *      vrows（老在上、新在下）；
+ *   3) 向上回看 vo：视口显示显示行 [total-vo-rows .. total-vo-1]（total-vo-1 为
+ *      视口底部 = 距今 vo 个显示行之前的那行），拷入 out[y][x]。
+ * 只扫描到「视口底部对应逻辑行」即可停止（更老内容不入视口），时间与视口大小
+ * 线性相关、与总历史量无关。 */
 
-/* 单元宽度：高代理/宽 BMP=2，低代理/次格=0，窄=1（与 loghist 一致）。 */
 static int reflow_glyph_w(WCHAR ch) {
-    if (ch >= 0xDC00 && ch <= 0xDFFF) return 0;
-    if (ch >= 0xD800 && ch <= 0xDBFF) return 2;
-    if (ch == 0) return 0;
+    if (ch >= 0xDC00 && ch <= 0xDFFF) return 0;   /* emoji 低代理（次格） */
+    if (ch >= 0xD800 && ch <= 0xDBFF) return 2;   /* emoji 高代理（主格） */
+    if (ch == 0) return 0;                          /* BMP 宽字符次格占位 */
     return is_wide_cp((unsigned int)ch) ? 2 : 1;
 }
 
-/* 把一条逻辑行（g[0..n-1]，已按逻辑顺序）按宽度 w 重排，生成 display rows；
- * 用一个 emit 回调把每条显示行交给调用方。cb 返回非 0 时停止（目标视口已填满）。 */
-static int reflow_emit_rows(const RGlyph *g, int n, int w,
-                            int (*cb)(int rowidx, int total_rows,
-                                      const RGlyph *line, int cnt, void *ud),
-                            void *ud) {
+/* 把一条逻辑行 g[0..n-1]（老→新）按宽 w 折行，折出的每条显示行【正向】写入 cb
+ * （cb 收到该显示行的 RGlyph 段，返回非 0 表示停止）。空行硬放避免超宽 glyph
+ * 死循环。 */
+static int reflow_append_rows(const RGlyph *g, int n, int w,
+                              int (*cb)(const RGlyph *line, int cnt, void *ud),
+                              void *ud) {
     if (w < 1) w = 1;
-    /* 先按贪心折行分段（空行硬放：col==0 时宽 glyph 夹到行内）。 */
-    int breaks[4096];
-    int nr = 0;
-    breaks[nr++] = 0;                 /* 第 0 段起点 */
-    int col = 0;
-    for (int k = 0; k < n; ) {
+    int col = 0, seg_start = 0;
+    int k = 0;
+    while (k < n) {
         WCHAR ch = g[k].ci.Char.UnicodeChar;
         int gw = reflow_glyph_w(ch);
-        if (gw <= 0) { k++; continue; }      /* 次格：随主格 */
         int adv = (gw == 2 && k + 1 < n) ? 2 : 1;
-        if (col > 0 && col + gw > w) {       /* 非空行放不下 -> 折行 */
-            if (nr < 4096) breaks[nr] = k;
-            nr++;
+        if (gw > 0 && col > 0 && col + gw > w) {
+            /* 当前显示行放不下（且行非空）：先把 seg_start..k-1 作为一条显示行发出 */
+            if (cb(g + seg_start, k - seg_start, ud)) return 1;
+            seg_start = k;
             col = 0;
         }
-        col += gw;
+        if (gw > 0) col += gw;
         k += adv;
     }
-    for (int r = 0; r < nr; r++) {
-        int start = breaks[r];
-        int end   = (r + 1 < nr) ? breaks[r + 1] : n;
-        if (cb(r, nr, g + start, end - start, ud)) return 1;
+    /* 末段（含空逻辑行 n==0 时发一条空行）。 */
+    if (n == 0) {
+        RGlyph blank; blank.ci.Char.UnicodeChar = L' '; blank.ci.Attributes = 0x07;
+        blank.fg = RGB565_WHITE; blank.bg = RGB565_BLACK; blank.v = 0;
+        if (cb(&blank, 0, ud)) return 1;
+    } else if (cb(g + seg_start, n - seg_start, ud)) {
+        return 1;
     }
     return 0;
 }
 
+/* cb 上下文：把每条显示行追加到动态数组（行主序，每行 width 列）。 */
+typedef struct {
+    RGlyph *buf;
+    int cap;        /* 已分配【行数】 */
+    int count;      /* 已追加行数 */
+    int width;
+} RfAcc;
 
-static int reflow_store_cb(int rowidx, int total_rows, const RGlyph *line, int cnt, void *ud) {
-    ScreenRfCtx *rf = (ScreenRfCtx *)ud;
-    if (rf->stop) return 1;
-    /* emitted 只在每条【逻辑行】完成时按其显示行数增加。一条逻辑行 reflow 出
-     * total_rows 个显示行，rowidx=0 是最老（最上）显示行、total_rows-1 最新（最下）。
-     * 逻辑行按新→老产出；已落位 emitted 条显示行属于更新的逻辑行（在更下方），
-     * 本逻辑行整体在其上方，故本逻辑行最新显示行位置 = out_rows-1-emitted，
-     * 第 rowidx 行位置 = 再上 (total_rows-1-rowidx) 行。 */
-    int oy = rf->out_rows - 1 - rf->emitted - (total_rows - 1 - rowidx);
-    if (oy < 0) {                            /* 顶部超出目标缓冲：跳过更老的显示行，
-                                              * 但同一逻辑行的后续更靠下行仍要落位 */
-        if (oy < 0 && rowidx < total_rows - 1) {
-            /* 本显示行在缓冲顶部之上，忽略；不计数、不停扫描。 */
-            return 0;
-        }
-        rf->stop = 1; return 1;
+static int reflow_acc_cb(const RGlyph *line, int cnt, void *ud) {
+    RfAcc *a = (RfAcc *)ud;
+    if (a->count >= a->cap) {
+        int ncap = a->cap ? a->cap * 2 : 64;
+        RGlyph *nb = (RGlyph *)realloc(a->buf, (size_t)ncap * a->width * sizeof(RGlyph));
+        if (!nb) return 1;
+        a->buf = nb; a->cap = ncap;
     }
-    for (int x = 0; x < rf->width; x++) {
-        RGlyph *g = &rf->out[oy * rf->width + x];
-        g->ci.Char.UnicodeChar = L' ';
-        g->ci.Attributes = 0x07;
-        g->fg = RGB565_WHITE; g->bg = RGB565_BLACK; g->v = 0;
+    RGlyph *dst = a->buf + (size_t)a->count * a->width;
+    for (int x = 0; x < a->width; x++) {
+        dst[x].ci.Char.UnicodeChar = L' ';
+        dst[x].ci.Attributes = 0x07;
+        dst[x].fg = RGB565_WHITE; dst[x].bg = RGB565_BLACK; dst[x].v = 0;
     }
-    int n = cnt < rf->width ? cnt : rf->width;
-    for (int x = 0; x < n; x++) {
-        /* 宽字符次格（ch==0/低代理）占位也要落在主格右侧列，直接整 RGlyph 拷贝。 */
-        rf->out[oy * rf->width + x] = line[x];
-    }
-    /* 一条逻辑行的显示行全部落位后，按该逻辑行的显示行总数累计 emitted。 */
-    if (rowidx == total_rows - 1) {
-        rf->emitted += total_rows;
-        if (rf->emitted >= rf->out_rows) { rf->stop = 1; }
-    }
+    int m = cnt < a->width ? cnt : a->width;
+    for (int x = 0; x < m; x++) dst[x] = line[x];
+    a->count++;
     return 0;
 }
 
 int screen_reflow_view(ScreenBuffer *s, int vo, int rows, int width, RGlyph *out) {
     if (!s || !s->line_wrap || s->in_alt_screen || rows <= 0 || width <= 0 || !out) return 0;
 
-    /* logrow 累积一条逻辑行的 glyph。自底向上（物理行新→老）扫描，故 logrow 里
-     * 先放更新的段；在逻辑行边界（wrap==0）翻转成 老→新 再 reflow。 */
+    /* 输出先清成空白。 */
+    for (int i = 0; i < rows * width; i++) {
+        out[i].ci.Char.UnicodeChar = L' '; out[i].ci.Attributes = 0x07;
+        out[i].fg = RGB565_WHITE; out[i].bg = RGB565_BLACK; out[i].v = 0;
+    }
+
+    RfAcc acc; acc.buf = NULL; acc.cap = 0; acc.count = 0; acc.width = width;
+
+    /* 逻辑行累积缓冲（老→新）。自老→新扫描物理行，续行直接【尾接】当前逻辑行。 */
     int logcap = width > 256 ? width : 256;
     RGlyph *logrow = (RGlyph *)malloc((size_t)logcap * sizeof(RGlyph));
     if (!logrow) return 0;
     int logn = 0;
+    int have_log = 0;
 
-    /* 向上回看 vo 个显示行：先让回调把「最新 rows+vo 条显示行」下对齐写入临时
-     * 缓冲 big，再取其中 [vo .. vo+rows-1] 段拷到 out。这样视口跳过最新 vo 条。 */
-    int skip = vo;
-    int total_need = rows + (skip > 0 ? skip : 0);
-    RGlyph *big = (RGlyph *)malloc((size_t)total_need * width * sizeof(RGlyph));
-    if (!big) { free(logrow); return 0; }
-    ScreenRfCtx g_rf_ctx;
-    g_rf_ctx.out = big; g_rf_ctx.out_rows = total_need; g_rf_ctx.width = width; g_rf_ctx.emitted = 0; g_rf_ctx.stop = 0;
+    /* 物理行范围：【只扫描历史】-hist_lines .. -1（-1 = 最新历史行，即滚出可见区
+     * 的最底行）。可见区实时行（rel 0..rows-1）由 ConPTY 正常路径渲染，绝不能
+     * 折进来——否则 vo=0 时会把当前命令行/实时内容当成历史显示在顶部，且 vo>0
+     * 时与实时屏重复（v1.8.47「最上面行故障」根因）。 */
+    int first_rel = -s->hist_lines;
+    int last_rel  = -1;
 
-    for (int rel = s->rows - 1; rel >= -(s->hist_lines); rel--) {
+    for (int rel = first_rel; rel <= last_rel; rel++) {
         int pr = screen_phys_row(s, rel);
-        if (pr < 0 || pr >= s->total_lines || !s->lines[pr].cells) continue;
+        if (pr < 0 || pr >= s->total_lines || !s->lines || !s->lines[pr].cells) continue;
         int len = s->lines[pr].len;
-        /* 去尾空格（空格填充不属于逻辑内容；宽字符次格 ch==0 不算空格）。 */
+        /* 去物理行尾空格填充（次格 ch==0 不算空格）。 */
         while (len > 0 && s->lines[pr].cells[len - 1].Char.UnicodeChar == L' ') len--;
-        /* 物理行扫描顺序为新→老。每个物理行是逻辑行的一段，段内字符保持正序；
-         * 把本段【前插】到 logrow 开头（memmove 腾出段空间），最终 logrow 即为
-         * 老→新的完整逻辑行，逻辑行边界无需翻转。 */
+        int wrap = s->line_wrap[pr] ? 1 : 0;
+
+        /* wrap=1（续行）且已有逻辑行：尾接本行。否则（硬换行/首行）先结束上一条
+         * 逻辑行，再开新逻辑行。 */
+        if (!wrap && have_log) {
+            reflow_append_rows(logrow, logn, width, reflow_acc_cb, &acc);
+            logn = 0;
+        }
+        have_log = 1;
         if (logn + len > logcap) {
             while (logn + len > logcap) logcap *= 2;
             RGlyph *nl = (RGlyph *)realloc(logrow, (size_t)logcap * sizeof(RGlyph));
-            if (!nl) { free(big); free(logrow); return g_rf_ctx.emitted; }
+            if (!nl) { free(logrow); free(acc.buf); return 0; }
             logrow = nl;
         }
-        if (logn > 0) memmove(logrow + len, logrow, (size_t)logn * sizeof(RGlyph));
         for (int x = 0; x < len; x++) {
             RGlyph g;
             g.ci = s->lines[pr].cells[x];
             g.fg = s->lines[pr].fg_rgb ? s->lines[pr].fg_rgb[x] : RGB565_WHITE;
             g.bg = s->lines[pr].bg_rgb ? s->lines[pr].bg_rgb[x] : RGB565_BLACK;
             g.v  = s->lines[pr].rgb_valid ? s->lines[pr].rgb_valid[x] : 0;
-            logrow[x] = g;
+            logrow[logn++] = g;
         }
-        logn += len;
-        if (!s->line_wrap[pr]) {
-            /* 逻辑行完整（logrow 已是老→新），直接 reflow 输出。 */
-            reflow_emit_rows(logrow, logn, width, reflow_store_cb, &g_rf_ctx);
-            logn = 0;
-            if (g_rf_ctx.stop) break;
-        }
+        /* 续行尾接完成后不结束逻辑行；硬换行已在循环顶结束。这里 wrap=0 时本行是
+         * 新逻辑行首段，保持开启。 */
     }
-    /* 兜底：未闭合逻辑行（扫到最老仍 wrap==1）直接输出。 */
-    if (!g_rf_ctx.stop && logn > 0) {
-        reflow_emit_rows(logrow, logn, width, reflow_store_cb, &g_rf_ctx);
-    }
-    /* big 中下对齐存了 total_need 条显示行（最新在最底）。视口 vo 回看：
-     * 输出 rows 条 = big 下标 [skip .. skip+rows-1]（从下数），即 big 的
-     * (total_need-1-vo) 为视口底部行，往上 rows 行。拷贝到 out（out 上对齐）。 */
-    int bottom_big = total_need - 1 - skip;   /* big 中视口底部所在行 */
-    int valid = 0;
-    for (int y = 0; y < rows; y++) {
-        int sy = bottom_big - (rows - 1 - y);   /* big 中对应输出行 y 的行 */
-        for (int x = 0; x < width; x++) {
-            RGlyph dst;
-            if (sy >= 0 && sy < total_need) dst = big[sy * width + x];
-            else { dst.ci.Char.UnicodeChar = L' '; dst.ci.Attributes = 0x07;
-                   dst.fg = RGB565_WHITE; dst.bg = RGB565_BLACK; dst.v = 0; }
-            out[y * width + x] = dst;
-        }
-        if (sy >= 0) valid++;
-    }
-    free(big);
+    if (have_log) reflow_append_rows(logrow, logn, width, reflow_acc_cb, &acc);
     free(logrow);
-    return valid;
+
+    /* 视口窗口：显示行 acc.count 条（0=最老，count-1=最新历史行）。向上回看 vo，
+     * 视口能看到的历史显示行 = [acc.count-vo-rows .. acc.count-1-vo] 中存在的段；
+     * 把这些历史行【顶对齐】填入 out（y=0 起连续），返回历史行数 n。调用侧只对
+     * 顶部 n 行用 reflow，其下 rows-n 行回落到实时 ConPTY 缓冲（实时屏）。 */
+    int start = acc.count - vo - rows;   /* 视口最顶行对应的显示行号（可能<0） */
+    if (start < 0) start = 0;
+    int end = acc.count - 1 - vo;        /* 视口最底行对应的显示行号 */
+    int n = 0;
+    for (int src = start; src <= end && n < rows; src++, n++) {
+        if (src < 0 || src >= acc.count) { n--; break; }
+        for (int x = 0; x < width; x++)
+            out[n * width + x] = acc.buf[src * width + x];
+    }
+    free(acc.buf);
+    return n;
 }
