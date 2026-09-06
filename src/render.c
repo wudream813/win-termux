@@ -2480,13 +2480,20 @@ static void render_split_pane(char *out, int bs, int *posp, int leaf, PaneRect *
      * 多行、宽窗格折回一行。实时屏（vo==0）仍直取 ConPTY 缓冲。 */
     int use_rf = (pane->scroll_offset > 0 && !s->in_alt_screen && s->line_wrap != NULL);
     if (use_rf) {
-        int need = rows * cols;
         RGlyph *grid = (RGlyph *)pane->rf_grid;
-        if (pane->rf_rows < rows || pane->rf_cols < cols) {
-            RGlyph *ng = (RGlyph *)realloc(grid, (size_t)(need + 1) * sizeof(RGlyph));
-            if (ng) { grid = ng; pane->rf_grid = grid; pane->rf_rows = rows; pane->rf_cols = cols; }
+        /* 网格行步长必须【恒等于】当前 cols：screen_reflow_view 按 cols 步长写、
+         * render_split_cell 按 rf_cols 步长读。只要 rows/cols 与缓存不一致（分屏
+         * 切换/拖条会让窗格变窄——新 cols < 旧 rf_cols），就必须按 rows×cols 重新
+         * 分配，否则读写步长错位、历史显示成乱码（v1.8.47 回归）。 */
+        if (pane->rf_rows != rows || pane->rf_cols != cols || !grid) {
+            RGlyph *ng = (RGlyph *)realloc(grid, (size_t)rows * cols * sizeof(RGlyph));
+            if (ng) grid = ng;
         }
         if (grid) {
+            pane->rf_grid = grid;
+            pane->rf_rows = rows;   /* 记录当前网格尺寸（= 读时步长） */
+            pane->rf_cols = cols;
+            int need = rows * cols;
             for (int i = 0; i < need; i++) {
                 grid[i].ci.Char.UnicodeChar = L' ';
                 grid[i].ci.Attributes = 0x07;
@@ -2497,6 +2504,7 @@ static void render_split_pane(char *out, int bs, int *posp, int leaf, PaneRect *
         } else {
             use_rf = 0;
             pane->rf_valid = 0;
+            pane->rf_rows = pane->rf_cols = 0;
         }
     } else {
         pane->rf_valid = 0;

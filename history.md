@@ -6,6 +6,12 @@
 
 ## 版本更新记录
 
+### v1.8.48
+修复 v1.8.47 引入的「分屏切换 / 拖条后历史乱码」回归：
+- **根因**：`render_split_pane` 里 reflow 网格缓存（`Pane.rf_grid`）的重分配条件写成了「`rf_rows < rows || rf_cols < cols`」——只在窗格变大时才重分配、更新尺寸。分屏切换或拖分隔条让窗格**变窄**时（新 `cols < 旧 rf_cols`）不会重分配，`rf_cols` 停留在更大的旧值；而 `screen_reflow_view` 按当前 `cols` 作行步长【写】、`render_split_cell` 按 `rf_cols`（更大）作行步长【读】，读写步长不一致导致每行内容错位，历史显示成乱码。
+- **修复**：只要 `rows/cols` 与缓存网格尺寸不一致（无论变大变小）就按 `rows×cols` 重新分配，并让 `rf_rows/rf_cols` 恒等于当前网格尺寸（读写步长始终一致）；分配失败时安全回退到非 reflow 路径。
+- **验证**：`verify_all.py` 全过；单元测试 309 / 0 failed；MinGW gcc / g++ × x86_64 / i686 四套 `-Wall -Wextra -Werror`。
+
 ### v1.8.47
 把 v1.8.46 的逻辑行 reflow 引擎**接线到分屏历史渲染**（接线第一步）：分屏窗格向上滚动查看历史时，跨软换行的逻辑行现在按当前窗格宽度实时重排，窄窗格把长命令/输出折成多行完整显示、拖宽折回一行，不再被窗口边缘截断。
 - **物理行续行标志 `line_wrap`**：给 `ScreenBuffer` 增加按物理行的软换行标志数组（`screen_init`/`free`/`resize` 全程管理）。VT 自动折行（`wraparound_pending` 触发的换行、宽字符放不下整字换行）时用新接口 `screen_mark_softwrap()` 把当前物理行标记为「上一行的软换行续行」；普通回车/LF 不标记；滚动推进 `scroll_top` 时新暴露的空白行标志清零；resize 迁移时续行关系随行走。
