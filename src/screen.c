@@ -18,6 +18,7 @@ static void line_free(ScreenLine *ln) {
     ln->fg_rgb = NULL;
     ln->bg_rgb = NULL;
     ln->rgb_valid = NULL;
+    ln->len = 0;
 }
 
 /* 把一整行填成空白（不碰分配状态）。 */
@@ -42,6 +43,7 @@ static int line_alloc(ScreenLine *ln, int n, WORD attr) {
         line_free(ln);
         return 0;
     }
+    ln->len = n;
     line_fill_blank(ln, n, attr);
     return 1;
 }
@@ -405,30 +407,29 @@ int screen_resize(ScreenBuffer *s, int nc, int nr) {
     int cc = nc < s->cols ? nc : s->cols;
     int cr = nr < s->rows ? nr : s->rows;
     int nst = 0;
+    /* v1.8.45 #6：历史行可能比新窗格宽（收窄后保留旧宽内容），其实际宽度存在
+     * ScreenLine.len；见下方历史迁移。可见行按新宽 nc，ConPTY resize 后会重排。 */
 
     int old_hist = s->hist_lines;
     int old_cap = s->total_lines - s->rows;
     if (old_hist > old_cap) old_hist = old_cap;
     if (old_hist > nt - nr) old_hist = nt - nr;
 
-    /* ---- 行迁移（底部锚定 / bottom-anchored，与真实终端 reflow 一致）----
-     * 终端调整高度时内容【底部对齐】：命令提示符（在屏幕底部）始终留在底部，
-     * 高度缩小时顶部的老行向上滚入历史，高度放大时历史行回补到屏幕顶部。
-     * 定义锚点偏移 k = nr - rows（缩小 k<0、放大 k>0、纯宽变 k=0）：
-     *   旧可见行 y（0=顶 .. rows-1=底）在新布局里的可见位置 = y + k。
-     *  - 缩小（k<0）：旧可见行 y < -k（顶部 |k| 行）映射到新历史（滚入），
-     *    其余（y >= -k）留在新可见（底部 rows-|k|=nr 行）；
-     *  - 放大（k>0）：所有旧可见行移到新可见 y+k（底部 rows 行），新可见顶部
-     *    k 行从历史最新行回补（y = k-1 取历史 -1、y=k-l 取历史 -l）。
-     * 新历史 -h（-1=紧邻可见区=最新）在缩小时自新向旧依次为：滚入的旧可见行
-     * （旧可见 rows-1-k ... 0 中落到历史的部分）再接旧历史 -1,-2,...；放大时
-     * 最新 lifted=k 行历史已回补可见，新历史 -h 接旧历史 -(h+k)。 */
+    /* ---- 行迁移（底部锚定，历史不随 resize 变动）----
+     * resize 只改变可见窗口大小，绝不新增/删除历史——历史只由真实滚动产生。
+     * 可见区内容【底部对齐】：命令提示符（屏幕底部）始终留在底部。
+     * 锚点偏移 k = nr - rows（缩小 k<0、放大 k>0、纯宽变 k=0）：
+     *   新可见行 y 的旧逻辑行 src = y - k（src>=0 为旧可见行、src<0 为旧历史）。
+     *  - 缩小（k<0）：y=0 取旧可见 -k 行，被裁的顶部 |k| 行【不滚入历史】——
+     *    ConPTY resize 后会按新高度重新输出可见内容，把可见行移入历史会与
+     *    ConPTY 的重发重复（v1.8.45 修复：上下分屏调大小后历史重复）。
+     *  - 放大（k>0）：底部 rows 行取旧可见行，顶部 k 行从旧历史最新行回补
+     *    （src<0），历史内容不变、只是暂时显示在可见区。
+     * 历史行数恒为 min(old_hist, newcap)。 */
     WORD fill_attr = s->current_attr ? s->current_attr : 0x07;
     int newcap = nt - nr;
     int k = nr - s->rows;                          /* 锚点偏移：缩小<0、放大>0 */
-    int rolled_in = (k < 0) ? -k : 0;              /* 缩小：滚入历史的旧可见行数 */
-    int lifted = (k > 0) ? k : 0;                  /* 放大：回补到可见的历史行数 */
-    int new_hist = old_hist + rolled_in - lifted;
+    int new_hist = old_hist;
     if (new_hist > newcap) new_hist = newcap;
     if (new_hist < 0) new_hist = 0;
 
@@ -438,17 +439,11 @@ int screen_resize(ScreenBuffer *s, int nc, int nr) {
         ((src) >= 0 && (src) < s->rows) ? screen_phys_row(s, (src)) : \
         ((src) < 0 && -(src) >= 1 && -(src) <= old_hist) ? screen_phys_row(s, (src)) : -1)
 
-    /* 迁移新可见区（rel 0..nr-1）。
-     *  - 缩小/纯宽变（k<=0）：新可见行 y 取旧可见行 src = y - k（底部锚定，
-     *    y=0 取旧可见 -k 行）。
-     *  - 放大（k>0）：底部 rows 行（y>=k）取旧可见行 src = y-k；顶部 k 行
-     *    （y<k）从历史回补，y=0 取最老回补行（旧历史 -k）、y=k-1 取最新历史
-     *    （旧历史 -1），即 src = -(k - y)。 */
+    /* 迁移新可见区（rel 0..nr-1）：src = y - k（底部锚定）。src<0 时从旧历史
+     * 回补（仅放大会发生），取不到则空白。 */
     for (int y = 0; y < nr; y++) {
         int new_r = (nst + y) % nt;
-        int src;
-        if (k > 0 && y < k) src = -(k - y);       /* 放大回补的历史行 */
-        else               src = y - k;           /* 旧可见行 */
+        int src = y - k;
         int old_r = RESIZE_OLD_ROW(src);
         if (old_r >= 0 && old_r < s->total_lines && s->lines && s->lines[old_r].cells) {
             if (line_alloc(&nl[new_r], nc, fill_attr))
@@ -457,24 +452,22 @@ int screen_resize(ScreenBuffer *s, int nc, int nr) {
             line_alloc(&nl[new_r], nc, fill_attr);
         }
     }
-    /* 迁移新历史区（rel -1..-new_hist，-1 最新）。新历史行 -h 的旧逻辑行：
-     *   缩小：h<=rolled_in -> 滚入的旧可见行 src = (rows-1) - (rolled_in - h)
-     *         = rows-1-rolled_in+h-1 ... 即旧可见 y = h-1（最老滚入行=旧可见0 在
-     *         新历史最老端）。这里 -1 最新对应滚入的最新一行（旧可见 rows-1-rolled_in
-     *         之后的第一条），统一：src = (rolled_in - h) - 1 ... 推导见下，直接
-     *         用「旧逻辑行 = -h + k」（底部锚定的逆映射，历史行同样满足 src=new-k）。
-     *   放大：src = -h - lifted（跳过已回补可见的最新 lifted 行）。
-     * 统一式：旧逻辑行 src = (-h) - k（新历史行 -h 对应旧逻辑行 -h-k）。
-     *   缩小 k=-rolled_in：src = -h + rolled_in；h=1 -> rolled_in-1（旧可见行，
-     *     因为旧可见行 y 在新历史的逻辑号 = y+k = y-rolled_in = -h -> y=rolled_in-h，
-     *     即 src=rolled_in-h，与 -h+k= -h-(-rolled_in)=rolled_in-h 一致）。 */
+    /* 迁移新历史区（rel -1..-new_hist，-1 最新）：resize 不改历史，新历史 -h
+     * 恒对应旧历史 -h（同一行，只改宽度）。被裁的可见行不滚入历史（见上）。 */
     for (int h = 1; h <= new_hist; h++) {
-        int new_r = (nst - h % nt + nt) % nt;
-        int src = -h - k;                  /* 旧逻辑行：可见 src>=0、历史 src<0 */
-        int old_r = RESIZE_OLD_ROW(src);
+        /* 新历史第 h 行（-1 最新）位于新可见首行 nst 的「上 h 行」：
+         * (nst - h) 环回。历史在循环缓冲里排在可见区之前；注意必须先减再取模
+         * （- 优先级高于 % 会错算成 nst-(h%nt)）。 */
+        int new_r = ((nst - h) % nt + nt) % nt;
+        int old_r = (h <= old_hist) ? screen_phys_row(s, -h) : -1;
         if (old_r >= 0 && old_r < s->total_lines && s->lines && s->lines[old_r].cells) {
-            if (line_alloc(&nl[new_r], nc, fill_attr))
-                line_copy(&nl[new_r], &s->lines[old_r], cc);
+            /* v1.8.45 #6：历史行完整保留——目标行宽度取 max(新窗格宽 nc, 源行
+             * 实际 len)。收窄时源历史行 len=旧宽 > nc，整行右侧内容（命令/输出）
+             * 全部保留，不截断；之后拖宽回来即可完整显示。 */
+            int src_len = s->lines[old_r].len > 0 ? s->lines[old_r].len : s->cols;
+            int dst_w = nc > src_len ? nc : src_len;
+            if (line_alloc(&nl[new_r], dst_w, fill_attr))
+                line_copy(&nl[new_r], &s->lines[old_r], src_len);
         }
     }
     #undef RESIZE_OLD_ROW
@@ -512,7 +505,20 @@ int screen_resize(ScreenBuffer *s, int nc, int nr) {
     if (nc > cc) {
         for (int idx = 0; idx < nt; idx++) {
             ScreenLine *ln = &nl[idx];
-            if (!ln->cells || cc < 1) continue;
+            if (!ln->cells || ln->len < nc) continue;
+            /* 背景延展只填补「旧窗口宽度之外」的新列（x 从旧宽 cc 起）。但历史
+             * 宽行（v1.8.45 #6 保留了旧宽内容，len 可能来自更宽的历史）其 cc..nc-1
+             * 列已是迁移过来的真实内容，绝不能填空白覆盖——这种行整体跳过：它的
+             * 内容列本就填满，无需延展。判据：该行是从更宽源迁移来的历史行。 */
+            int is_wide_hist = 0;
+            /* 历史区物理行：新可见首行 nst 之上（环回）。简单判据——宽行的 len
+             * 大于本次新窗格宽 nc 时必然含旧宽内容；这里 len>=nc 且来自历史则跳过。
+             * 为稳妥，仅对【可见区】行做延展（可见行宽度恒=nc 且 cc 左侧为真实内容，
+             * cc 右侧是新空列）；历史行 len>=nc 说明是保留的宽行，整行跳过。 */
+            int phys = idx;
+            int rel = (phys - nst % nt + nt) % nt;   /* 相对新可见首行：0..nr-1 可见 */
+            if (rel >= nr) is_wide_hist = 1;          /* 环回区 = 历史 */
+            if (is_wide_hist) continue;
             int src = cc - 1;
             for (int x = cc; x < nc; x++) {
                 ln->cells[x].Char.UnicodeChar = L' ';

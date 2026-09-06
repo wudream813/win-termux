@@ -200,11 +200,11 @@ static void test_keymap_defaults(void) {
     check(keymap_lookup(0, 0, '+', &arg) == ACT_NEW_PANE_MENU, "+ -> new-pane-menu");
     check(keymap_lookup(VK_ADD, 0, 0, &arg) == ACT_NEW_PANE_MENU, "小键盘 + -> new-pane-menu");
 
-    /* v1.8.39：主键盘数字直接跳转已移除，改为 w 打开「切换 panel」面板；
-     * 小键盘数字仍保留 select-pane。 */
+    /* v1.8.45：按编号跳转 pane（主键盘/小键盘数字）已整体移除，统一走 w 打开
+     * 「切换 panel」可视化面板。 */
     check(keymap_lookup('W', 0, 'w', &arg) == ACT_SWITCH_PANEL_PALETTE, "w -> switch-panel 面板");
     check(keymap_lookup('3', 0, '3', &arg) == ACT_NONE, "主键盘 3 不再直接跳转");
-    check(keymap_lookup(VK_NUMPAD7, 0, 0, &arg) == ACT_SELECT_PANE && arg == 7, "小键盘 7 -> select-pane 7");
+    check(keymap_lookup(VK_NUMPAD7, 0, 0, &arg) == ACT_NONE, "小键盘 7 不再按编号跳转");
     check(keymap_lookup(VK_F5, 0, 0, &arg) == ACT_NONE, "未绑定键返回 ACT_NONE");
 }
 
@@ -373,13 +373,17 @@ static void test_theme_clear(void) {
 
 static void test_keymap_actions(void) {
     printf("keymap: 动作名表完整\n");
-    for (int a = ACT_SEND_PREFIX; a < ACT_COUNT; a++) {
+    /* 遍历【已登记】的动作（keymap_action_at 只返回 g_actions 表里的动作；
+     * 已移除的 ACT_SELECT_PANE 等占位枚举不在表内，跳过）。 */
+    for (int i = 0; i < keymap_action_count(); i++) {
+        int a = keymap_action_at(i);
         const char *name = keymap_action_name(a);
-        check(name[0] != 0, "每个动作都有名字");
+        check(name && name[0] != 0, "每个动作都有名字");
         check(keymap_action_id(name) == a, "动作名往返一致");
         check(keymap_action_label(a)[0] != 0, "每个动作都有中文描述");
     }
     check(keymap_action_id("bogus") == ACT_NONE, "未知动作名返回 ACT_NONE");
+    check(keymap_action_id("select-pane") == ACT_NONE, "已移除的 select-pane 不再解析");
 }
 
 static void test_keymap_noprefix(void) {

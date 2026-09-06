@@ -2741,6 +2741,7 @@ static void close_pane_target(int target) {
 }
 
 void action_execute(int action, int arg, DWORD ctrl) {
+    (void)arg;   /* ACT_SELECT_PANE 已移除，arg 暂无使用方 */
     switch (action) {
         case ACT_SEND_PREFIX: {
             char c = keymap_prefix_char();
@@ -2879,13 +2880,20 @@ void action_execute(int action, int arg, DWORD ctrl) {
             g_mux.needs_redraw = 1;
             break;
         }
-        case ACT_SELECT_PANE: {
-            if (arg >= 0 && arg < g_mux.pane_count && g_mux.panes[arg].active) switch_pane(arg);
-            break;
-        }
+        /* ACT_SELECT_PANE（按编号跳转 pane）已移除：统一走前缀 w 的可视化
+         * 「切换 panel」面板。枚举值保留以不改变后续 action id。 */
         /* ---------------- 分屏 ---------------- */
         case ACT_SPLIT_HORIZONTAL:
         case ACT_SPLIT_VERTICAL: {
+            /* 设置页 / 关于页是特殊内部 pane，不允许分屏（分屏只对终端 shell pane）。 */
+            {
+                int ap = g_mux.active_pane;
+                if (ap < 0 || ap >= g_mux.pane_count || !g_mux.panes[ap].active ||
+                    g_mux.panes[ap].is_settings || g_mux.panes[ap].is_about || g_mux.settings_mode) {
+                    toast_show("设置 / 帮助页面不能分屏", 1800);
+                    break;
+                }
+            }
             /* 先建 pane（与当前 pane 同目录/shell），再挂进分屏树。 */
             Pane *cur = &g_mux.panes[g_mux.active_pane];
             WCHAR wdir[256] = {0};

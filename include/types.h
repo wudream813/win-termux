@@ -26,6 +26,8 @@ typedef struct {
     WORD *fg_rgb;
     WORD *bg_rgb;
     unsigned char *rgb_valid;
+    int len;          /* 本行 cells/fg/bg/valid 的实际分配宽度（>=当前 cols；
+                       * v1.8.45：历史行在收窄后保留旧宽内容，故可 > cols） */
 } ScreenLine;
 
 typedef struct {

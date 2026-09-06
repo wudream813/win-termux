@@ -91,11 +91,12 @@ void draw_tab_bar(char *out, int bs, int *posp) {
     }
     /* 标签按「标签页锚点」枚举。单窗格标签画成 [cmd ×]；分屏标签把同组所有窗格
      * （含 is_split_child）包在【一对】外层方括号里，窗格段之间用空格分隔，形如
-     * [cmd× cmd×]，点段切窗格、点 × 关该窗格。关于/设置页不进标签栏。 */
+     * [cmd× cmd×]，点段切窗格、点 × 关该窗格。设置/关于 pane（v1.8.45 起）也作为
+     * 独立标签显示（标题「设置」/「关于」），可点击切换、点 × 关闭。 */
     for (int anchor = 0; anchor < g_mux.pane_count; anchor++) {
         if (!g_mux.panes[anchor].active) continue;
         if (g_mux.panes[anchor].is_split_child) continue;   /* 子窗格由其锚点统一枚举 */
-        if (g_mux.panes[anchor].is_about || g_mux.panes[anchor].is_settings) continue;
+        /* 设置 / 关于 pane 也作为独立标签显示在标签栏（可点击切换、点 × 关闭）。 */
         int group[MAX_PANES];
         int gn = split_tab_panes(anchor, group, MAX_PANES);
         if (gn <= 0) continue;
@@ -737,9 +738,8 @@ static void render_settings_keys(char *out, int bs, int *posp, int host_rows, in
                        g_mouse_x < main_left + SETTINGS_KEYS_PREFIX_COL - 1 && !keys_on_btn);
         int capturing = (g_key_capture_active && selected);
 
-        /* v1.8.44：label 缓冲必须放得下最长中文说明（UTF-8：14 个汉字≈42 字节 +
-         * 全角符号 + 英文，最长「打开命令面板并进入「切换 panel」」≈50 字节），
-         * 旧的 label[24] 会被 snprintf 直接截断。 */
+        /* v1.8.44：label 缓冲必须放得下最长中文说明（UTF-8 多字节），旧的
+         * label[24] 会被 snprintf 直接截断；label[80] 足够。 */
         char name[48], label[80], combo[64];
         int custom = 0;
         if (entry == 0) {
@@ -765,9 +765,8 @@ static void render_settings_keys(char *out, int bs, int *posp, int host_rows, in
         /* 列宽（v1.8.44，相对 main_left 的偏移）：
          *   标记 0..2、动作名 3..22(宽20)、说明 23..58(宽36)、键位 59..78(宽20)；
          *   右侧按钮 [前缀]@79 [改]@87 [复位]@92（绝对列常量）。
-         * 说明列加宽到 36：最长中文说明「打开命令面板并进入「切换 panel」」约 32 列，
-         * 旧的 16/24 列会直接截断。动作名是英文标识（split-horizontal-pane 等，最长
-         * 19 列）给 20；键位组合（"Ctrl+B Shift+tab"=18 列、自定义更长）给 20。 */
+         * 说明列宽 36 容纳最长中文说明；动作名是英文标识（split-horizontal-pane 等，
+         * 最长 19 列）给 20；键位组合（"Ctrl+B Shift+tab"=18 列、自定义更长）给 20。 */
         append_padded_utf8(out, bs, &pos, &cols, name, 20);
         append_padded_utf8(out, bs, &pos, &cols, label, 36);
         pos += snprintf(out + pos, bs - pos, "%s", capturing ? "\x1b[038;2;210;153;034;1m" : "");
@@ -2087,7 +2086,6 @@ static const HelpShortcut g_help_shortcuts[] = {
     {ACT_HELP,            NULL,         "打开 / 关闭本帮助"},
     {ACT_QUIT,            NULL,         "退出 termux"},
     {ACT_TAB_COLOR_NEXT,  "Shift 反向", "轮换标签颜色"},
-    {ACT_SELECT_PANE,     "0-9",        "跳转到 pane (支持主键盘与小键盘)"},
 };
 static const int g_help_shortcut_count = (int)(sizeof(g_help_shortcuts) / sizeof(g_help_shortcuts[0]));
 
@@ -2136,14 +2134,13 @@ static const char *help_shortcut_line(int idx, char *buf, int buf_size) {
     } else {
         snprintf(prefix, sizeof(prefix), "%s", combo);
     }
-    if (hs->action == ACT_SELECT_PANE && hs->extra) snprintf(key, sizeof(key), "%s", hs->extra);
 
     int kw = (int)strlen(key);
     int pad = kw < 9 ? 9 - kw : 1;
     char keycol[64];
     snprintf(keycol, sizeof(keycol), "%s%*s", key, pad, "");
 
-    if (hs->extra && hs->action != ACT_SELECT_PANE) {
+    if (hs->extra) {
         snprintf(buf, buf_size,
                  "  \x1b[038;2;210;153;034m%s\x1b[0m + \x1b[038;2;230;237;243m%s\x1b[0m%s (%s)",
                  prefix, keycol, hs->desc, hs->extra);

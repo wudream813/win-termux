@@ -26,8 +26,7 @@ static const ActionInfo g_actions[] = {
     {ACT_QUIT,            "quit",            "退出 termux"},
     {ACT_TAB_COLOR_NEXT,  "tab-color-next",  "下一个标签颜色"},
     {ACT_TAB_COLOR_PREV,  "tab-color-prev",  "上一个标签颜色"},
-    {ACT_SELECT_PANE,     "select-pane",     "按编号跳转 pane"},
-    {ACT_SWITCH_PANEL_PALETTE, "switch-panel", "打开命令面板并进入「切换 panel」"},
+    {ACT_SWITCH_PANEL_PALETTE, "switch-panel", "切换 panel"},
     {ACT_NEXT_THEME,      "next-theme",      "切换下一个主题"},
     {ACT_SPLIT_HORIZONTAL, "split-horizontal", "分屏：上下切分"},
     {ACT_SPLIT_VERTICAL,   "split-vertical",   "分屏：左右切分"},
@@ -87,17 +86,7 @@ static const KeyBinding g_default_bindings[] = {
     /* 打开「切换 panel」命令面板（tmux 惯例前缀 w = choose-window）。
      * 主键盘数字 1-9/0 直接跳转的绑定已移除，统一改走这个可视化切换面板。 */
     {VKEY_ANY('W'),                ACT_SWITCH_PANEL_PALETTE, 0},
-    /* pane 跳转：小键盘数字（主键盘数字已停用，改用切换 panel 面板） */
-    {VKEY_ANY(VK_NUMPAD0),         ACT_SELECT_PANE,     0},
-    {VKEY_ANY(VK_NUMPAD1),         ACT_SELECT_PANE,     1},
-    {VKEY_ANY(VK_NUMPAD2),         ACT_SELECT_PANE,     2},
-    {VKEY_ANY(VK_NUMPAD3),         ACT_SELECT_PANE,     3},
-    {VKEY_ANY(VK_NUMPAD4),         ACT_SELECT_PANE,     4},
-    {VKEY_ANY(VK_NUMPAD5),         ACT_SELECT_PANE,     5},
-    {VKEY_ANY(VK_NUMPAD6),         ACT_SELECT_PANE,     6},
-    {VKEY_ANY(VK_NUMPAD7),         ACT_SELECT_PANE,     7},
-    {VKEY_ANY(VK_NUMPAD8),         ACT_SELECT_PANE,     8},
-    {VKEY_ANY(VK_NUMPAD9),         ACT_SELECT_PANE,     9},
+    /* pane 跳转：小键盘数字「按编号跳转」已移除，统一走前缀 w 的可视化「切换 panel」。 */
     /* ---- 分屏（前缀键之后） ---- */
     {VKEY_SHIFT(VK_OEM_MINUS),     ACT_SPLIT_HORIZONTAL, 0},  /* 前缀 _ ：上下分屏 */
     {CHR('-'),                     ACT_SPLIT_VERTICAL,   0},  /* 前缀 - ：左右分屏 */
@@ -242,9 +231,8 @@ int keymap_bind(const char *action_name, const char *key_text) {
     if (action == ACT_NONE || action >= ACT_COUNT) return 0;
     if (g_user_count >= KEYMAP_MAX_USER_BINDINGS) return 0;
 
-    /* select-pane 需要 "select-pane 3 = C-b 3" 形式的参数，这里用动作名后缀支持：
-     * select-pane 的默认绑定是小键盘 0-9（主键盘数字已改走 switch-panel 可视化切换），
-     * [keys] 中不单独重绑。 */
+    /* 用户自定义键位：「动作名 = 键位」。pane 切换统一走 switch-panel（前缀 w
+     * 可视化面板），已无带参数的 select-pane。 */
     KeySpec spec;
     if (!keymap_parse_key(key_text, &spec)) return 0;
 
