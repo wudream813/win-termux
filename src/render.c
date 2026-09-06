@@ -5,6 +5,10 @@
 
 
 #define TB_BG        "\x1b[048;2;022;027;034m"
+/* 终端内容区底色（TH_BG0 = 13,17,23）：与 ConPTY 里 cmd/powershell 等程序的
+ * 默认黑底一致。分屏窗格铺底用这个色，未填充格/铺底与程序黑底就没有色差，
+ * 不会在窗格之间冒出奇怪的深灰块；分隔线另用面板灰（022;027;034）以可辨。 */
+#define TERM_BG      "\x1b[048;2;013;017;023m"
 #define TAB_IN_BG    "\x1b[048;2;033;038;045m"
 #define TAB_IN_FG    "\x1b[038;2;139;148;158m"
 #define TAB_ACT_BG   "\x1b[048;2;031;111;235m"
@@ -100,13 +104,14 @@ void draw_tab_bar(char *out, int bs, int *posp) {
         if (ci < 0 || ci > 8) ci = 0;
         const char *actbg = TAB_COLOR_BG[ci];
         const char *dimbg = TAB_COLOR_BG_DIM[ci];
-        /* 先预算整组宽度：单窗格 = [nm×]；分屏 = [ + Σ(nm×) + ]。 */
+        /* 先预算整组宽度：单窗格 = [nm ×]；分屏 = [ + Σ(nm ×) + ]。
+         * 每段 = 标题 nm + 标题与 × 之间 1 空格 + ×。 */
         int gw = multi ? 2 : 0;   /* 外层 [ 和 ] */
         for (int gi = 0; gi < gn; gi++) {
             int i = group[gi];
             if (i < 0 || i >= g_mux.pane_count || !g_mux.panes[i].active) continue;
             char nm[64]; format_tab_title(nm, sizeof(nm), g_mux.panes[i].title[0] ? g_mux.panes[i].title : "cmd");
-            int w = utf8_cols(nm, (int)strlen(nm)) + 1;   /* nm + × */
+            int w = utf8_cols(nm, (int)strlen(nm)) + 2;   /* nm + 空格 + × */
             gw += multi ? w : (w + 2);                    /* 单窗格再加自己的 [ ] */
         }
         if (col + gw + 4 + 4 > g_mux.host_cols) { col = g_mux.host_cols; break; }
@@ -144,7 +149,10 @@ void draw_tab_bar(char *out, int bs, int *posp) {
             if (!multi) { pos += snprintf(out + pos, bs - pos, "["); col++; }
             pos += snprintf(out + pos, bs - pos, "%s", nm);
             col += nmc;
-            /* × 热区：紧跟标题后的一格。 */
+            /* 标题与 × 之间留 1 个空格（[cmd ×]）。 */
+            pos += snprintf(out + pos, bs - pos, " ");
+            col++;
+            /* × 热区：空格后的一格。 */
             int hovering = (!popup_open && g_mouse_y == 0 && g_mouse_x == col);
             if (hovering)
                 pos += snprintf(out + pos, bs - pos, X_RED_BG "\x1b[038;2;255;255;255m\xc3\x97");
@@ -825,20 +833,31 @@ static void render_settings_behavior(char *out, int bs, int *posp, int host_rows
         int hovered = (g_mouse_y == sb_row - 1 && g_mouse_x >= main_left - 1 &&
                        g_mouse_x < main_left + SETTINGS_SB_MINUS_COL - 1 && !sb_on_btn);
         int sb_row_under_mouse = (g_mouse_y == sb_row - 1);
-        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s     %-22s \x1b[0m",
-                        sb_row, main_left, settings_row_style(selected, hovered), "scrollback");
+        /* 高亮 label 只铺到 [-] 按钮前一列（main_left+SETTINGS_SB_MINUS_COL-1，
+         * 即相对偏移 21）：%-22s 会把行底色延续到 [-] 按钮列上，把按钮「包」进
+         * 高亮背景，表现为「scrollback 行背景包含 [-]」。label 在按钮前复位，按钮
+         * 非 hover 时无背景（透明，落在设置区清屏的默认底上），hover 才显高亮。 */
+        {
+            char lab[32];
+            snprintf(lab, sizeof(lab), "     %s", "scrollback");
+            int hc = 0;
+            pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s", sb_row, main_left,
+                            settings_row_style(selected, hovered));
+            append_padded_utf8(out, bs, &pos, &hc, lab, SETTINGS_SB_MINUS_COL - 1);
+            pos += snprintf(out + pos, bs - pos, "\x1b[0m");
+        }
         int h_minus = (sb_row_under_mouse && g_mouse_x >= main_left + SETTINGS_SB_MINUS_COL - 1 &&
                        g_mouse_x < main_left + SETTINGS_SB_MINUS_COL + 2);
         int h_plus = (sb_row_under_mouse && g_mouse_x >= main_left + SETTINGS_SB_PLUS_COL - 1 &&
                       g_mouse_x < main_left + SETTINGS_SB_PLUS_COL + 2);
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s[-]\x1b[0m",
                         sb_row, main_left + SETTINGS_SB_MINUS_COL,
-                        h_minus ? "\x1b[048;2;217;119;054m\x1b[038;2;013;017;023;1m" : TB_BG "\x1b[038;2;217;119;054m");
+                        h_minus ? "\x1b[048;2;217;119;054m\x1b[038;2;013;017;023;1m" : "\x1b[038;2;217;119;054m");
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[038;2;230;237;243;1m%6d\x1b[0m 行",
                         sb_row, main_left + SETTINGS_SB_MINUS_COL + 4, g_scrollback_lines);
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s[+]\x1b[0m",
                         sb_row, main_left + SETTINGS_SB_PLUS_COL,
-                        h_plus ? "\x1b[048;2;063;185;080m\x1b[038;2;013;017;023;1m" : TB_BG "\x1b[038;2;063;185;080m");
+                        h_plus ? "\x1b[048;2;063;185;080m\x1b[038;2;013;017;023;1m" : "\x1b[038;2;063;185;080m");
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[038;2;139;148;158m(对之后新建的 pane 生效)\x1b[0m",
                         sb_row, main_left + SETTINGS_SB_PLUS_COL + 4);
     }
@@ -2356,18 +2375,12 @@ static void render_split_cell(char *out, int bs, int *posp, ScreenBuffer *s,
     WORD frgb, brgb; int fgv, bgv;
     cell_truecolor(s, y, x, ar, &frgb, &brgb, &fgv, &bgv);
     int active = (leaf == g_mux.active_pane);
+    (void)active;
 
-    /* ConPTY 未填充的格子是「空格 + 无真彩 + 16 色纯黑底(0)」。拖分屏条时窗格
-     * ConPTY 实时 resize，新扩列/新行就是这种格；它会盖住 render_split 铺的面板
-     * 底色、显出一条纯黑带（拖条时「右侧多一块背景」）。把这种未填充黑底空白格
-     * 的背景统一按面板底色（022;027;034）输出，与窗格铺底无缝；shell 随后重绘
-     * 会覆盖成真背景。注意只动「无真彩且 16 色黑底的空白格」，黑底 vim/黑底程序
-     * 里真有内容的格子或显式真彩黑底不受影响。 */
-    int is_blank = (wc == L' ' || wc == 0);
-    int bg16 = (attr >> 4) & 0x0F;
-    if (is_blank && !bgv && (bg16 & 0x7) == 0)
-        bgv = 1, brgb = theme_role_rgb565(TH_BG1);   /* 面板底色 22,27,34 */
-
+    /* 注意：不要把「黑底空白格」强行改成面板底色——cmd/程序正常的黑底背景里，
+     * 空行、缩进、清屏区都是「空格 + 16 色黑底」，刷成深灰面板色会在黑色终端里
+     * 冒出奇怪的深灰块。resize 新扩出的未填充区域由 render_split 的整行面板底色
+     * 铺底覆盖（窗格矩形外）+ shell 随后重绘（窗格矩形内），不在逐格渲染时改色。 */
     const char *ul = (attr & COMMON_LVB_UNDERSCORE) ? ";4" : "";
     if (fgv || bgv) {
         int fr, fg2, fb; rgb565_split(frgb, &fr, &fg2, &fb);
@@ -2418,9 +2431,10 @@ static void render_split_pane(char *out, int bs, int *posp, int leaf, PaneRect *
     if (pane->scroll_offset < 0) pane->scroll_offset = 0;
     int rows = rc->rows < s->rows ? rc->rows : s->rows;
     int cols = rc->cols < s->cols ? rc->cols : s->cols;
-    /* 窗格先铺底色：把整矩形清成面板背景，避免残留。 */
+    /* 窗格先铺底色：整矩形清成终端底色（TH_BG0，与 ConPTY 程序默认黑底一致），
+     * 避免残留；未填充格与铺底无色差，分屏窗格之间不会冒出奇怪色块。 */
     for (int py = 0; py < rows; py++) {
-        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[0;048;2;022;027;034m",
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[0" TERM_BG,
                         rc->r0 + py + 2, rc->c0 + 1);
         for (int px = 0; px < cols; px++) pos += snprintf(out + pos, bs - pos, " ");
     }
@@ -2432,6 +2446,63 @@ static void render_split_pane(char *out, int bs, int *posp, int leaf, PaneRect *
             pos = *posp;
         }
     }
+
+    /* 滚动条：与整屏路径同款，画在 pane 右缘内列（覆盖该列，不另占宽度）。
+     * 非 alt 屏、pane 足够宽且有历史时显示；活动 pane 才响应 hover/拖动。 */
+    if (!s->in_alt_screen && cols >= 10 && leaf == g_mux.active_pane) {
+        int rr = rows;
+        int sb_top = 0, sb_bot = rr;
+        int hist = s->hist_lines;
+        if (hist > 0) {
+            int total = hist + rr;
+            int th = (rr * rr) / total;
+            if (th < 1) th = 1;
+            if (th >= rr) th = rr - 1;
+            int vo = pane->scroll_offset;
+            int vtop = hist - vo;
+            int max_tpos = rr - th;
+            if (max_tpos <= 0) max_tpos = 1;
+            int tpos = (vtop * max_tpos + hist / 2) / hist;
+            if (tpos < 0) tpos = 0;
+            if (tpos + th > rr) tpos = rr - th;
+            sb_top = tpos;
+            sb_bot = tpos + th;
+        }
+        int popup_open = (g_mux.chooser_mode || g_mux.ctx_mode || g_mux.rename_mode ||
+                          g_mux.custom_cmd_mode || g_search_mode || g_mux.palette_mode);
+        /* 鼠标到该 pane 右缘列的水平距离（0 = 正在滚动条列上）。 */
+        int sb_x = rc->c0 + cols - 1;
+        int dist = (!popup_open && g_mouse_y >= 1 && g_mouse_x >= rc->c0)
+                   ? (sb_x - g_mouse_x) : 99;
+        if (dist < 0) dist = 99;
+        /* 只在鼠标纵向落在本 pane 行范围内才算悬停它的滚动条。 */
+        if (g_mouse_y - 1 < rc->r0 || g_mouse_y - 1 >= rc->r0 + rows) dist = 99;
+        int is_hover = (!popup_open && dist <= 10);
+        int gi = dist < 0 ? 10 : (dist > 10 ? 10 : dist);
+        int mouse_on_thumb = 0;
+        if (is_hover) {
+            int my_row = g_mouse_y - 1 - rc->r0;
+            if (my_row >= sb_top && my_row < sb_bot) mouse_on_thumb = 1;
+            if (g_sb_dragging) mouse_on_thumb = 1;
+        }
+        for (int py = 0; py < rows && pos < bs - 64; py++) {
+            int term_col = rc->c0 + cols;           /* 右缘列，1 基 */
+            int term_row = rc->r0 + py + 2;
+            int in_thumb = (py >= sb_top && py < sb_bot);
+            if (in_thumb) {
+                if (mouse_on_thumb)
+                    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[0;048;2;225;235;250m \x1b[0m", term_row, term_col);
+                else
+                    pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[0;48;2;%d;%d;%dm \x1b[0m", term_row, term_col,
+                                    g_sb_grad[gi].thumb_r, g_sb_grad[gi].thumb_g, g_sb_grad[gi].thumb_b);
+            } else if (is_hover) {
+                pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[0;48;2;%d;%d;%dm\x1b[38;2;%d;%d;%dm│\x1b[0m", term_row, term_col,
+                                g_sb_grad[gi].track_bg_r, g_sb_grad[gi].track_bg_g, g_sb_grad[gi].track_bg_b,
+                                g_sb_grad[gi].track_fg_r, g_sb_grad[gi].track_fg_g, g_sb_grad[gi].track_fg_b);
+            }
+        }
+    }
+
     /* 活动窗格的终端光标由帧尾光标段统一定位/显隐（见 render_screen 尾部的
      * split_mode 分支），这里不再单独发 ?25h，避免重复定位。 */
     (void)rows; (void)cols;
@@ -2453,7 +2524,7 @@ static void render_split(char *out, int bs, int *posp) {
      * 显式铺满整行后，行块一定包含每一列的字节，布局一变整行必判脏、整行重建，
      * 随后窗格铺底/单元格/边框再各自覆盖。 */
     for (int r = 0; r < g_mux.host_rows; r++) {
-        pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[0;048;2;022;027;034m", r + 2);
+        pos += snprintf(out + pos, bs - pos, "\x1b[%d;1H\x1b[0" TERM_BG, r + 2);
         for (int c = 0; c < g_mux.host_cols; c++)
             pos += snprintf(out + pos, bs - pos, " ");
         pos += snprintf(out + pos, bs - pos, "\x1b[0m");

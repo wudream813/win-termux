@@ -3955,7 +3955,12 @@ void handle_mouse(MOUSE_EVENT_RECORD *me) {
                 if (click_y >= pane_rows) click_y = pane_rows - 1;
 
                 if (!g_sb_dragging) {
-                    if (mx == g_mux.host_cols - 1 && my >= 1) {
+                    /* 滚动条在【活动 pane 内容区的最右列】：单窗格时即屏幕最右列
+                     * (host_cols-1)，分屏时 mx 已换算成 pane 本地列，最右列是
+                     * s->cols-1。这样分屏后每个活动窗格右缘的滚动条也能点/拖。 */
+                    int sb_col = (split_is_split() && !g_split_zoom) ? (s->cols - 1)
+                                                                     : (g_mux.host_cols - 1);
+                    if (mx == sb_col && my >= 1) {
                         if (click_y >= sb_top && click_y < sb_bot) {
                             g_sb_dragging = 1;
                             g_sb_grab_offset = click_y - sb_top;

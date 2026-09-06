@@ -67,11 +67,11 @@ int main(void) {
     ck("左右外接宽+边框=80", rects[0].ocols + 1 + rects[1].ocols == 80);
     ck("左右外接等高24", rects[0].orows==24 && rects[1].orows==24);
     ck("两 pane valid", rects[0].valid && rects[1].valid);
-    /* v1.8.40：窗格内容相对外接区域四周内缩 1 格（窗格与分隔线之间留空白）。 */
-    ck("左 pane 内容内缩1格", rects[0].c0==1 && rects[0].r0==1 &&
-       rects[0].cols==rects[0].ocols-2 && rects[0].rows==rects[0].orows-2);
-    ck("右 pane 内容内缩1格", rects[1].c0==rects[1].oc0+1 && rects[1].r0==1 &&
-       rects[1].cols==rects[1].ocols-2);
+    /* v1.8.41：窗格内容矩形与外接分配矩形一致（窗格之间不留空白，需求改在
+     * 标签栏的 [标题 ×] 里加空格，不是窗格间）。 */
+    ck("内容矩形=外接矩形(无内缩)", rects[0].c0==rects[0].oc0 && rects[0].r0==rects[0].or0 &&
+       rects[0].cols==rects[0].ocols && rects[0].rows==rects[0].orows &&
+       rects[1].c0==rects[1].oc0 && rects[1].cols==rects[1].ocols);
     ck("分隔线列=两窗格外接交界", rects[0].oc0+rects[0].ocols+1 == rects[1].oc0);
 
     int leaf0 = split_find_leaf(p1, 0);
@@ -85,7 +85,7 @@ int main(void) {
     ck("左上下外接高+边框=24", rects[0].orows + 1 + rects[2].orows == 24);
     ck("左上左下外接同宽", rects[0].ocols == rects[2].ocols);
     ck("上下分隔行间=外接交界", rects[0].or0+rects[0].orows+1 == rects[2].or0);
-    ck("左上内容内缩", rects[0].r0==rects[0].or0+1 && rects[0].c0==rects[0].oc0+1);
+    ck("左上内容=外接(无内缩)", rects[0].r0==rects[0].or0 && rects[0].c0==rects[0].oc0);
 
     ck("pane2(左下) 右邻=pane1(右)", split_neighbor_pane(p1,2,'R')==1);
     ck("pane0(左上) 下邻=pane2(左下)", split_neighbor_pane(p1,0,'D')==2);
@@ -204,7 +204,7 @@ int main(void) {
         split_layout(split_root_for_tab(0), 0, 0, 120, 30, split_nodes(), rs);
         ck("4 个窗格都有有效矩形", rs[0].valid && rs[1].valid && rs[2].valid && rs[3].valid);
         ck("窗格外接宽之和+边框=总宽", rs[0].ocols+rs[1].ocols+rs[2].ocols+rs[3].ocols+3 == 120);
-        ck("内容相对外接内缩1格", rs[0].cols==rs[0].ocols-2 && rs[3].c0==rs[3].oc0+1);
+        ck("内容=外接(无内缩)", rs[0].cols==rs[0].ocols && rs[3].c0==rs[3].oc0 && rs[0].c0==0);
     }
 
     if (failures) { printf("\n%d FAILURE(S)\n", failures); return 1; }

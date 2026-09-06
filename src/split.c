@@ -136,22 +136,13 @@ static void layout_rec(SplitNode *nodes, int n, int c0, int r0, int cols, int ro
     if (nodes[n].leaf) {
         int pi = nodes[n].pane_idx;
         if (pi >= 0) {
-            /* 外接分配矩形（分隔线 / 鼠标命中用）。 */
+            /* 窗格内容矩形就是分配到的矩形（内容与分隔线相邻，之间不留空白）。
+             * 内缩/外接两套坐标相等：渲染、ConPTY 尺寸、鼠标命中、分隔线定位都用
+             * 同一套字段，避免两套坐标不一致。 */
             rects[pi].oc0 = c0;  rects[pi].or0 = r0;
             rects[pi].ocols = cols; rects[pi].orows = rows;
-            /* 内容矩形：相对分配区域四周各内缩 1 格（空间足够时），窗格内容与
-             * 分隔线之间留出 1 列/行空白（由面板底色填充），相邻窗格变成
-             * 「内容·空格·边框线·空格·内容」，不再内容紧贴边框。极小窗格放不下
-             * 内缩时退回贴边，保证至少 1 格内容。 */
-            int ic0 = c0, ir0 = r0, ic = cols, ir = rows;
-            if (cols >= SPLIT_MIN_COLS + 2) { ic0 = c0 + 1; ic = cols - 2; }
-            if (rows >= SPLIT_MIN_ROWS + 2) { ir0 = r0 + 1; ir = rows - 2; }
-            if (ic < 1) ic = 1;
-            if (ir < 1) ir = 1;
-            rects[pi].c0 = ic0;
-            rects[pi].r0 = ir0;
-            rects[pi].cols = ic;
-            rects[pi].rows = ir;
+            rects[pi].c0 = c0;  rects[pi].r0 = r0;
+            rects[pi].cols = cols; rects[pi].rows = rows;
             rects[pi].valid = 1;
         }
         return;
