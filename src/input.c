@@ -64,7 +64,7 @@ static char g_split_drag_dir = 0;    /* 'V' / 'H' / 0 */
 
 /* 算出当前各 pane 的内容区矩形（与 render 同源 split_layout）。 */
 static void split_mouse_rects(PaneRect *rects) {
-    for (int i = 0; i < MAX_PANES; i++) { rects[i].valid = 0; rects[i].cols = rects[i].rows = 0; }
+    for (int i = 0; i < MAX_PANES; i++) memset(&rects[i], 0, sizeof(rects[i]));
     int root = split_active_root();
     if (root < 0) return;
     split_layout(root, 0, 0, g_mux.host_cols, g_mux.host_rows, split_nodes(), rects);
@@ -97,15 +97,16 @@ static int handle_split_mouse(MOUSE_EVENT_RECORD *me) {
         if (!pressed) { g_split_drag_dir = 0; g_split_drag_pane = -1; return 1; }
         int root = split_active_root();
         if (g_split_drag_dir == 'V') {
-            /* 鼠标在锚点 pane 右边缘附近：以相对位置算目标百分比并 resize。 */
+            /* 鼠标在锚点 pane 右边缘附近：以相对位置算目标百分比并 resize。
+             * 用【外接分配宽度】（分隔线位置即外接边界，内容内缩不影响比例）。 */
             PaneRect *a = &rects[g_split_drag_pane];
             if (a->valid) {
-                /* 找到该分隔的总宽 = a 宽 + 1 + 右邻宽。这里用边界当前位置推算。 */
+                /* 找到该分隔的总宽 = a 外接宽 + 1 + 右邻外接宽。 */
                 int bx = content_x;            /* 期望竖线列 */
-                int total = a->cols + 1;
+                int total = a->ocols + 1;
                 for (int i = 0; i < MAX_PANES; i++)
-                    if (rects[i].valid && rects[i].c0 == a->c0 + a->cols + 1) total += rects[i].cols;
-                int left_w = bx - a->c0;
+                    if (rects[i].valid && rects[i].oc0 == a->oc0 + a->ocols + 1) total += rects[i].ocols;
+                int left_w = bx - a->oc0;
                 int pct = total > 1 ? (left_w * 100) / (total - 1) : 50;
                 if (pct < 5) pct = 5;
                 if (pct > 95) pct = 95;
@@ -117,10 +118,10 @@ static int handle_split_mouse(MOUSE_EVENT_RECORD *me) {
             PaneRect *a = &rects[g_split_drag_pane];
             if (a->valid) {
                 int by = content_y;
-                int total = a->rows + 1;
+                int total = a->orows + 1;
                 for (int i = 0; i < MAX_PANES; i++)
-                    if (rects[i].valid && rects[i].r0 == a->r0 + a->rows + 1) total += rects[i].rows;
-                int top_h = by - a->r0;
+                    if (rects[i].valid && rects[i].or0 == a->or0 + a->orows + 1) total += rects[i].orows;
+                int top_h = by - a->or0;
                 int pct = total > 1 ? (top_h * 100) / (total - 1) : 50;
                 if (pct < 5) pct = 5;
                 if (pct > 95) pct = 95;
@@ -131,44 +132,46 @@ static int handle_split_mouse(MOUSE_EVENT_RECORD *me) {
         return 1;
     }
 
-    /* 2) 命中边框（竖线/横线 1 格宽）：按下即开始拖拽。 */
+    /* 2) 命中边框（竖线/横线 1 格宽）：按下即开始拖拽。边框在【外接分配区域】的
+     *    边界（oc0+ocols），窗格内容已内缩，边框线与内容之间有 1 格空白。 */
     if (pressed && (me->dwEventFlags == 0 || me->dwEventFlags == DOUBLE_CLICK)) {
         for (int i = 0; i < MAX_PANES; i++) {
             if (!rects[i].valid) continue;
             PaneRect *r = &rects[i];
-            /* 竖边框列 = r->c0 + r->cols（它右侧有邻 pane 才算分隔）。 */
-            int vx = r->c0 + r->cols;
+            /* 竖边框列 = 外接右沿 oc0+ocols（它右侧有邻 pane 才算分隔）。 */
+            int vx = r->oc0 + r->ocols;
             int has_r = 0;
             for (int j = 0; j < MAX_PANES; j++)
-                if (rects[j].valid && j != i && rects[j].c0 == vx + 1 &&
-                    content_y >= r->r0 && content_y < r->r0 + r->rows) has_r = 1;
-            if (has_r && content_x == vx && content_y >= r->r0 && content_y < r->r0 + r->rows) {
+                if (rects[j].valid && j != i && rects[j].oc0 == vx + 1 &&
+                    content_y >= r->or0 && content_y < r->or0 + r->orows) has_r = 1;
+            if (has_r && content_x == vx && content_y >= r->or0 && content_y < r->or0 + r->orows) {
                 g_split_drag_dir = 'V'; g_split_drag_pane = i; return 1;
             }
-            int hy = r->r0 + r->rows;
+            int hy = r->or0 + r->orows;
             int has_d = 0;
             for (int j = 0; j < MAX_PANES; j++)
-                if (rects[j].valid && j != i && rects[j].r0 == hy + 1 &&
-                    content_x >= r->c0 && content_x < r->c0 + r->cols) has_d = 1;
-            if (has_d && content_y == hy && content_x >= r->c0 && content_x < r->c0 + r->cols) {
+                if (rects[j].valid && j != i && rects[j].or0 == hy + 1 &&
+                    content_x >= r->oc0 && content_x < r->oc0 + r->ocols) has_d = 1;
+            if (has_d && content_y == hy && content_x >= r->oc0 && content_x < r->oc0 + r->ocols) {
                 g_split_drag_dir = 'H'; g_split_drag_pane = i; return 1;
             }
         }
     }
 
-    /* 3) 命中某个 pane 内部：点击切换焦点；并把坐标换算到该 pane 本地，
-     *    改 active_pane 后交回常规终端鼠标流程（mouse tracking / 复制）。 */
+    /* 3) 命中某个 pane 的外接区域（含内容与内缩空白）：点击切换焦点；坐标换算到
+     *    该 pane 本地后交回常规终端鼠标流程。用外接矩形命中，内缩留出的空格点到
+     *    也算这个 pane，不会出现「点窗格边上的空白没反应」。 */
     for (int i = 0; i < MAX_PANES; i++) {
         if (!rects[i].valid) continue;
         PaneRect *r = &rects[i];
-        if (content_x >= r->c0 && content_x < r->c0 + r->cols &&
-            content_y >= r->r0 && content_y < r->r0 + r->rows) {
+        if (content_x >= r->oc0 && content_x < r->oc0 + r->ocols &&
+            content_y >= r->or0 && content_y < r->or0 + r->orows) {
             if (i != g_mux.active_pane && pressed) {
                 ui_modes_cancel();
                 switch_pane(i);
                 return 1;   /* 切换焦点这一下不下发给终端 */
             }
-            return 0;   /* 已是活动 pane：坐标即本地（活动 pane 从 0,0 起画），继续常规处理 */
+            return 0;   /* 已是活动 pane：继续常规处理 */
         }
     }
     return 1;   /* 点在边框/空隙上，吞掉 */

@@ -61,11 +61,18 @@ int main(void) {
     PaneRect rects[16];
     memset(rects, 0, sizeof(rects));
     split_layout(p1, 0, 0, 80, 24, N, rects);
-    ck("左 pane 原点(0,0)", rects[0].c0==0 && rects[0].r0==0);
-    ck("右 pane 起点=左宽+1", rects[1].c0 == rects[0].cols + 1);
-    ck("左右宽+边框=80", rects[0].cols + 1 + rects[1].cols == 80);
-    ck("左右等高24", rects[0].rows==24 && rects[1].rows==24);
+    /* 位置/尺寸守恒按【外接分配矩形】（ocols/orows/oc0/or0）：分隔线在边界。 */
+    ck("左 pane 外接原点(0,0)", rects[0].oc0==0 && rects[0].or0==0);
+    ck("右 pane 外接起点=左外接宽+1", rects[1].oc0 == rects[0].ocols + 1);
+    ck("左右外接宽+边框=80", rects[0].ocols + 1 + rects[1].ocols == 80);
+    ck("左右外接等高24", rects[0].orows==24 && rects[1].orows==24);
     ck("两 pane valid", rects[0].valid && rects[1].valid);
+    /* v1.8.40：窗格内容相对外接区域四周内缩 1 格（窗格与分隔线之间留空白）。 */
+    ck("左 pane 内容内缩1格", rects[0].c0==1 && rects[0].r0==1 &&
+       rects[0].cols==rects[0].ocols-2 && rects[0].rows==rects[0].orows-2);
+    ck("右 pane 内容内缩1格", rects[1].c0==rects[1].oc0+1 && rects[1].r0==1 &&
+       rects[1].cols==rects[1].ocols-2);
+    ck("分隔线列=两窗格外接交界", rects[0].oc0+rects[0].ocols+1 == rects[1].oc0);
 
     int leaf0 = split_find_leaf(p1, 0);
     int p2 = split_do(leaf0, SPLIT_H, 2);
@@ -74,9 +81,11 @@ int main(void) {
     memset(rects, 0, sizeof(rects));
     split_layout(p1, 0, 0, 80, 24, N, rects);
     ck("3 pane valid", rects[0].valid && rects[1].valid && rects[2].valid);
-    ck("右 pane 占满高24", rects[1].rows == 24);
-    ck("左上下高+边框=24", rects[0].rows + 1 + rects[2].rows == 24);
-    ck("左上左下同宽", rects[0].cols == rects[2].cols);
+    ck("右 pane 外接占满高24", rects[1].orows == 24);
+    ck("左上下外接高+边框=24", rects[0].orows + 1 + rects[2].orows == 24);
+    ck("左上左下外接同宽", rects[0].ocols == rects[2].ocols);
+    ck("上下分隔行间=外接交界", rects[0].or0+rects[0].orows+1 == rects[2].or0);
+    ck("左上内容内缩", rects[0].r0==rects[0].or0+1 && rects[0].c0==rects[0].oc0+1);
 
     ck("pane2(左下) 右邻=pane1(右)", split_neighbor_pane(p1,2,'R')==1);
     ck("pane0(左上) 下邻=pane2(左下)", split_neighbor_pane(p1,0,'D')==2);
@@ -100,7 +109,7 @@ int main(void) {
     ck("pane2 已移除", split_find_leaf(root_after,2)<0);
     memset(rects,0,sizeof(rects));
     split_layout(root_after,0,0,80,24,N,rects);
-    ck("关闭后 pane0 占满左列高24", rects[0].valid && rects[0].rows==24);
+    ck("关闭后 pane0 外接占满左列高24", rects[0].valid && rects[0].orows==24);
 
     int before = N[root_after].frac_pct;
     split_resize_pane(root_after, 0, 'R', 5);
@@ -167,6 +176,36 @@ int main(void) {
     split_init_tab(20);
     int surv20 = -1;
     ck("单叶子摘除返回0", split_remove_pane(20, &surv20) == 0);
+
+    /* ---- 运行时模拟：连续 3 次分屏（一个标签里开 3 个窗格） ---- */
+    split_reset();
+    g_mux.pane_count = 8;
+    for (int i = 0; i < 8; i++) { g_mux.panes[i].active = 1; g_mux.panes[i].is_split_child = 0; }
+    g_mux.active_pane = 0;
+    split_init_tab(0);
+    /* 第一次：0 -> 0|1，焦点到新窗格 1。 */
+    ck("第1次分屏成功", split_split_active(SPLIT_V, 1) == 1);
+    ck("第1次后焦点在1", g_mux.active_pane == 1);
+    ck("第1次后 1 是子窗格", g_mux.panes[1].is_split_child == 1);
+    /* 第二次：在焦点窗格 1 上再切，-> 0 | 1|2，焦点到 2。 */
+    ck("第2次分屏成功", split_split_active(SPLIT_V, 2) == 1);
+    ck("第2次后焦点在2", g_mux.active_pane == 2);
+    ck("第2次后 2 是子窗格", g_mux.panes[2].is_split_child == 1);
+    /* 第三次：在焦点窗格 2 上再切，-> 0 | 1 | 2|3，焦点到 3。 */
+    ck("第3次分屏成功", split_split_active(SPLIT_V, 3) == 1);
+    ck("第3次后焦点在3", g_mux.active_pane == 3);
+    ck("第3次后 3 是子窗格", g_mux.panes[3].is_split_child == 1);
+    /* 同一棵树、4 个叶子、锚点仍是 0。 */
+    ck("3次分屏后同树叶子数=4", split_count_leaves(split_root_for_tab(0)) == 4);
+    {
+        int out[16], gn = split_tab_panes(0, out, 16);
+        ck("3次分屏 tab_panes=4 且都在一个标签", gn == 4 && out[0]==0 && out[1]==1 && out[2]==2 && out[3]==3);
+        PaneRect rs[MAX_PANES]; memset(rs, 0, sizeof(rs));
+        split_layout(split_root_for_tab(0), 0, 0, 120, 30, split_nodes(), rs);
+        ck("4 个窗格都有有效矩形", rs[0].valid && rs[1].valid && rs[2].valid && rs[3].valid);
+        ck("窗格外接宽之和+边框=总宽", rs[0].ocols+rs[1].ocols+rs[2].ocols+rs[3].ocols+3 == 120);
+        ck("内容相对外接内缩1格", rs[0].cols==rs[0].ocols-2 && rs[3].c0==rs[3].oc0+1);
+    }
 
     if (failures) { printf("\n%d FAILURE(S)\n", failures); return 1; }
     printf("\nSPLIT TESTS PASSED\n");

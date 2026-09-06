@@ -136,10 +136,22 @@ static void layout_rec(SplitNode *nodes, int n, int c0, int r0, int cols, int ro
     if (nodes[n].leaf) {
         int pi = nodes[n].pane_idx;
         if (pi >= 0) {
-            rects[pi].c0 = c0;
-            rects[pi].r0 = r0;
-            rects[pi].cols = cols;
-            rects[pi].rows = rows;
+            /* 外接分配矩形（分隔线 / 鼠标命中用）。 */
+            rects[pi].oc0 = c0;  rects[pi].or0 = r0;
+            rects[pi].ocols = cols; rects[pi].orows = rows;
+            /* 内容矩形：相对分配区域四周各内缩 1 格（空间足够时），窗格内容与
+             * 分隔线之间留出 1 列/行空白（由面板底色填充），相邻窗格变成
+             * 「内容·空格·边框线·空格·内容」，不再内容紧贴边框。极小窗格放不下
+             * 内缩时退回贴边，保证至少 1 格内容。 */
+            int ic0 = c0, ir0 = r0, ic = cols, ir = rows;
+            if (cols >= SPLIT_MIN_COLS + 2) { ic0 = c0 + 1; ic = cols - 2; }
+            if (rows >= SPLIT_MIN_ROWS + 2) { ir0 = r0 + 1; ir = rows - 2; }
+            if (ic < 1) ic = 1;
+            if (ir < 1) ir = 1;
+            rects[pi].c0 = ic0;
+            rects[pi].r0 = ir0;
+            rects[pi].cols = ic;
+            rects[pi].rows = ir;
             rects[pi].valid = 1;
         }
         return;
@@ -435,10 +447,15 @@ int split_split_active(int dir, int new_pane) {
     if (leaf < 0) return 0;
     /* 标记新 pane 为分屏子窗格（不单独出现在标签栏）。 */
     g_mux.panes[new_pane].is_split_child = 1;
-    int new_root = split_do(leaf, dir, new_pane);
-    if (new_root < 0) { g_mux.panes[new_pane].is_split_child = 0; return 0; }
+    /* split_do 把活动叶子【原地】变成内部节点（节点下标不变），整棵树的根索引
+     * 不会变。第一次切分时活动叶子就是根，之后的切分作用在嵌套叶子上，split_do
+     * 返回的是那个子树节点——绝不能拿它覆盖标签根，否则真正的根丢失，新窗格不在
+     * 同一棵树里（表现为「一个标签打不开 3 个及以上窗格」）。标签根始终是这里
+     * 切分前取得的 root。 */
+    int did = split_do(leaf, dir, new_pane);
+    if (did < 0) { g_mux.panes[new_pane].is_split_child = 0; return 0; }
     int anchor = split_tab_of_pane(g_mux.active_pane);
-    if (anchor >= 0) set_tab_root(anchor, new_root);
+    if (anchor >= 0) set_tab_root(anchor, root);
     /* 焦点交给新窗格。 */
     g_mux.active_pane = new_pane;
     g_mux.panes[new_pane].scroll_offset = 0;

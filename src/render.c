@@ -692,8 +692,17 @@ static void render_settings_keys(char *out, int bs, int *posp, int host_rows, in
     pos += snprintf(out + pos, bs - pos,
         "\x1b[4;%dH\x1b[038;2;139;148;158m所有改动写入 termux.ini 的 [general] prefix 与 [keys] 段；帮助页会同步显示。\x1b[0m",
         main_left);
-    pos += snprintf(out + pos, bs - pos,
-        "\x1b[5;%dH\x1b[038;2;121;192;255;1m   动作名             说明               当前键位      前缀   操作\x1b[0m", main_left);
+    {
+        /* 表头与数据列严格对齐：列起点（相对 main_left，0 基）：
+         * 标记 0..2、动作名 3..18(宽16)、说明 19..34(宽16)、当前键位 35..54(宽20)、
+         * [前缀] 56、[改] 64、[复位] 69。 */
+        int hc = 0;
+        pos += snprintf(out + pos, bs - pos, "\x1b[5;%dH\x1b[038;2;121;192;255;1m", main_left);
+        append_padded_utf8(out, bs, &pos, &hc, "   动作名", 19);
+        append_padded_utf8(out, bs, &pos, &hc, "说明", 16);
+        append_padded_utf8(out, bs, &pos, &hc, "当前键位", 20);
+        pos += snprintf(out + pos, bs - pos, "前缀   操作\x1b[0m");
+    }
 
     settings_keys_clamp_scroll(host_rows);
     int total = settings_keys_rows();
@@ -734,10 +743,14 @@ static void render_settings_keys(char *out, int bs, int *posp, int host_rows, in
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s %s ",
                         row, main_left, settings_row_style(selected, hovered), selected ? "▶" : " ");
         cols += 3;
-        append_padded_utf8(out, bs, &pos, &cols, name, 19);
-        append_padded_utf8(out, bs, &pos, &cols, label, 19);
+        /* 列宽：动作名 16 + 说明 16 + 当前键位 20。键位组合可能较长（如
+         * "Ctrl+B Shift+tab"=18 列、用户自定义 "Ctrl+Alt+Shift+..."），combo 列
+         * 过窄会把长组合直接截断；动作名/说明从 19 收到 16（中文说明最长约 14 列）
+         * 腾出空间，右侧 [前缀]/[改]/[复位] 按钮列位置（56/64/69）不变。 */
+        append_padded_utf8(out, bs, &pos, &cols, name, 16);
+        append_padded_utf8(out, bs, &pos, &cols, label, 16);
         pos += snprintf(out + pos, bs - pos, "%s", capturing ? "\x1b[038;2;210;153;034;1m" : "");
-        append_padded_utf8(out, bs, &pos, &cols, combo, 16);
+        append_padded_utf8(out, bs, &pos, &cols, combo, 20);
         pos += snprintf(out + pos, bs - pos, "\x1b[0m");
 
         /* 是否需要先按前缀键，可以按 P 或点这里切换。按钮高亮独立判断行/列，
@@ -820,12 +833,12 @@ static void render_settings_behavior(char *out, int bs, int *posp, int host_rows
                       g_mouse_x < main_left + SETTINGS_SB_PLUS_COL + 2);
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s[-]\x1b[0m",
                         sb_row, main_left + SETTINGS_SB_MINUS_COL,
-                        h_minus ? "\x1b[048;2;217;119;054m\x1b[038;2;013;017;023;1m" : "\x1b[038;2;217;119;054m");
+                        h_minus ? "\x1b[048;2;217;119;054m\x1b[038;2;013;017;023;1m" : TB_BG "\x1b[038;2;217;119;054m");
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[038;2;230;237;243;1m%6d\x1b[0m 行",
                         sb_row, main_left + SETTINGS_SB_MINUS_COL + 4, g_scrollback_lines);
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s[+]\x1b[0m",
                         sb_row, main_left + SETTINGS_SB_PLUS_COL,
-                        h_plus ? "\x1b[048;2;063;185;080m\x1b[038;2;013;017;023;1m" : "\x1b[038;2;063;185;080m");
+                        h_plus ? "\x1b[048;2;063;185;080m\x1b[038;2;013;017;023;1m" : TB_BG "\x1b[038;2;063;185;080m");
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH\x1b[038;2;139;148;158m(对之后新建的 pane 生效)\x1b[0m",
                         sb_row, main_left + SETTINGS_SB_PLUS_COL + 4);
     }
@@ -965,11 +978,12 @@ void render_settings_panel(char *out, int bs, int *posp, int host_rows, int host
             char row_tag[16];
             snprintf(row_tag, sizeof(row_tag), "[%d]", i + 1);
             int row_cols = 0;
-            /* 行首标记统一 2 列宽：聚焦行 "▶ "(▶ 为宽字符占2列，必须补成和
-             * 非聚焦的两个半角空格一样宽)，否则聚焦行整行右移 1 列、按钮与硬编码
-             * 热区错位，行底色还会盖到 [↑] 按钮列上。 */
-            pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s%s\x1b[038;2;210;153;034m%s\x1b[0m%s  ",
-                            r, main_left, row_bg, (row_focus ? "▶" : "  "), row_tag, row_bg);
+            /* 行首：聚焦行 " ▶"（前导空格 + ▶），非聚焦行 "  "（两空格）。▶ 在
+             * 本代码库按宽 1 渲染，所以两种行首都是 2 列——列起点逐行一致，[↑] 等
+             * 按钮与硬编码热区不错位。（v1.8.39 曾误删聚焦行前导空格，使聚焦行整行
+             * 左移 1 列，菜单项管理的当前项显得靠左。） */
+            pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s %s\x1b[038;2;210;153;034m%s\x1b[0m%s  ",
+                            r, main_left, row_bg, (row_focus ? "▶" : " "), row_tag, row_bg);
             row_cols = 2 + utf8_cols(row_tag, (int)strlen(row_tag)) + 2;
 
             /* %-Ns pads bytes, not terminal columns.  Build both fixed
@@ -2259,7 +2273,7 @@ extern int g_split_zoom;
 /* 计算内容区里每个可见 pane 的矩形，并同步 screen/ConPTY 尺寸。返回可见叶子数。
  * zoom 时只让活动 pane 有效并铺满；其余 pane 标记为不可见（不 resize，保持原尺寸）。 */
 static int split_compute_rects(PaneRect *rects) {
-    for (int i = 0; i < MAX_PANES; i++) { rects[i].valid = 0; rects[i].cols = rects[i].rows = 0; }
+    for (int i = 0; i < MAX_PANES; i++) memset(&rects[i], 0, sizeof(rects[i]));
     int root = split_active_root();
     if (root < 0) return 0;
     /* 内容区：第 0 行标签栏已在上面画过；内容从第 1 行（终端行号 2）起。 */
@@ -2271,10 +2285,15 @@ static int split_compute_rects(PaneRect *rects) {
         if (i >= g_mux.pane_count || !g_mux.panes[i].active) { rects[i].valid = 0; continue; }
         if (g_split_zoom && i != active) { rects[i].valid = 0; continue; }
         n++;
-        int cw = rects[i].cols, ch = rects[i].rows;
-        if (g_split_zoom && i == active) { cw = g_mux.host_cols; ch = g_mux.host_rows; rects[i].c0 = 0; rects[i].r0 = 0; }
-        if (cw >= 1 && ch >= 1)
-            pane_resize_to(i, cw, ch);
+        /* zoom：活动窗格铺满整个内容区（无内缩、无边框）。 */
+        if (g_split_zoom && i == active) {
+            rects[i].oc0 = rects[i].c0 = 0;
+            rects[i].or0 = rects[i].r0 = 0;
+            rects[i].ocols = rects[i].cols = g_mux.host_cols;
+            rects[i].orows = rects[i].rows = g_mux.host_rows;
+        }
+        if (rects[i].cols >= 1 && rects[i].rows >= 1)
+            pane_resize_to(i, rects[i].cols, rects[i].rows);
     }
     return n;
 }
@@ -2287,32 +2306,33 @@ static void render_split_borders(char *out, int bs, int *posp, PaneRect *rects) 
     const char *v_off = "\x1b[048;2;022;027;034m\x1b[038;2;110;118;129m│\x1b[0m";
     const char *h_on  = "\x1b[048;2;033;038;045m\x1b[038;2;121;192;255;1m─\x1b[0m";
     const char *h_off = "\x1b[048;2;022;027;034m\x1b[038;2;110;118;129m─\x1b[0m";
-    /* 竖线列：pane 右沿 x=c0+cols（其右邻 pane 从 x+1 起）。 */
+    /* 竖线列：pane 外接分配区域右沿 x=oc0+ocols（其右邻 pane 从 x+1 起）。
+     * 边框线跨度也按外接高度（整段分隔线连续）；窗格内容已内缩，线两侧各有空格。 */
     for (int i = 0; i < MAX_PANES; i++) {
         if (!rects[i].valid) continue;
-        int bx = rects[i].c0 + rects[i].cols;   /* 0 基边框列 */
+        int bx = rects[i].oc0 + rects[i].ocols;   /* 0 基边框列 */
         if (bx >= g_mux.host_cols - 1) continue;
         int has_neighbor = 0;
         for (int j = 0; j < MAX_PANES; j++)
-            if (rects[j].valid && j != i && rects[j].c0 == bx + 1) has_neighbor = 1;
+            if (rects[j].valid && j != i && rects[j].oc0 == bx + 1) has_neighbor = 1;
         if (!has_neighbor) continue;
-        for (int r = rects[i].r0; r < rects[i].r0 + rects[i].rows; r++) {
+        for (int r = rects[i].or0; r < rects[i].or0 + rects[i].orows; r++) {
             int active_border = (i == g_mux.active_pane);
             const char *seg = active_border ? v_on : v_off;
             pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s", r + 2, bx + 1, seg);
         }
     }
-    /* 横线行：pane 下沿 y=r0+rows。 */
+    /* 横线行：pane 外接分配区域下沿 y=or0+orows。 */
     for (int i = 0; i < MAX_PANES; i++) {
         if (!rects[i].valid) continue;
-        int by = rects[i].r0 + rects[i].rows;   /* 0 基边框行 */
+        int by = rects[i].or0 + rects[i].orows;   /* 0 基边框行 */
         if (by >= g_mux.host_rows - 1) continue;
         int has_neighbor = 0;
         for (int j = 0; j < MAX_PANES; j++)
-            if (rects[j].valid && j != i && rects[j].r0 == by + 1) has_neighbor = 1;
+            if (rects[j].valid && j != i && rects[j].or0 == by + 1) has_neighbor = 1;
         if (!has_neighbor) continue;
         int active_border = (i == g_mux.active_pane);
-        for (int c = rects[i].c0; c < rects[i].c0 + rects[i].cols; c++) {
+        for (int c = rects[i].oc0; c < rects[i].oc0 + rects[i].ocols; c++) {
             const char *seg = active_border ? h_on : h_off;
             pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s", by + 2, c + 1, seg);
         }
