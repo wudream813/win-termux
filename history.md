@@ -6,6 +6,15 @@
 
 ## 版本更新记录
 
+### v1.8.46
+为彻底解决「调整窗格宽度后历史排版」问题打地基——引入**逻辑行历史 + 本地 reflow 引擎**（本版本为独立地基模块，暂不改变显示行为，后续版本逐步接入渲染/复制/搜索的历史数据源）：
+- **为什么不用「子终端无限宽」**：把 pty 设成超宽会让全屏 TUI（vim/htop/less/man）按超宽做绝对定位，本地对线性字符流软换行无法重排二维画布，TUI 布局与鼠标坐标会错乱；命令行行编辑器（readline/PSReadLine）也会因宽度不符而花屏。现代终端（VTE/iTerm2/Alacritty/WezTerm）的做法是：实时屏让 pty 始终等于视口尺寸（保证 TUI 正确），滚动历史则存成**逻辑行**（按真实换行符切分，软换行折下来的物理行合并回同一行），resize 时只在本地对历史做宽字符感知的 reflow。
+- **新增 `src/loghist.c` / `include/loghist.h`**：`LogHistory` 环形缓冲按逻辑行保存历史（每行 cells 动态生长）。`loghist_append_row` 区分硬换行（新逻辑行）与软换行续行（`wrapped=1` 时并入当前逻辑行），并裁掉物理行尾的空格填充；`loghist_visual_lines(w)` 计算在宽度 w 下 reflow 后的显示行数；`loghist_get_visual_line(w, visual, ...)` 输出某条显示行。
+- **宽字符感知折行**：CJK（占 2 列）与 emoji（高/低代理对占 2 列）在显示行边界放不下时整体折到下一行、绝不拆半个字；空行（列号为 0）时 glyph 硬放、夹到宽度内，避免比行宽的 glyph 死循环。
+- **环形淘汰**：逻辑行超容量时淘汰最老一条；`ScreenLine` 增加 `len` 字段（v1.8.45 已加）支撑每行独立宽度。
+- **验证**：新增 `verify_loghist.py`（硬/软换行合并、尾空格裁剪、窄→宽 reflow 行数与内容、CJK/emoji 不拆、环形淘汰、空逻辑行、多逻辑行不串内容，共 7 组断言，纯函数 + ASAN 编译），纳入 `verify_all.py`；`tests/stub/windows.h` 补齐 `CHAR_INFO`/`COORD`/`CRITICAL_SECTION`/`MOUSE_EVENT_RECORD`/`__stdcall` 等测试替身；单元测试 309 / 0 failed；`verify_all.py` 全过；MinGW gcc / g++ × x86_64 / i686 四套 `-Wall -Wextra -Werror`。
+- **后续（未在本版本接入）**：把滚动历史渲染、复制模式选区、历史搜索的数据源从物理环形缓冲切到 `LogHistory` + 实时 reflow，实现窄视口下宽历史自动折成多行、拖宽折回一行。
+
 ### v1.8.45
 六条用户反馈的修复：
 - **删除「按编号跳转 pane」**：`ACT_SELECT_PANE` 从设置键位动作表、帮助页、默认绑定（小键盘 `0`-`9` 一并移除）、动作分发中整体移除（枚举值保留以免动作 id 移位）。pane 切换统一走前缀 `w` 的可视化「切换 panel」面板。

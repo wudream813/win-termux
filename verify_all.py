@@ -14,6 +14,7 @@ CHECKS = (
     "verify_emoji.py",
     "verify_ringbuf_asan.py",
     "verify_screen_state.py",
+    "verify_loghist.py",
     "verify_html_clipboard.py",
     "verify_dirty_render.py",
     "verify_dirty_cursor.py",

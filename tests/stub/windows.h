@@ -27,6 +27,65 @@ typedef long LONG;
 #define _stricmp  strcasecmp
 #define _strnicmp strncasecmp
 
+/* Win32 调用约定在原生 Linux 编译下置空（部分头里有 __stdcall 函数声明）。 */
+#ifndef __stdcall
+#define __stdcall
+#endif
+#ifndef WINAPI
+#define WINAPI
+#endif
+
+/* 控制台单元（仅 loghist/screen 等纯逻辑模块需要；真实定义见 Win32 wincon.h）。 */
+typedef struct _CHAR_INFO {
+    union {
+        WCHAR UnicodeChar;
+        char  AsciiChar;
+    } Char;
+    WORD Attributes;
+} CHAR_INFO;
+
+typedef struct _COORD {
+    short X;
+    short Y;
+} COORD;
+
+typedef struct _SMALL_RECT {
+    short Left, Top, Right, Bottom;
+} SMALL_RECT;
+
+/* CRITICAL_SECTION 替身：纯逻辑测试不真正用临界区（Enter/Leave 为空宏）。 */
+typedef struct { int dummy; } CRITICAL_SECTION;
+#define InitializeCriticalSection(p) (void)(p)
+#define DeleteCriticalSection(p)     (void)(p)
+#define EnterCriticalSection(p)      (void)(p)
+#define LeaveCriticalSection(p)      (void)(p)
+
+/* 鼠标事件记录替身（只列访问到的字段）。dwMousePosition 用 COORD。 */
+typedef struct _MOUSE_EVENT_RECORD {
+    COORD dwMousePosition;
+    DWORD dwButtonState;
+    DWORD dwControlKeyState;
+    DWORD dwEventFlags;
+} MOUSE_EVENT_RECORD;
+
+#define FROM_LEFT_1ST_BUTTON_PRESSED  0x0001
+#define FROM_LEFT_2ND_BUTTON_PRESSED  0x0004
+#define RIGHTMOST_BUTTON_PRESSED      0x0002
+#define DOUBLE_CLICK                  0x0002
+#define MOUSE_WHEELED                 0x0004
+#define MOUSE_HWHEELED                0x0008
+
+#define COMMON_LVB_UNDERSCORE  0x8000
+#define COMMON_LVB_REVERSE_VIDEO 0x4000
+#define FOREGROUND_INTENSITY   0x0008
+#define BACKGROUND_INTENSITY   0x0080
+#define FOREGROUND_RED 0x0004
+#define FOREGROUND_GREEN 0x0002
+#define FOREGROUND_BLUE 0x0001
+#define BACKGROUND_RED 0x0040
+#define BACKGROUND_GREEN 0x0020
+#define BACKGROUND_BLUE 0x0010
+
 /* 控制键状态位 */
 #define RIGHT_ALT_PRESSED   0x0001
 #define LEFT_ALT_PRESSED    0x0002
