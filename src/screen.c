@@ -411,37 +411,45 @@ int screen_resize(ScreenBuffer *s, int nc, int nr) {
     if (old_hist > old_cap) old_hist = old_cap;
     if (old_hist > nt - nr) old_hist = nt - nr;
 
-    /* ---- 行迁移（顶部对齐 + 高度变化时历史/可见互转）----
-     * 可见区始终顶部对齐：新可见行 y 取旧可见行 y（y<cr 时两者都在）。
-     *  - 高度缩小（nr<rows）：旧可见区底部被裁的行（旧 rel cr..rows-1）不是丢弃，
-     *    而是「滚入」历史，排在旧历史之后（比旧历史更新），这样拖分屏条把窗格调矮
-     *    后再滚动能看到这些行（v1.8.42 修复：调分隔条大小后历史记录不见）。
-     *  - 高度放大（nr>rows）：多出来的可见行从历史顶部取（旧历史最新的那些提升为
-     *    可见），取不到的留空；历史相应变短。
-     * 历史缓冲排布：新历史位置 -h（-1=紧邻可见区上方=最新），自顶向下（h 从大到小）
-     * 为：[保留的旧历史行] + [缩小滚入的旧可见行]。 */
+    /* ---- 行迁移（底部锚定 / bottom-anchored，与真实终端 reflow 一致）----
+     * 终端调整高度时内容【底部对齐】：命令提示符（在屏幕底部）始终留在底部，
+     * 高度缩小时顶部的老行向上滚入历史，高度放大时历史行回补到屏幕顶部。
+     * 定义锚点偏移 k = nr - rows（缩小 k<0、放大 k>0、纯宽变 k=0）：
+     *   旧可见行 y（0=顶 .. rows-1=底）在新布局里的可见位置 = y + k。
+     *  - 缩小（k<0）：旧可见行 y < -k（顶部 |k| 行）映射到新历史（滚入），
+     *    其余（y >= -k）留在新可见（底部 rows-|k|=nr 行）；
+     *  - 放大（k>0）：所有旧可见行移到新可见 y+k（底部 rows 行），新可见顶部
+     *    k 行从历史最新行回补（y = k-1 取历史 -1、y=k-l 取历史 -l）。
+     * 新历史 -h（-1=紧邻可见区=最新）在缩小时自新向旧依次为：滚入的旧可见行
+     * （旧可见 rows-1-k ... 0 中落到历史的部分）再接旧历史 -1,-2,...；放大时
+     * 最新 lifted=k 行历史已回补可见，新历史 -h 接旧历史 -(h+k)。 */
     WORD fill_attr = s->current_attr ? s->current_attr : 0x07;
     int newcap = nt - nr;
-    int dropped_vis = (s->rows > nr) ? (s->rows - nr) : 0;  /* 缩小：滚入历史的旧可见行数 */
-    int lifted = (nr > s->rows) ? (nr - s->rows) : 0;       /* 放大：提升为可见的历史行数 */
-    int new_hist = old_hist + dropped_vis - lifted;
+    int k = nr - s->rows;                          /* 锚点偏移：缩小<0、放大>0 */
+    int rolled_in = (k < 0) ? -k : 0;              /* 缩小：滚入历史的旧可见行数 */
+    int lifted = (k > 0) ? k : 0;                  /* 放大：回补到可见的历史行数 */
+    int new_hist = old_hist + rolled_in - lifted;
     if (new_hist > newcap) new_hist = newcap;
     if (new_hist < 0) new_hist = 0;
 
-    /* 迁移新可见区（rel 0..nr-1）：y<cr 取旧可见 y；y>=cr（仅放大）取旧历史提升行
-     * （旧历史 -1,-2,.. 对应新可见 cr,cr+1,..），无则空白。 */
+    /* 取「旧布局逻辑行 src」的物理行：src>=0 为旧可见行、src<0 为旧历史第 -src 新；
+     * 越界/不存在返回 -1。 */
+    #define RESIZE_OLD_ROW(src) ( \
+        ((src) >= 0 && (src) < s->rows) ? screen_phys_row(s, (src)) : \
+        ((src) < 0 && -(src) >= 1 && -(src) <= old_hist) ? screen_phys_row(s, (src)) : -1)
+
+    /* 迁移新可见区（rel 0..nr-1）。
+     *  - 缩小/纯宽变（k<=0）：新可见行 y 取旧可见行 src = y - k（底部锚定，
+     *    y=0 取旧可见 -k 行）。
+     *  - 放大（k>0）：底部 rows 行（y>=k）取旧可见行 src = y-k；顶部 k 行
+     *    （y<k）从历史回补，y=0 取最老回补行（旧历史 -k）、y=k-1 取最新历史
+     *    （旧历史 -1），即 src = -(k - y)。 */
     for (int y = 0; y < nr; y++) {
         int new_r = (nst + y) % nt;
-        int old_r = -1;
-        if (y < s->rows) {
-            old_r = screen_phys_row(s, y);                    /* 旧可见行 y（顶部对齐） */
-        } else {
-            /* 放大：旧可见占新可见 y=0..rows-1；其下方 y=rows..nr-1 接旧历史里被提升
-             * 的最新 lifted 行，按时间从上到下：y=rows 取其中最老一条（旧历史 -lifted），
-             * y 增大逐次到最新 -1（y=rows+lifted-1）。 */
-            int hk = lifted - (y - s->rows);
-            if (hk >= 1 && hk <= old_hist) old_r = screen_phys_row(s, -hk);
-        }
+        int src;
+        if (k > 0 && y < k) src = -(k - y);       /* 放大回补的历史行 */
+        else               src = y - k;           /* 旧可见行 */
+        int old_r = RESIZE_OLD_ROW(src);
         if (old_r >= 0 && old_r < s->total_lines && s->lines && s->lines[old_r].cells) {
             if (line_alloc(&nl[new_r], nc, fill_attr))
                 line_copy(&nl[new_r], &s->lines[old_r], cc);
@@ -449,30 +457,27 @@ int screen_resize(ScreenBuffer *s, int nc, int nr) {
             line_alloc(&nl[new_r], nc, fill_attr);
         }
     }
-    /* 迁移新历史区（rel -1..-new_hist，-1 最新）。
-     *  - 放大（lifted>0）：旧历史最新 lifted 行已提升为可见，剩下的旧历史里
-     *    新历史 -1 接旧历史 -(lifted+1)、-2 接 -(lifted+2) ...（保留 older 部分）。
-     *  - 缩小（dropped_vis>0）：新历史 -1 起先是滚入的旧可见行（旧 rows-1,rows-2,...），
-     *    之后接旧历史 -1,-2,...。
-     *  - 仅宽度变化：新历史 -h 接旧历史 -h。 */
+    /* 迁移新历史区（rel -1..-new_hist，-1 最新）。新历史行 -h 的旧逻辑行：
+     *   缩小：h<=rolled_in -> 滚入的旧可见行 src = (rows-1) - (rolled_in - h)
+     *         = rows-1-rolled_in+h-1 ... 即旧可见 y = h-1（最老滚入行=旧可见0 在
+     *         新历史最老端）。这里 -1 最新对应滚入的最新一行（旧可见 rows-1-rolled_in
+     *         之后的第一条），统一：src = (rolled_in - h) - 1 ... 推导见下，直接
+     *         用「旧逻辑行 = -h + k」（底部锚定的逆映射，历史行同样满足 src=new-k）。
+     *   放大：src = -h - lifted（跳过已回补可见的最新 lifted 行）。
+     * 统一式：旧逻辑行 src = (-h) - k（新历史行 -h 对应旧逻辑行 -h-k）。
+     *   缩小 k=-rolled_in：src = -h + rolled_in；h=1 -> rolled_in-1（旧可见行，
+     *     因为旧可见行 y 在新历史的逻辑号 = y+k = y-rolled_in = -h -> y=rolled_in-h，
+     *     即 src=rolled_in-h，与 -h+k= -h-(-rolled_in)=rolled_in-h 一致）。 */
     for (int h = 1; h <= new_hist; h++) {
         int new_r = (nst - h % nt + nt) % nt;
-        int old_r = -1;
-        if (lifted > 0) {
-            int hk = h + lifted;                   /* 跳过已提升为可见的最新 lifted 行 */
-            if (hk <= old_hist) old_r = screen_phys_row(s, -hk);
-        } else if (h <= dropped_vis) {
-            int oy = s->rows - h;                  /* 滚入的旧可见行：-1->旧 rows-1 */
-            if (oy >= 0) old_r = screen_phys_row(s, oy);
-        } else {
-            int hk = h - dropped_vis;
-            if (hk >= 1 && hk <= old_hist) old_r = screen_phys_row(s, -hk);
-        }
+        int src = -h - k;                  /* 旧逻辑行：可见 src>=0、历史 src<0 */
+        int old_r = RESIZE_OLD_ROW(src);
         if (old_r >= 0 && old_r < s->total_lines && s->lines && s->lines[old_r].cells) {
             if (line_alloc(&nl[new_r], nc, fill_attr))
                 line_copy(&nl[new_r], &s->lines[old_r], cc);
         }
     }
+    #undef RESIZE_OLD_ROW
     (void)cr;
 
     // Migrate alt buffer

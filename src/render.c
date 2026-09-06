@@ -708,12 +708,14 @@ static void render_settings_keys(char *out, int bs, int *posp, int host_rows, in
         main_left);
     {
         /* 表头与数据列严格对齐：列起点（相对 main_left，0 基）：
-         * 标记 0..2、动作名 3..14(宽12)、说明 15..38(宽24)、当前键位 39..58(宽20)、
-         * [前缀] 56、[改] 64、[复位] 69（按钮用绝对列，与表格列无关）。 */
+         * 标记 0..2、动作名 3..22(宽20)、说明 23..58(宽36)、当前键位 59..78(宽20)、
+         * [前缀]@79、[改]@87、[复位]@92（按钮用绝对列常量）。表头段宽度与数据列
+         * 逐列相同（标记段 pad 到 3、动作名段 pad 到 20、说明段 pad 到 36、键位段
+         * pad 到 20）。 */
         int hc = 0;
         pos += snprintf(out + pos, bs - pos, "\x1b[5;%dH\x1b[038;2;121;192;255;1m", main_left);
-        append_padded_utf8(out, bs, &pos, &hc, "   动作名", 15);
-        append_padded_utf8(out, bs, &pos, &hc, "说明", 24);
+        append_padded_utf8(out, bs, &pos, &hc, "   动作名", 23);
+        append_padded_utf8(out, bs, &pos, &hc, "说明", 36);
         append_padded_utf8(out, bs, &pos, &hc, "当前键位", 20);
         pos += snprintf(out + pos, bs - pos, "前缀   操作\x1b[0m");
     }
@@ -735,7 +737,10 @@ static void render_settings_keys(char *out, int bs, int *posp, int host_rows, in
                        g_mouse_x < main_left + SETTINGS_KEYS_PREFIX_COL - 1 && !keys_on_btn);
         int capturing = (g_key_capture_active && selected);
 
-        char name[24], label[24], combo[48];
+        /* v1.8.44：label 缓冲必须放得下最长中文说明（UTF-8：14 个汉字≈42 字节 +
+         * 全角符号 + 英文，最长「打开命令面板并进入「切换 panel」」≈50 字节），
+         * 旧的 label[24] 会被 snprintf 直接截断。 */
+        char name[48], label[80], combo[64];
         int custom = 0;
         if (entry == 0) {
             snprintf(name, sizeof(name), "prefix");
@@ -757,15 +762,14 @@ static void render_settings_keys(char *out, int bs, int *posp, int host_rows, in
         pos += snprintf(out + pos, bs - pos, "\x1b[%d;%dH%s %s ",
                         row, main_left, settings_row_style(selected, hovered), selected ? "▶" : " ");
         cols += 3;
-        /* 列宽：动作名 12 + 说明 24 + 当前键位 20。动作名是英文短标识
-         * （如 split_vertical / new_pane，最长约 12 列）；说明是中文，过窄会被直接
-         * 截断（v1.8.43：说明列从 16 加宽到 24，最长中文说明约 22 列）。键位组合
-         * 可能较长（如 "Ctrl+B Shift+tab"=18 列），combo 列保持 20。三列起点相对
-         * main_left 的偏移：标记 0..2、动作名 3..14、说明 15..38、键位 39..58；
-         * 右侧 [前缀]/[改]/[复位] 按钮列位置（56/64/69）不变（按钮用绝对列定位，
-         * 与表格列宽互不影响）。 */
-        append_padded_utf8(out, bs, &pos, &cols, name, 12);
-        append_padded_utf8(out, bs, &pos, &cols, label, 24);
+        /* 列宽（v1.8.44，相对 main_left 的偏移）：
+         *   标记 0..2、动作名 3..22(宽20)、说明 23..58(宽36)、键位 59..78(宽20)；
+         *   右侧按钮 [前缀]@79 [改]@87 [复位]@92（绝对列常量）。
+         * 说明列加宽到 36：最长中文说明「打开命令面板并进入「切换 panel」」约 32 列，
+         * 旧的 16/24 列会直接截断。动作名是英文标识（split-horizontal-pane 等，最长
+         * 19 列）给 20；键位组合（"Ctrl+B Shift+tab"=18 列、自定义更长）给 20。 */
+        append_padded_utf8(out, bs, &pos, &cols, name, 20);
+        append_padded_utf8(out, bs, &pos, &cols, label, 36);
         pos += snprintf(out + pos, bs - pos, "%s", capturing ? "\x1b[038;2;210;153;034;1m" : "");
         append_padded_utf8(out, bs, &pos, &cols, combo, 20);
         pos += snprintf(out + pos, bs - pos, "\x1b[0m");

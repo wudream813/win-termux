@@ -83,7 +83,10 @@ check(role_count == role_rows * 2,
       f"{role_count} 个语义角色正好排成 2 列 × {role_rows} 行")
 check(keys_row0 > 5, "键位表格从表头下一行开始")
 check(behavior_row0 > 4, "行为页开关行不覆盖标题与说明")
-check(edit_col < reset_col and reset_col + 6 < 80, "[改] / [复位] 按钮列不重叠且不越出常见窗口宽度")
+# v1.8.44：说明列加宽到 36 后按钮右移（[复位]@92，加按钮宽 5、左侧栏 22+3），
+# 表格内容最右约 main_left(25)+92+5 ≈ 122 列；按钮列互不重叠、且落在常见窗口
+# （>=130 列）宽度内。
+check(edit_col < reset_col and reset_col + 6 < 110, "[改] / [复位] 按钮列不重叠且不越出常见窗口宽度")
 check(minus_col + 4 <= plus_col, "scrollback 的 [-] / 数值 / [+] 不重叠")
 
 print("\n== 2) 命中测试不得写死几何 ==")

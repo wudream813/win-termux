@@ -19,8 +19,10 @@
 #define SETTINGS_KEYS_ROW0      6
 #define SETTINGS_BEHAVIOR_ROW0  6
 #define SETTINGS_BEHAVIOR_TOGGLES 5   /* mouse / copy_move_deselect / confirm_on_exit / confirm_on_close / search_case_sensitive */
-/* 相对 main_left 的按钮列偏移，渲染时用绝对定位写出，鼠标按同样的偏移命中 */
-#define SETTINGS_KEYS_PREFIX_COL 56   /* [前缀] / [直接] 切换 */
+/* 相对 main_left 的按钮列偏移，渲染时用绝对定位写出，鼠标按同样的偏移命中。
+ * v1.8.44：说明列加宽到 36（最长中文说明约 32 列）、动作名列 20、键位列 18，
+ * 按钮相应右移；命中与渲染共用同一常量。 */
+#define SETTINGS_KEYS_PREFIX_COL 79   /* [前缀] / [直接] 切换 */
 
 /* v1.8.9: 菜单项的「启动默认颜色」选择条。
  * 第 0 格是「默认」(宽 6)，其后 8 格分别是标签色 1-8 (每格宽 3)，格子彼此相连，
@@ -31,8 +33,8 @@
 /* col / left 均为 1-based 终端列；未命中返回 -1，命中返回 0(默认) 或 1-8。 */
 int item_color_hit(int left, int col);
 void render_item_color_row(char *out, int bs, int *posp, int row, int left, int color, int focused);
-#define SETTINGS_KEYS_EDIT_COL  64
-#define SETTINGS_KEYS_RESET_COL 69
+#define SETTINGS_KEYS_EDIT_COL  87
+#define SETTINGS_KEYS_RESET_COL 92
 #define SETTINGS_SB_MINUS_COL   22
 #define SETTINGS_SB_PLUS_COL    33
 #define RENAME_W 30
