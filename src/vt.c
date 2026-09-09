@@ -359,7 +359,10 @@ static void execute_csi_internal(ScreenBuffer *s, char final, char prefix, const
                     for (int x = 0; x <= ex; x++) screen_write_cell(s, y, x, L' ', attr);
                 }
             }
-            if ((p1 == 2 || p1 == 3) && !s->in_alt_screen) {
+            /* 只有 ED(3)（清滚动缓冲）才清历史；ED(2)（清显示）只清可见区、保留
+             * 滚动历史（xterm 语义）。ConPTY 在窗格新建/重绘时会发 ED(2)，若把它
+             * 也当清历史，分屏等场景本地 scrollback 会被整段冲掉（v1.8.52）。 */
+            if (p1 == 3 && !s->in_alt_screen) {
                 s->hist_lines = 0;
                 int pi = s->pane_index;
                 if (pi >= 0 && pi < MAX_PANES) g_mux.panes[pi].scroll_offset = 0;
@@ -458,17 +461,42 @@ static void execute_csi_internal(ScreenBuffer *s, char final, char prefix, const
     }
 }
 
+/* LF 行进。real_newline=1 表示这是 CRLF 里的 LF（真实行尾，cmd/ConPTY 每输出一
+ * 行都会发）；=0 表示 ConPTY 的裸 LF（其 9001 行内部缓冲的「留位/滚动」标记，
+ * cmd 换窗口标题等场合 ConPTY 会额外发出成串裸 LF）。
+ * 底部行处理：真实换行必滚；裸 LF 若底行仍是未被写入过的空白，则说明它只是
+ * ConPTY 在为下一行内容留位——此时吸收该 LF 不滚动，避免把空白行滚进本地滚动
+ * 历史（v1.8.52 实验：消除 cmd 长输出历史里逐行多出的幻影空行）。 */
+static void screen_lf(ScreenBuffer *s, int real_newline) {
+    if (s->cursor_y >= s->scroll_region_bottom) {
+        if (!real_newline) {
+            int pr = screen_phys_row(s, s->cursor_y);
+            int blank = 1;
+            if (pr >= 0 && s->lines && s->lines[pr].cells) {
+                ScreenLine *ln = &s->lines[pr];
+                for (int x = 0; x < ln->len; x++)
+                    if (ln->cells[x].Char.UnicodeChar != L' ') { blank = 0; break; }
+            }
+            if (blank) return; /* 吸收：底行空白且无真实内容要顶 */
+        }
+        screen_scroll_up(s, s->scroll_region_top, s->scroll_region_bottom, 1);
+    } else if (s->cursor_y < s->rows - 1) {
+        s->cursor_y++;
+    }
+}
+
 static inline int is_param_byte(unsigned char c) { return c >= 0x30 && c <= 0x3F; }
 static inline int is_inter_byte(unsigned char c) { return c >= 0x20 && c <= 0x2F; }
 static inline int is_final_byte(unsigned char c) { return c >= 0x40 && c <= 0x7E; }
 static inline int is_c0(unsigned char c) { return c < 0x20 || c == 0x7F; }
 
 static void screen_process_byte(ScreenBuffer *s, unsigned char c) {
-    if (c == 0x18 || c == 0x1A) { s->state = ST_NORMAL; return; }
+    if (c == 0x18 || c == 0x1A) { s->state = ST_NORMAL; s->cr_pending = 0; return; }
     if (c == 0x1B) {
         s->state = ST_ESC;
         s->param_len = 0;
         s->inter_len = 0;
+        s->cr_pending = 0;
         return;
     }
 
@@ -479,8 +507,9 @@ static void screen_process_byte(ScreenBuffer *s, unsigned char c) {
                     case 0x07: break;
                     case 0x08: if (s->cursor_x > 0) s->cursor_x--; s->wraparound_pending = 0; break;
                     case 0x09: { int x = s->cursor_x + 1; while (x < s->cols && x < 512 && !s->tab_stops[x]) x++; s->cursor_x = (x < s->cols) ? x : s->cols - 1; s->wraparound_pending = 0; } break;
-                    case 0x0A: case 0x0B: case 0x0C: screen_newline(s); s->wraparound_pending = 0; break;
-                    case 0x0D: s->cursor_x = 0; s->wraparound_pending = 0; break;
+                    case 0x0A: s->wraparound_pending = 0; screen_lf(s, s->cr_pending); s->cr_pending = 0; break;
+                    case 0x0B: case 0x0C: s->wraparound_pending = 0; screen_lf(s, 0); break;
+                    case 0x0D: s->cursor_x = 0; s->wraparound_pending = 0; s->cr_pending = 1; break;
                     case 0x0E: break;
                     case 0x0F: break;
                 }
@@ -611,6 +640,14 @@ static void screen_process_byte(ScreenBuffer *s, unsigned char c) {
 void screen_process_output(ScreenBuffer *s, const char *data, int len) {
     for (int i = 0; i < len; i++) {
         unsigned char c = (unsigned char)data[i];
+
+        /* CRLF 相邻检测：只有 ST_NORMAL 下紧跟在 CR 之后的 LF 才算真实行尾
+         * （cmd 一行输出 = text + CRLF）。任何其它字节（含 OSC 标题、文本、
+         * 控制符）都会打断相邻关系，之后的 LF 视为 ConPTY 的裸 LF。 */
+        if (s->state == ST_NORMAL) {
+            if (c == '\r') s->cr_pending = 1;
+            else if (c != '\n') s->cr_pending = 0;
+        }
 
         if (s->state == ST_NORMAL) {
             if (c >= 0xC0 && c < 0xFE) {

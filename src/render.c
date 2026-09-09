@@ -2463,8 +2463,15 @@ static void render_split_pane(char *out, int bs, int *posp, int leaf, PaneRect *
     Pane *pane = &g_mux.panes[leaf];
     ScreenBuffer *s = &pane->screen;
     int pos = *posp;
-    if (pane->scroll_offset > s->hist_lines) pane->scroll_offset = s->hist_lines;
     if (pane->scroll_offset < 0) pane->scroll_offset = 0;
+    if (pane->scroll_offset > 0) {
+        int lim_sc = screen_scroll_limit(s);
+        if (pane->scroll_offset > lim_sc) pane->scroll_offset = lim_sc;
+    }
+    if (getenv("TERMUX_DUMP")) {
+        FILE *sf = fopen("scroll_trace.log", "a");
+        if (sf) { fprintf(sf, "[render_split] vo=%d hist=%d limit=%d rows=%d\n", pane->scroll_offset, s->hist_lines, screen_scroll_limit(s), s->rows); fclose(sf); }
+    }
     int rows = rc->rows < s->rows ? rc->rows : s->rows;
     int cols = rc->cols < s->cols ? rc->cols : s->cols;
     /* 窗格先铺底色：整矩形清成终端底色（TH_BG0，与 ConPTY 程序默认黑底一致），
@@ -2521,7 +2528,7 @@ static void render_split_pane(char *out, int bs, int *posp, int leaf, PaneRect *
     if (!s->in_alt_screen && cols >= 10 && leaf == g_mux.active_pane) {
         int rr = rows;
         int sb_top = 0, sb_bot = rr;
-        int hist = s->hist_lines;
+        int hist = screen_scroll_limit(s);   /* 滚动条跨度 = 可回看的显示行数 */
         if (hist > 0) {
             int total = hist + rr;
             int th = (rr * rr) / total;
@@ -2646,13 +2653,16 @@ void render_screen(void) {
         } else {
             ScreenBuffer *s = &pane->screen;
             WORD la_attr = 0xFFFF, la_fr = 0, la_br = 0; int la_fv = -1, la_bv = -1;
-            if (pane->scroll_offset > s->hist_lines) pane->scroll_offset = s->hist_lines;
             if (pane->scroll_offset < 0) pane->scroll_offset = 0;
+            if (pane->scroll_offset > 0) {
+                int lim_sc = screen_scroll_limit(s);
+                if (pane->scroll_offset > lim_sc) pane->scroll_offset = lim_sc;
+            }
             int vo = pane->scroll_offset, rr = s->rows < g_mux.host_rows ? s->rows : g_mux.host_rows, rc = s->cols < g_mux.host_cols ? s->cols : g_mux.host_cols;
             int show_sb = (!s->in_alt_screen && g_mux.host_cols >= 10);
             int sb_top = 0, sb_bot = 0;
             if (show_sb) {
-                int hist = s->hist_lines;
+                int hist = screen_scroll_limit(s);   /* 滚动条跨度 = 可回看的显示行数 */
                 if (hist <= 0) {
                     sb_top = 0;
                     sb_bot = rr;
@@ -2672,6 +2682,29 @@ void render_screen(void) {
                 }
             }
             int text_rc = rc;
+            int use_rf_ws = 0;
+            /* v1.8.52+：整屏（单窗格非分屏）回看历史原来直接按物理行取（y-vo），
+             * 而 vo / 滚动上限 / 滚动条都按 reflow「非空显示行」计（screen_reflow_height
+             * 空逻辑行不占位）。历史里夹着 CRLF 纯空白行时，两种口径不一致：物理口径
+             * 滚到 vo=limit 仍够不到最老内容（顶部停在某个 echo 输出，更老的 for 行 /
+             * banner 永远上不来），画面钉在中途——分屏回看却没这个问题。这里与分屏
+             * 一致：vo>0 回看整窗走 reflow 网格（同一坐标系、内容完整到底）。选区 /
+             * 搜索高亮目前仍按物理坐标算，这些模态激活时退回物理渲染（与现状一致）。 */
+            if (vo > 0 && !s->in_alt_screen && s->line_wrap != NULL &&
+                !g_copy_mode && !g_mouse_selecting && !g_search_active) {
+                RGlyph *grid = (RGlyph *)pane->rf_grid;
+                if (pane->rf_rows != rr || pane->rf_cols != text_rc || !grid) {
+                    RGlyph *ng = (RGlyph *)realloc(grid, (size_t)rr * (size_t)text_rc * sizeof(RGlyph));
+                    if (ng) grid = ng;
+                }
+                if (grid) {
+                    pane->rf_grid = grid;
+                    pane->rf_rows = rr;
+                    pane->rf_cols = text_rc;
+                    screen_reflow_view(s, vo, rr, text_rc, grid);
+                    use_rf_ws = 1;
+                }
+            }
 
             int popup_open = (g_mux.chooser_mode || g_mux.ctx_mode || g_mux.rename_mode ||
                               g_mux.custom_cmd_mode || g_search_mode || g_mux.palette_mode);
@@ -2756,6 +2789,7 @@ void render_screen(void) {
                 la_attr = 0xFFFF; la_fr = 0; la_br = 0; la_fv = -1; la_bv = -1;
                 int ar = (vo > 0 && !s->in_alt_screen) ? screen_phys_row(s, y - vo) : -1;
                 int cur_cell_abs_y = screen_to_abs_row(s, y, vo);
+                RGlyph *rf_row = use_rf_ws ? &((RGlyph *)pane->rf_grid)[(size_t)y * text_rc] : NULL;
 
                 snap_sel_row(s, y, vo, sel_active, sel_block, cur_cell_abs_y, sel_min_abs_y, sel_max_abs_y, &sel_min_x, &sel_max_x);
                 int match_lo = 0, match_hi = 0;
@@ -2776,12 +2810,21 @@ void render_screen(void) {
                     match_hi = lo;
                 }
                 for (int x = 0; x < text_rc; x++) {
-                    CHAR_INFO *cell = (ar >= 0) ? ((s->lines && s->lines[ar].cells) ? &s->lines[ar].cells[x] : NULL) : screen_cell(s, y, x);
                     WCHAR wc = L' '; WORD attr = 0x07;
-                    if (cell) { wc = cell->Char.UnicodeChar; attr = cell->Attributes; }
-                    if (wc == 0) continue;
-                    WORD frgb, brgb; int fgv, bgv;
-                    cell_truecolor(s, y, x, ar, &frgb, &brgb, &fgv, &bgv);
+                    WORD frgb = RGB565_WHITE, brgb = RGB565_BLACK; int fgv = 0, bgv = 0;
+                    if (rf_row) {
+                        /* reflow 网格（vo>0 回看：逻辑行按当前宽重排、空逻辑行不占位，
+                         * 底部锚定——与分屏历史同一坐标系，滚到 limit 即内容最顶）。 */
+                        RGlyph *g = &rf_row[x];
+                        wc = g->ci.Char.UnicodeChar; attr = g->ci.Attributes;
+                        frgb = g->fg; brgb = g->bg; fgv = g->v & 1; bgv = (g->v >> 1) & 1;
+                        if (wc == 0) continue;   /* 宽字符次格不写 */
+                    } else {
+                        CHAR_INFO *cell = (ar >= 0) ? ((s->lines && s->lines[ar].cells) ? &s->lines[ar].cells[x] : NULL) : screen_cell(s, y, x);
+                        if (cell) { wc = cell->Char.UnicodeChar; attr = cell->Attributes; }
+                        if (wc == 0) continue;
+                        cell_truecolor(s, y, x, ar, &frgb, &brgb, &fgv, &bgv);
+                    }
 
                     if (sel_active) {
                         int in_sel = 0;
@@ -2834,7 +2877,10 @@ void render_screen(void) {
                         la_attr = attr; la_fr = frgb; la_br = brgb; la_fv = fgv; la_bv = bgv;
                     }
                     if (wc >= 0xD800 && wc <= 0xDBFF && x + 1 < text_rc) {
-                        CHAR_INFO *next_cell = (ar >= 0) ? ((s->lines && s->lines[ar].cells) ? &s->lines[ar].cells[x + 1] : NULL) : screen_cell(s, y, x + 1);
+                        CHAR_INFO *next_cell = NULL;
+                        CHAR_INFO next_ci;
+                        if (rf_row) { next_ci = rf_row[x + 1].ci; next_cell = &next_ci; }
+                        else next_cell = (ar >= 0) ? ((s->lines && s->lines[ar].cells) ? &s->lines[ar].cells[x + 1] : NULL) : screen_cell(s, y, x + 1);
                         if (next_cell && next_cell->Char.UnicodeChar >= 0xDC00 && next_cell->Char.UnicodeChar <= 0xDFFF) {
                             WCHAR low = next_cell->Char.UnicodeChar;
                             unsigned int cp = 0x10000 + (((unsigned int)(wc & 0x3FF)) << 10) + (low & 0x3FF);

@@ -68,6 +68,32 @@ static void ck(const char *n, int cond) {
     else       { printf("[ok]   %s\n", n); }
 }
 
+/* v1.8.52：统计历史区（rel<0）空白行 / 内容行数量。 */
+static int hist_blank(ScreenBuffer *s) {
+    int n = 0;
+    for (int rel = -s->hist_lines; rel < 0; rel++) {
+        int pr = screen_phys_row(s, rel);
+        int any = 0;
+        ScreenLine *l = &s->lines[pr];
+        for (int x = 0; x < l->len; x++)
+            if (l->cells[x].Char.UnicodeChar != L' ') { any = 1; break; }
+        if (!any) n++;
+    }
+    return n;
+}
+static int hist_content(ScreenBuffer *s) {
+    int n = 0;
+    for (int rel = -s->hist_lines; rel < 0; rel++) {
+        int pr = screen_phys_row(s, rel);
+        int any = 0;
+        ScreenLine *l = &s->lines[pr];
+        for (int x = 0; x < l->len; x++)
+            if (l->cells[x].Char.UnicodeChar != L' ') { any = 1; break; }
+        if (any) n++;
+    }
+    return n;
+}
+
 int main(void) {
     /* 宽 12 列。先写满 12 个窄字符（列0-11 都有真实内容，末列也是真实字符，
        模拟 ConPTY 重绘前的脏缓冲），此时 cursor 触发 wraparound_pending；
@@ -97,6 +123,47 @@ int main(void) {
     CHAR_INFO *f11 = screen_cell(&s2, 0, 11);
     ck("正好放下：汉字主格在列10", f10 && f10->Char.UnicodeChar == 0x6C49);
     ck("正好放下：汉字次格在列11(0占位)", f11 && f11->Char.UnicodeChar == 0);
+
+    /* ---- v1.8.52 追加：ConPTY 裸 LF vs CRLF 空行语义（真实回放定位的幻影空行）----
+     * ConPTY 在输出流里夹带成串【裸 LF】（其 9001 行内部缓冲的滚动/留位标记），
+     * 本地若按普通 LF 一律滚动，cmd 长输出的滚动历史会逐行多出幻影空白行。
+     * 规则：CRLF 里的 LF 是真实行尾（必滚）；裸 LF 若底行仍是空白则吸收（只留位）。
+     * 以下用例：裸 LF 标记不产生空行；真实空行（CRLF CRLF）必须保留。 */
+    {
+        ScreenBuffer s; screen_init(&s, 40, 6);
+        for (int i = 1; i <= 20; i++) {
+            char b[64]; snprintf(b, sizeof b, "Line %d\r\n", i);
+            screen_process_output(&s, b, (int)strlen(b));
+        }
+        ck("纯 CRLF 长输出：历史无幻影空行", hist_blank(&s) == 0);
+        ck("纯 CRLF 长输出：历史全部是内容行", hist_content(&s) == s.hist_lines && s.hist_lines == 15);
+        screen_free(&s);
+    }
+    {
+        ScreenBuffer s; screen_init(&s, 40, 6);
+        screen_process_output(&s, "Alpha\r\n\r\nBeta\r\n\r\nGamma\r\n", (int)strlen("Alpha\r\n\r\nBeta\r\n\r\nGamma\r\n"));
+        for (int i = 0; i < 14; i++) screen_process_output(&s, "fill\r\n", 6);
+        ck("真实空行(CRLF CRLF)：空白行保留 >=2", hist_blank(&s) >= 2);
+        ck("真实空行(CRLF CRLF)：内容行不丢", hist_content(&s) >= 8);
+        screen_free(&s);
+    }
+    {
+        ScreenBuffer s; screen_init(&s, 40, 6);
+        for (int i = 1; i <= 6; i++) {
+            char b[64]; snprintf(b, sizeof b, "row%d\r\n", i);
+            screen_process_output(&s, b, (int)strlen(b));
+        }
+        screen_process_output(&s, "\n\n\n", 3);          /* ConPTY 留位裸 LF */
+        screen_process_output(&s, "after-gap\r\n", 11);
+        int hb0 = hist_blank(&s);
+        for (int i = 1; i <= 6; i++) {
+            char b[64]; snprintf(b, sizeof b, "tail%d\r\n", i);
+            screen_process_output(&s, b, (int)strlen(b));
+        }
+        ck("裸 LF 留位标记：不产生幻影空行", hb0 == 0);
+        ck("裸 LF 后继续 CRLF 输出：仍无幻影空行", hist_blank(&s) == 0);
+        screen_free(&s);
+    }
 
     if (failures) { printf("\n%d FAILURE(S)\n", failures); return 1; }
     printf("\nWIDE-WRAP CHECKS PASSED\n");

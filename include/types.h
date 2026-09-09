@@ -72,6 +72,8 @@ typedef struct {
     unsigned char *alt_rgb_valid;
     int hist_lines;
     int alt_hist_lines;
+    int cr_pending;   /* 上一个 ST_NORMAL 字节是否为 CR（供 LF 判断 CRLF 真实换行 vs
+                       * ConPTY 裸 LF 滚动标记；v1.8.52 实验） */
 } ScreenBuffer;
 
 typedef struct {
@@ -82,6 +84,8 @@ typedef struct {
 typedef struct {
     int active;
     HPCON hpc;
+    int conpty_cols, conpty_rows;   /* 上次 ResizePseudoConsole 下发的尺寸（v1.8.52：
+                                    * 避免每帧同尺寸重复下发触发 ConPTY 整屏重绘） */
     HANDLE pipe_in, pipe_out, process, thread, read_thread;
     ScreenBuffer screen;
     char title[64];

@@ -161,6 +161,11 @@ static inline int MultiByteToWideChar(unsigned int cp, unsigned long flags, cons
     }
     return count;
 }
+
+/* v1.8.52: input.c 的搜索跳转改用 screen_scroll_limit 封顶；本 harness 聚焦搜索
+ * 定位逻辑，直接给「上限=物理历史行数」的宽松 stub（不引入 reflow 内容计数）。 */
+int screen_scroll_limit(ScreenBuffer *s) { return s->hist_lines; }
+int screen_reflow_height(ScreenBuffer *s, int width) { (void)width; return s->hist_lines + s->rows; }
 """
 
 DRIVER = r"""

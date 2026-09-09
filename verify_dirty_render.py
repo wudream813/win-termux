@@ -285,7 +285,10 @@ def check_render_sgr_scope():
     anchor = 'for (int y = 0; y < rr; y++)'
     i = src.find(anchor)
     assert i != 0 and i != -1, "render.c: 找不到终端行循环锚点 %r" % anchor
-    head = src[i:i + 1800]
+    # 窗口从 1800 放宽到 2400：v1.8.52 整屏 vo>0 回看改走 reflow 网格后，行循环头
+    # 与 cell 循环之间多了一行 rf_row 指针准备代码；不变量本身（行首复位/哨兵重置
+    # 必须在 cell 循环前）未变，此处只是跟随合法代码增长放宽扫描范围。
+    head = src[i:i + 2400]
     cell_x = head.find("for (int x = 0; x < text_rc; x++)")
     assert cell_x > 0, "render.c: 终端行循环内找不到 cell 循环"
     pre = head[:cell_x]  # 行首 CUP 与本行第一个 cell 之间的所有代码

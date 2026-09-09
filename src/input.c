@@ -178,17 +178,29 @@ static int handle_split_mouse(MOUSE_EVENT_RECORD *me) {
 }
 
 
+static int dbg_scroll_on(void){ static int i=0,on=0; if(!i){on=getenv("TERMUX_DUMP")?1:0;i=1;} return on; }
+static void dbg_scroll_log(const char *tag, Pane *p) {
+    if (!dbg_scroll_on()) return;
+    FILE *f = fopen("scroll_trace.log", "a");
+    if (!f) return;
+    fprintf(f, "[%s] pane=%d hist=%d rows=%d limit=%d vo=%d col=%d\n",
+            tag, (int)(p - g_mux.panes), p->screen.hist_lines, p->screen.rows,
+            screen_scroll_limit(&p->screen), p->scroll_offset, p->screen.cols);
+    fclose(f);
+}
 void do_scroll(int d) {
     if (g_mux.active_pane < 0 || g_mux.active_pane >= g_mux.pane_count) return;
     Pane *p = &g_mux.panes[g_mux.active_pane];
     if (!p->active || p->screen.in_alt_screen) return;
-    /* scroll_offset 是「跳过最新多少个【显示行】」。reflow 后窄视口里历史显示行
-     * 数可多于物理行，故上限放宽到 hist_lines + rows（滚过头即显示空白顶部）。 */
-    int mx = p->screen.hist_lines + p->screen.rows;
-    if (p->screen.hist_lines <= 0) { p->scroll_offset = 0; return; }
+    /* scroll_offset 是「跳过最新多少个【显示行】」。上限 = reflow 内容显示行数 -
+     * 视口行数：滚到最顶时最老内容贴视口顶，不会滚出顶部一片空白（v1.8.52）。 */
+    int mx = screen_scroll_limit(&p->screen);
+    if (mx <= 0) { p->scroll_offset = 0; dbg_scroll_log("do_scroll(nolimit)", p); return; }
+    int before = p->scroll_offset;
     p->scroll_offset += d;
     if (p->scroll_offset > mx) p->scroll_offset = mx;
     if (p->scroll_offset < 0) p->scroll_offset = 0;
+    if (p->scroll_offset != before) dbg_scroll_log("do_scroll", p);
     g_mux.needs_redraw = 1;
 }
 
@@ -297,7 +309,7 @@ static void run_search(int live) {
             if (!s->in_alt_screen) {
                 int vo = s->hist_lines - (target_abs_y - s->rows / 2);
                 if (vo < 0) vo = 0;
-                if (vo > s->hist_lines) vo = s->hist_lines;
+                { int lim_sj = screen_scroll_limit(s); if (vo > lim_sj) vo = lim_sj; }
                 p->scroll_offset = vo;
             }
         }
@@ -330,7 +342,7 @@ void search_jump_next(void) {
         if (!s->in_alt_screen) {
             int vo = s->hist_lines - (target_abs_y - s->rows / 2);
             if (vo < 0) vo = 0;
-            if (vo > s->hist_lines) vo = s->hist_lines;
+            { int lim_sj = screen_scroll_limit(s); if (vo > lim_sj) vo = lim_sj; }
             p->scroll_offset = vo;
         }
     }
@@ -352,7 +364,7 @@ void search_jump_prev(void) {
         if (!s->in_alt_screen) {
             int vo = s->hist_lines - (target_abs_y - s->rows / 2);
             if (vo < 0) vo = 0;
-            if (vo > s->hist_lines) vo = s->hist_lines;
+            { int lim_sj = screen_scroll_limit(s); if (vo > lim_sj) vo = lim_sj; }
             p->scroll_offset = vo;
         }
     }
@@ -1735,7 +1747,7 @@ int handle_copy_mode_key(KEY_EVENT_RECORD *ke) {
     if (vk == VK_UP || uc == 'k' || uc == 'K') {
         if (g_copy_cy > 0) {
             g_copy_cy--;
-        } else if (p->scroll_offset < s->hist_lines) {
+        } else if (p->scroll_offset < screen_scroll_limit(s)) {
             p->scroll_offset++;
         }
         /* 上下移动后光标列也不许停在半个汉字中间：整字化到主格。 */
@@ -1758,7 +1770,7 @@ int handle_copy_mode_key(KEY_EVENT_RECORD *ke) {
     }
     if (vk == VK_PRIOR) {
         p->scroll_offset += s->rows / 2;
-        if (p->scroll_offset > s->hist_lines) p->scroll_offset = s->hist_lines;
+        { int lim_cp = screen_scroll_limit(s); if (p->scroll_offset > lim_cp) p->scroll_offset = lim_cp; }
         g_mux.needs_redraw = 1;
         return 0;
     }
@@ -3942,8 +3954,11 @@ void handle_mouse(MOUSE_EVENT_RECORD *me) {
 
     if (s->hist_lines > 0 && !s->in_alt_screen) {
         int has_btn = (me->dwButtonState & (FROM_LEFT_1ST_BUTTON_PRESSED | FROM_LEFT_2ND_BUTTON_PRESSED | RIGHTMOST_BUTTON_PRESSED)) != 0;
-        if (has_btn) {
-            int hist = s->hist_lines;
+        int span = screen_scroll_limit(s);   /* 可回看显示行数（滚动条跨度）。物理历史虽>0，
+                                              * 但 reflow 内容不足一页时 span=0，此时无条可拖，
+                                              * 直接按无历史处理，避免下方 /span 除零崩溃 */
+        if (has_btn && span > 0) {
+            int hist = span;
             int pane_rows = s->rows < g_mux.host_rows ? s->rows : g_mux.host_rows;
             if (pane_rows > 1) {
                 int total = hist + pane_rows;

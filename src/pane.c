@@ -88,6 +88,12 @@ unsigned __stdcall pane_read_thread(void *arg) {
         if (!ReadFile(pane->pipe_out, buf, sizeof(buf), &br, NULL) || br == 0) break;
         dump_pane_bytes(idx, buf, (int)br);
         EnterCriticalSection(&g_mux.cs);
+        /* ConPTY 整屏重绘（ESC[H 起逐行重画）按其自身滚动缓冲对齐，顶行可能比本地
+         * reflow 环的可见顶行深若干行（拖动分隔条时 ConPTY 侧会因反复重绘累积漂移，
+         * 或本地 resize 后 ConPTY 多留一条“刚滚出”行）。重绘若直接落下会把本地还
+         * 可见的顶部内容覆盖吞行。喂解析器前先尝试对齐：重绘顶行若与本地更深处某行
+         * 内容一致，就把环前滚对齐（内容不变）；顶行即本地 rel0 或非重绘块则不动作。 */
+        screen_repaint_align(&pane->screen, buf, (int)br);
         screen_process_output(&pane->screen, buf, br);
         DWORD avail = 0;
         while (PeekNamedPipe(pane->pipe_out, NULL, 0, NULL, &avail, NULL) && avail > 0) {
@@ -95,6 +101,7 @@ unsigned __stdcall pane_read_thread(void *arg) {
             DWORD br2 = 0;
             if (!ReadFile(pane->pipe_out, buf, to_read, &br2, NULL) || br2 == 0) break;
             dump_pane_bytes(idx, buf, (int)br2);
+            screen_repaint_align(&pane->screen, buf, (int)br2);
             screen_process_output(&pane->screen, buf, br2);
         }
         if (pane->screen.response_len > 0) {
@@ -509,12 +516,20 @@ void pane_resize_to(int idx, int cols, int rows) {
     if (p->screen.cols != cols || p->screen.rows != rows) {
         screen_resize(&p->screen, cols, rows);
         p->screen.detect_count = 0;
-        if (p->scroll_offset > p->screen.hist_lines) p->scroll_offset = p->screen.hist_lines;
+        if (p->scroll_offset > 0) {
+            int lim_pc = screen_scroll_limit(&p->screen);
+            if (p->scroll_offset > lim_pc) p->scroll_offset = lim_pc;
+        }
     }
     LeaveCriticalSection(&g_mux.cs);
-    if (p->hpc) {
+    /* 只在尺寸真正变化时才向 ConPTY 下发 resize：分屏渲染每帧都会按布局调
+     * pane_resize_to，若同尺寸也下发，ConPTY 会整屏重绘（记录里逐帧重复的
+     * 全屏 repaint），还会让行内容被以不同 wrap 覆写而残留过期 line_wrap。 */
+    if (p->hpc && (p->conpty_cols != cols || p->conpty_rows != rows)) {
         COORD sz = {(SHORT)cols, (SHORT)rows};
         ResizePseudoConsole(p->hpc, sz);
+        p->conpty_cols = cols;
+        p->conpty_rows = rows;
     }
     g_mux.needs_redraw = 1;
 }

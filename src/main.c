@@ -182,9 +182,12 @@ static void handle_resize(void) {
     LeaveCriticalSection(&g_mux.cs);
 
     for (int i = 0; i < g_mux.pane_count; i++) if (g_mux.panes[i].active) {
-        if (!split_now && g_mux.panes[i].hpc) {
+        if (!split_now && g_mux.panes[i].hpc &&
+            (g_mux.panes[i].conpty_cols != pane_cols || g_mux.panes[i].conpty_rows != nr)) {
             COORD sz = {(SHORT)pane_cols, (SHORT)nr};
             ResizePseudoConsole(g_mux.panes[i].hpc, sz);
+            g_mux.panes[i].conpty_cols = pane_cols;
+            g_mux.panes[i].conpty_rows = nr;
         }
     }
     g_mux.needs_redraw = 1;

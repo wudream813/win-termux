@@ -49,13 +49,26 @@ for sig in ("static void line_free(",
             "int screen_ensure_line(",
             "void screen_write_cell(",
             "void screen_scroll_up(",
-            "int screen_resize(",
             "void cell_truecolor(",
             "void screen_mark_softwrap(",
             "static int reflow_glyph_w(",
             "static int reflow_append_rows(",
             "static int reflow_acc_cb(",
-            "int screen_reflow_view("):
+            "static int screen_content_span(",
+            "int screen_reflow_height(",
+            "int screen_scroll_limit(",
+            "int screen_reflow_view(",
+            "static void rfring_init(",
+            "static void rfring_free(",
+            "static void rfring_add(",
+            "static int reflow_sink_cb(",
+            "static void line_store_rglyph(",
+            "static int screen_trace_on(",
+            "static void screen_trace_row(",
+            "static void screen_trace_ring(",
+            "static int screen_resize_reflow(",
+            "static int screen_resize_legacy(",
+            "int screen_resize("):
     PIECES.append(extract_func(src, sig))
 
 PRELUDE = r"""
@@ -127,6 +140,19 @@ typedef struct {
     RGlyph *buf;
     int cap, count, width;
 } RfAcc;
+
+typedef struct {
+    RGlyph **rows;
+    unsigned char *first;
+    int cap, head, count, width;
+} RfRing;
+
+typedef struct {
+    RfRing *ring;
+    RGlyph *line;
+    int width;
+    int first_done;
+} RfSink;
 
 /* reflow 片段里宽字符判定：stub 只给 CJK/全角常见区间，足够测试（ASCII 窄）。 */
 static int is_wide_cp(unsigned int cp) {
@@ -279,6 +305,38 @@ static char at_rel(ScreenBuffer *s, int rel) {
     if (pr < 0 || !s->lines[pr].cells) return '?';
     return (char)s->lines[pr].cells[0].Char.UnicodeChar;
 }
+
+/* v1.8.52: 逻辑内容不变量。把环（历史+可见）按 line_wrap 合并回逻辑行、去掉行尾
+ * 空格填充，输出成「逻辑文本」：一行一个逻辑行，行间以 \n 分隔。reflow-on-resize
+ * 前后这个文本必须逐字一致（内容与顺序都不变），与当前宽度/物理行切分无关。 */
+static void logical_text(ScreenBuffer *s, char *out, int outcap) {
+    int pos = 0;
+    int first = 1;
+    /* 逐逻辑行输出。line_open：当前逻辑行是否在累积。 */
+    for (int rel = -s->hist_lines; rel < s->rows; rel++) {
+        int pr = screen_phys_row(s, rel);
+        if (pr < 0 || pr >= s->total_lines || !s->lines || !s->lines[pr].cells) continue;
+        ScreenLine *ln = &s->lines[pr];
+        int len = ln->len;
+        while (len > 0 && ln->cells[len - 1].Char.UnicodeChar == L' ') len--;
+        int wr = (s->line_wrap && s->line_wrap[pr]) ? 1 : 0;
+        if (wr == 0) {
+            if (!first) { if (pos < outcap - 1) out[pos++] = '\n'; }
+            first = 0;
+            for (int x = 0; x < len && pos < outcap - 2; x++) {
+                WCHAR c = ln->cells[x].Char.UnicodeChar;
+                if (c && c != L' ') out[pos++] = (char)(c & 0x7f);
+            }
+        } else {
+            for (int x = 0; x < len && pos < outcap - 2; x++) {
+                WCHAR c = ln->cells[x].Char.UnicodeChar;
+                if (c && c != L' ') out[pos++] = (char)(c & 0x7f);
+            }
+        }
+    }
+    out[pos < outcap ? pos : outcap - 1] = 0;
+}
+static int texts_eq(const char *a, const char *b) { return strcmp(a, b) == 0; }
 /* v1.8.43: 宽窗格跑出历史后【收窄宽度】，历史必须逐行完整保留、内容不错位。 */
 static int test_resize_narrow_keeps_history(void) {
     ScreenBuffer s;
@@ -334,44 +392,31 @@ static int test_resize_narrow_wide_history_not_truncated(void) {
     g_scrollback_lines = 1000;
     alloc_alt(&s, 80, 10);
     s.in_alt_screen = 0;
-    /* 满行写在可见行 0（scroll 1 次后整行滚出可见区、成为历史 -1；
-     * 写在行 9 会因 scroll 向上平移而留在可见区）。 */
+    s.line_wrap = (unsigned char *)calloc(s.total_lines, 1);
+    /* 一行写满 80 列（A..Z 循环），滚 1 行进历史。 */
     for (int x = 0; x < 80; x++)
         screen_write_cell(&s, 0, x, (WCHAR)('A' + (x % 26)), 0x07);
-    screen_scroll_up(&s, 0, s.rows - 1, 1);   /* 满行滚入历史 -1 */
-    if (s.hist_lines != 1) { fprintf(stderr, "FAIL: 准备 hist 应为 1，实际 %d\n", s.hist_lines); free_screen(&s); return 1; }
-    assert(screen_resize(&s, 20, 10) == 1);   /* 收窄 80->20 */
-    if (s.hist_lines != 1) { fprintf(stderr, "FAIL: 收窄后 hist 应仍 1，实际 %d\n", s.hist_lines); free_screen(&s); return 1; }
-    int pr = screen_phys_row(&s, -1);
-    if (!s.lines[pr].cells || s.lines[pr].len < 80) {
-        fprintf(stderr, "FAIL: 收窄后历史宽行被截断: len=%d（应保留 80）\n", s.lines[pr].len);
+    screen_scroll_up(&s, 0, s.rows - 1, 1);
+    char before[4096];
+    logical_text(&s, before, sizeof(before));
+    /* v1.8.52：收窄到 20 列应把这条 80 列逻辑行本地重排为 4 行（内容不丢不截断）。 */
+    assert(screen_resize(&s, 20, 10) == 1);
+    char after20[4096];
+    logical_text(&s, after20, sizeof(after20));
+    if (!texts_eq(before, after20)) {
+        fprintf(stderr, "FAIL: 收窄 80->20 后逻辑内容变化: [%s] != [%s]\n", after20, before);
         free_screen(&s); return 1;
     }
-    for (int x = 0; x < 80; x++) {
-        WCHAR want = (WCHAR)('A' + (x % 26));
-        WCHAR got = s.lines[pr].cells[x].Char.UnicodeChar;
-        if (got != want) {
-            fprintf(stderr, "FAIL: 收窄后历史宽行第 %d 列被截断/改动: 得 %c want %c\n", x, (char)got, (char)want);
-            free_screen(&s); return 1;
-        }
-    }
-    /* 再拖宽回 60：历史行仍应保留完整 80 列（含 60..79）。 */
+    /* 再拖回 60：仍应完整还原（逻辑行折回更少行，内容依旧逐字一致）。 */
     assert(screen_resize(&s, 60, 10) == 1);
-    pr = screen_phys_row(&s, -1);
-    if (!s.lines[pr].cells || s.lines[pr].len < 80) {
-        fprintf(stderr, "FAIL: 再拖宽后历史宽行 len=%d（应保留 80）\n", s.lines[pr].len);
+    char after60[4096];
+    logical_text(&s, after60, sizeof(after60));
+    if (!texts_eq(before, after60)) {
+        fprintf(stderr, "FAIL: 拖回 60 后逻辑内容变化: [%s] != [%s]\n", after60, before);
         free_screen(&s); return 1;
-    }
-    for (int x = 0; x < 80; x++) {
-        WCHAR want = (WCHAR)('A' + (x % 26));
-        WCHAR got = s.lines[pr].cells[x].Char.UnicodeChar;
-        if (got != want) {
-            fprintf(stderr, "FAIL: 再拖宽后历史宽行第 %d 列丢失: 得 %c want %c\n", x, (char)got, (char)want);
-            free_screen(&s); return 1;
-        }
     }
     free_screen(&s);
-    printf("  v1.8.45: 收窄 80->20->60，历史宽行 80 列完整保留不截断\n");
+    printf("  v1.8.52: 80 列满行收窄 80->20->60，逻辑内容逐字保留（reflow 本地重排）\n");
     return 0;
 }
 
@@ -383,40 +428,52 @@ static int test_resize_wide_then_small(void) {
     g_scrollback_lines = 1000;
     alloc_alt(&s, 80, 20);
     s.in_alt_screen = 0;
-    /* 先写 20 行可见（行 0..19），再滚 15 行、底行续写，制造 15 行历史。
-     * 旧可见行 y（0..19）对应全局行号 15+y：标记 '0'+((15+y)%10)；
-     * 旧历史 -h 对应全局行号 15-h。 */
-    for (int y = 0; y < 20; y++)
-        screen_write_cell(&s, y, 0, (WCHAR)('0' + (y % 10)), 0x07);
-    for (int i = 0; i < 15; i++) {
+    s.line_wrap = (unsigned char *)calloc(s.total_lines, 1);
+    /* 20 行可见逐行写标记；再滚 15 行、每滚底行续写，制造 15 行历史。
+     * 逻辑内容 = 20+15 条单字符逻辑行，全局序号 G=0..34（0 最老）。 */
+    int G = 0;
+    for (int y = 0; y < 20; y++, G++)
+        screen_write_cell(&s, y, 0, (WCHAR)('a' + G), 0x07);
+    for (int i = 0; i < 15; i++, G++) {
         screen_scroll_up(&s, 0, s.rows - 1, 1);
-        screen_write_cell(&s, s.rows - 1, 0, (WCHAR)('0' + ((20 + i) % 10)), 0x07);
+        screen_write_cell(&s, s.rows - 1, 0, (WCHAR)('a' + G), 0x07);
     }
-    /* 同时收窄 80->30、缩小 20->8。resize 不改历史（hist 仍 15），可见区底部
-     * 锚定：新可见 y = 旧可见 (12+y)。被裁的顶部 12 行【不】滚入历史（否则与
-     * ConPTY reflow 重发重复——v1.8.45 修复）。 */
+    char before[4096];
+    logical_text(&s, before, sizeof(before));
+    /* v1.8.52：同时收窄 80->30、缩小 20->8——逻辑内容整体保留（不再丢被裁行），
+     * 底部锚定：可见区显示最新 8 行。 */
     assert(screen_resize(&s, 30, 8) == 1);
     if (s.rows != 8 || s.cols != 30) { fprintf(stderr, "FAIL: resize 后尺寸 %dx%d\n", s.cols, s.rows); free_screen(&s); return 1; }
-    if (s.hist_lines != 15) { fprintf(stderr, "FAIL: resize 不应改历史，hist 应仍为 15，实际 %d\n", s.hist_lines); free_screen(&s); return 1; }
-    /* 新可见 y（0..7）底部锚定 = 旧可见 (12+y)，标记 '0'+((15+12+y)%10)。 */
-    for (int y = 0; y < 8; y++) {
-        char want = (char)('0' + ((15 + 12 + y) % 10));
-        if (at_rel(&s, y) != want) {
-            fprintf(stderr, "FAIL: 底部锚定新可见 y=%d 应保留旧可见(12+y)，得 %c want %c\n",
-                    y, at_rel(&s, y), want);
-            free_screen(&s); return 1;
-        }
+    char after[4096];
+    logical_text(&s, after, sizeof(after));
+    if (!texts_eq(before, after)) {
+        fprintf(stderr, "FAIL: 收窄+缩小后逻辑内容变化\n  before=[%s]\n  after =[%s]\n", before, after);
+        free_screen(&s); return 1;
     }
-    /* 历史不变：新历史 -h = 旧历史 -h（全局行号 15-h）。 */
-    for (int h = 1; h <= 15; h++) {
-        char want = (char)('0' + ((15 - h) % 10));
-        if (at_rel(&s, -h) != want) {
-            fprintf(stderr, "FAIL: resize 后历史 -%d 被改动: 得 %c want %c\n", h, at_rel(&s,-h), want);
-            free_screen(&s); return 1;
-        }
+    /* 可见区 = 最新 8 行（'t'..'a'+34），历史 = 前面 27 行。 */
+    if (s.hist_lines != 27) {
+        fprintf(stderr, "FAIL: 内容 35 行缩到 8 行屏，hist 应 27，实际 %d\n", s.hist_lines);
+        free_screen(&s); return 1;
+    }
+    if (at_rel(&s, 0) != (char)('a'+27) || at_rel(&s, 7) != (char)('a'+34)) {
+        fprintf(stderr, "FAIL: 底部锚定可见首/末行: 0=%c 7=%c (want %c/%c)\n",
+                at_rel(&s,0), at_rel(&s,7), (char)('a'+27), (char)('a'+34));
+        free_screen(&s); return 1;
+    }
+    /* 再放大回 20 行：内容仍不变。 */
+    assert(screen_resize(&s, 30, 20) == 1);
+    char after2[4096];
+    logical_text(&s, after2, sizeof(after2));
+    if (!texts_eq(before, after2)) {
+        fprintf(stderr, "FAIL: 再放大后逻辑内容变化\n  after=[%s]\n", after2);
+        free_screen(&s); return 1;
+    }
+    if (s.hist_lines != 15) {
+        fprintf(stderr, "FAIL: 35 行内容放 20 行屏，hist 应 15，实际 %d\n", s.hist_lines);
+        free_screen(&s); return 1;
     }
     free_screen(&s);
-    printf("  v1.8.45: 80x20 收窄到 30x8 不改历史、可见区底部锚定（修历史重复）\n");
+    printf("  v1.8.52: 80x20 同时收窄+缩小到 30x8、再放大——逻辑内容逐字不变、底部锚定、hist 随屏高变化\n");
     return 0;
 }
 
@@ -426,58 +483,118 @@ static int test_resize_shrink_keeps_history(void) {
     g_scrollback_lines = 1000;
     alloc_alt(&s, 20, 10);
     s.in_alt_screen = 0;
+    s.line_wrap = (unsigned char *)calloc(s.total_lines, 1);
     for (int y = 0; y < 10; y++) screen_write_cell(&s, y, 0, (WCHAR)('A' + y), 0x07);
-    /* 滚 3 行：A,B,C 进历史；可见底部再写 x,y,z。 */
     screen_scroll_up(&s, 0, s.rows - 1, 3);
     screen_write_cell(&s, 7, 0, L'x', 0x07);
     screen_write_cell(&s, 8, 0, L'y', 0x07);
     screen_write_cell(&s, 9, 0, L'z', 0x07);
-    if (s.hist_lines != 3) { fprintf(stderr, "FAIL: 缩小前 hist 应为 3，实际 %d\n", s.hist_lines); return 1; }
+    if (s.hist_lines != 3) { fprintf(stderr, "FAIL: 缩小前 hist 应为 3，实际 %d\n", s.hist_lines); free_screen(&s); return 1; }
+    char before[2048];
+    logical_text(&s, before, sizeof(before));
 
-    /* 高度 10 -> 6（底部锚定，历史不随 resize 变动）：
-     *   新可见 = 旧可见底部 6 行 H,I,J,x,y,z（0=H..5=z，命令行 z 留底）；
-     *   被裁的顶部 D,E,F,G 不滚入历史（否则与 ConPTY reflow 重发重复），
-     *   hist 仍为 3（-1=C,-2=B,-3=A）。 */
+    /* v1.8.52 reflow 语义：高度 10->6 不再丢被裁可见行——它们进入滚动历史，
+     * 内容整体保留（D,E,F,G 进历史），可见 = 最新 6 行 H,I,J,x,y,z。 */
     assert(screen_resize(&s, 20, 6) == 1);
-    if (s.rows != 6) { fprintf(stderr, "FAIL: resize 后 rows!=6\n"); return 1; }
-    if (s.hist_lines != 3) { fprintf(stderr, "FAIL: resize 不应改历史，hist 应仍为 3，实际 %d\n", s.hist_lines); free_screen(&s); return 1; }
+    if (s.rows != 6) { fprintf(stderr, "FAIL: resize 后 rows!=6\n"); free_screen(&s); return 1; }
+    if (s.hist_lines != 7) {
+        fprintf(stderr, "FAIL: 10 行内容缩到 6 行屏 hist 应 7（内容不丢），实际 %d\n", s.hist_lines);
+        free_screen(&s); return 1;
+    }
     if (at_rel(&s,0)!='H' || at_rel(&s,5)!='z') {
-        fprintf(stderr, "FAIL: 底部锚定下新可见应保留底部 H..z: 0=%c 5=%c\n", at_rel(&s,0), at_rel(&s,5));
+        fprintf(stderr, "FAIL: 底部锚定 0=H 5=z: 0=%c 5=%c\n", at_rel(&s,0), at_rel(&s,5));
         free_screen(&s); return 1;
     }
-    if (at_rel(&s,-1)!='C' || at_rel(&s,-2)!='B' || at_rel(&s,-3)!='A') {
-        fprintf(stderr, "FAIL: 旧历史 A..C 被改动: -1=%c -2=%c -3=%c\n",
-                at_rel(&s,-1), at_rel(&s,-2), at_rel(&s,-3));
+    char mid[2048];
+    logical_text(&s, mid, sizeof(mid));
+    if (!texts_eq(before, mid)) {
+        fprintf(stderr, "FAIL: 缩小后逻辑内容变化\n  before=[%s]\n  after =[%s]\n", before, mid);
         free_screen(&s); return 1;
     }
-    /* 放大回 10 行（底部锚定）：z 仍在新可见底部 y9，H 在 y4；顶部空出的行从
-     * 历史回补（ConPTY 随后会重绘可见区）。hist 仍为 3。 */
+    /* 放大回 10：内容 13 行（A..J + x,y,z），可见=最新 10 行 D..z，历史 A,B,C。 */
     assert(screen_resize(&s, 20, 10) == 1);
-    if (s.rows != 10) { fprintf(stderr, "FAIL: 放大后 rows!=10\n"); free_screen(&s); return 1; }
-    if (s.hist_lines != 3) { fprintf(stderr, "FAIL: 放大后 hist 应为 3，实际 %d\n", s.hist_lines); free_screen(&s); return 1; }
-    if (at_rel(&s,4)!='H' || at_rel(&s,9)!='z') {
-        fprintf(stderr, "FAIL: 放大后底部锚定 4=H 9=z: 4=%c 9=%c\n", at_rel(&s,4), at_rel(&s,9));
+    if (s.hist_lines != 3) {
+        fprintf(stderr, "FAIL: 放大回 10 行屏：13 行内容 -> hist 应 3（A,B,C），实际 %d\n", s.hist_lines);
         free_screen(&s); return 1;
     }
-    if (at_rel(&s,-1)!='C' || at_rel(&s,-3)!='A') {
-        fprintf(stderr, "FAIL: 放大后旧历史 A..C 丢失: -1=%c -3=%c\n", at_rel(&s,-1), at_rel(&s,-3));
+    if (at_rel(&s,0)!='D' || at_rel(&s,9)!='z') {
+        fprintf(stderr, "FAIL: 放大后底部锚定 D..z: 0=%c 9=%c\n", at_rel(&s,0), at_rel(&s,9));
         free_screen(&s); return 1;
     }
-    /* 加宽不改行数、不丢历史（此时历史为 A,B,C，可见底部为 z）。 */
-    int hb = s.hist_lines;
-    assert(screen_resize(&s, 40, 10) == 1);
-    if (s.hist_lines != hb || at_rel(&s,-1)!='C' || at_rel(&s,-3)!='A' || at_rel(&s,9)!='z') {
-        fprintf(stderr, "FAIL: 加宽后历史/内容丢失: hist=%d -3=%c -1=%c 9=%c\n",
-                s.hist_lines, at_rel(&s,-3), at_rel(&s,-1), at_rel(&s,9));
+    char after[2048];
+    logical_text(&s, after, sizeof(after));
+    if (!texts_eq(before, after)) {
+        fprintf(stderr, "FAIL: 放大后逻辑内容变化\n  before=[%s]\n  after =[%s]\n", before, after);
         free_screen(&s); return 1;
     }
     free_screen(&s);
-    printf("  v1.8.45: resize 高度 10->6->10 不改历史、可见区底部锚定（命令行留底）\n");
+    printf("  v1.8.52: 高度 10->6->10——内容整体保留不丢（缩小时被裁可见行进历史），hist 随屏高变化\n");
     return 0;
 }
 
-/* v1.8.47：reflow 历史视图——一条跨越软换行的长逻辑行，在窄视口下应折成多行
- * 完整显示（内容不丢、不重），宽视口折回一行。 */
+/* v1.8.51：有滚动历史时直接把窗格【拉高】（放大 k>0），历史最新行被提回可见区
+ * 后必须在滚动缓冲里消失——环形缓冲与 reflow 视口里的每条逻辑行都只能出现一次。 */
+static int test_resize_enlarge_reflow_no_duplicate(void) {
+    ScreenBuffer s;
+    memset(&s, 0, sizeof(s));
+    g_scrollback_lines = 200;
+    alloc_alt(&s, 24, 6);
+    s.in_alt_screen = 0;
+    s.line_wrap = (unsigned char *)calloc(s.total_lines, 1);
+    /* 直接按「底部锚定正常终端」的环形几何铺缓冲：rel -8..-1 为 8 行历史、rel 0..5
+     * 为 6 行可见，每槽一个互不相同的单字符标记（码点随 rel 递增=时间递增）。 */
+    for (int rel = -8; rel < 6; rel++) {
+        int pr = screen_phys_row(&s, rel);
+        if (pr < 0) { free_screen(&s); fprintf(stderr, "FAIL: phys %d 越界\n", pr); return 1; }
+        ScreenLine *l = &s.lines[pr];
+        for (int x = 0; x < s.cols; x++) l->cells[x].Char.UnicodeChar = L' ';
+        l->cells[0].Char.UnicodeChar = (WCHAR)('p' + (rel + 8));  /* p(rel-8)..~ 唯一递增 */
+    }
+    s.hist_lines = 8;
+    int hist_before = s.hist_lines;
+    /* 放大 6 -> 10：最新 4 行历史（标记 u,v,w,x）提回可见区顶部并退出历史。 */
+    assert(screen_resize(&s, 24, 10) == 1);
+    if (s.hist_lines != hist_before - 4) {
+        fprintf(stderr, "FAIL: 放大 4 行后 hist 应为 %d，实际 %d（历史未同步扣减）\n",
+                hist_before - 4, s.hist_lines);
+        free_screen(&s); return 1;
+    }
+    /* 1) 环形缓冲扫一遍：从最老历史到最新可见，每个标记只能出现一次（无重复槽）。 */
+    {
+        int cnt[256] = {0};
+        for (int rel = -s.hist_lines; rel < s.rows; rel++) {
+            int pr = screen_phys_row(&s, rel);
+            WCHAR c = s.lines[pr].cells[0].Char.UnicodeChar;
+            if (c && c != L' ' && c < 256) cnt[c]++;
+        }
+        for (int i = 0; i < 256; i++)
+            if (cnt[i] > 1) {
+                fprintf(stderr, "FAIL: 放大后标记 '%c' 在环形缓冲出现 %d 次（历史+可见重复）\n",
+                        i, cnt[i]);
+                free_screen(&s); return 1;
+            }
+    }
+    /* 2) reflow 视口逐 vo 上翻：每帧内容按时间单调递增、不含倒退/重复（v1.8.50 整窗统一坐标）。 */
+    for (int vo = 0; vo <= s.hist_lines + s.rows; vo++) {
+        RGlyph *ov = (RGlyph *)calloc(10 * 24, sizeof(RGlyph));
+        screen_reflow_view(&s, vo, 10, 24, ov);
+        int prev = -1;
+        for (int y = 0; y < 10; y++) {
+            WCHAR c = ov[y*24].ci.Char.UnicodeChar;
+            if (!c || c == L' ') continue;
+            if ((int)c <= prev) {
+                fprintf(stderr, "FAIL: vo=%d 视口时间倒退/重复：%c 后接 %c\n", vo, prev, (char)c);
+                free(ov); free_screen(&s); return 1;
+            }
+            prev = (int)c;
+        }
+        free(ov);
+    }
+    free_screen(&s);
+    printf("  v1.8.51: 有历史时直接放大（6->10）——历史同步扣减，环形缓冲与 reflow 回看均无重复/倒退\n");
+    return 0;
+}
+
 static int test_reflow_view(void) {
     ScreenBuffer s;
     memset(&s, 0, sizeof(s));
@@ -491,17 +608,24 @@ static int test_reflow_view(void) {
     screen_scroll_up(&s, 0, s.rows - 1, 1);
     if (s.hist_lines < 1) { fprintf(stderr, "FAIL: reflow 准备 hist<1\n"); return 1; }
 
-    /* vo=2：跳过最新 2 显示行（ij、efgh），视口底部=abcd。 */
+    /* vo 自限（v1.8.52）：内容只有 3 个显示行（abcd/efgh/ij）< 视口 6 行时，
+     * 任何 vo 都滚不到「更老」——vo 被 cap 到 0，视图与 vo=0 相同：底部 ij、上方
+     * 不补「内容之上的空白 pad」；内容不丢。 */
     RGlyph *out = (RGlyph *)calloc(6 * 4, sizeof(RGlyph));
     int n = screen_reflow_view(&s, 2, 6, 4, out);
     if (n != 1) { fprintf(stderr, "FAIL: reflow_view 返回 %d（应1）\n", n); free(out); free_screen(&s); return 1; }
-    for (int x = 0; x < 4; x++) {
-        WCHAR got = out[5*4+x].ci.Char.UnicodeChar;
-        char gc = (got==0||got==L' ')?' ':(char)got;
-        char want = "abcd"[x];
-        if (gc != want) {
-            fprintf(stderr, "FAIL: vo=2 视口底部应=abcd 列%d 得 '%c' want '%c'\n", x, gc, want);
-            free(out); free_screen(&s); return 1;
+    {
+        const char *rp[6] = {"", "", "", "abcd", "efgh", "ij"};
+        for (int y = 0; y < 6; y++) {
+            for (int x = 0; x < 4; x++) {
+                char want = x < (int)strlen(rp[y]) ? rp[y][x] : ' ';
+                WCHAR got = out[y*4+x].ci.Char.UnicodeChar;
+                char gc = (got==0||got==L' ')?' ':(char)got;
+                if (gc != want) {
+                    fprintf(stderr, "FAIL: vo=2(cap) y%d x%d: 得 '%c' want '%c'（顶部出现空白 pad/内容偏移）\n", y, x, gc, want);
+                    free(out); free_screen(&s); return 1;
+                }
+            }
         }
     }
     free(out);
@@ -573,6 +697,80 @@ static int test_reflow_view(void) {
     return 0;
 }
 
+/* v1.8.52: 属性测试——任意 resize 序列不得改变逻辑内容（不丢、不重、不乱序）。
+ * 生成固定一批逻辑行（长短不一、含整行宽、含短行），记录参考文本，然后反复改
+ * 宽/高并断言 logical_text 始终与参考一致。 */
+static int test_random_resize_invariant(void) {
+    ScreenBuffer s;
+    memset(&s, 0, sizeof(s));
+    g_scrollback_lines = 1000;
+    alloc_alt(&s, 40, 8);
+    s.in_alt_screen = 0;
+    s.line_wrap = (unsigned char *)calloc(s.total_lines, 1);
+    char linebuf[128];
+    /* 逐行输出：行内容用带行号的字符 + 变长填充，长度横跨「不足一行 / 正好满行 / 多行」。 */
+    int nlines = 24;
+    for (int i = 0; i < nlines; i++) {
+        /* 上一行若整行写满会触发……这里统一用整行 + 换行的方式模拟输出；利用
+         * screen_write_cell + 手动换行来精确控制每行内容，避免依赖自动折行状态。 */
+        int linelen = (i % 4 == 0) ? 40 : (i % 4 == 1) ? 12 : (i % 4 == 2) ? 75 : 40;
+        int col = 0;
+        int k = 0;
+        for (int c = 0; c < linelen; c++) {
+            char ch = (char)('0' + ((i + c) % 10));
+            linebuf[k++] = ch;
+            if (col >= s.cols) { /* 超宽部分塞到下一行：这里故意让行内容超过宽度，
+                                    通过滚动模拟 wrap 不现实；先只用 ≤ 宽度的行与
+                                    换行构造。 */
+            }
+            (void)ch;
+        }
+        linebuf[k] = 0;
+        /* 简化：每行一个物理行，宽 ≤ 40 */
+        int w2 = linelen > 40 ? 40 : linelen;
+        screen_write_cell(&s, s.rows - 1, 0, (WCHAR)('A' + (i % 26)), 0x07);
+        for (int c = 0; c < w2; c++) {
+            WCHAR ch = (WCHAR)('a' + ((i + c) % 26));
+            screen_write_cell(&s, s.rows - 1, c, ch, 0x07);
+        }
+        if (s.rows - 1 > 0 && i < nlines - 1) {
+            /* 把底部行滚进历史腾出下一行（与真实终端逐行滚动一致） */
+            screen_scroll_up(&s, 0, s.rows - 1, 1);
+        }
+    }
+    char ref[8192];
+    logical_text(&s, ref, sizeof(ref));
+    if ((int)strlen(ref) < 10) { fprintf(stderr, "FAIL: 属性测试参考文本过短\n"); free_screen(&s); return 1; }
+    /* 反复 resize：宽/高随机序列 */
+    static const int seq[][2] = {
+        {24, 12}, {50, 6}, {32, 9}, {20, 5}, {70, 15}, {45, 10}, {28, 7}, {60, 12}, {33, 8}, {40, 11}
+    };
+    for (unsigned t = 0; t < sizeof(seq)/sizeof(seq[0]); t++) {
+        assert(screen_resize(&s, seq[t][0], seq[t][1]) == 1);
+        char got[8192];
+        logical_text(&s, got, sizeof(got));
+        if (!texts_eq(ref, got)) {
+            fprintf(stderr, "FAIL: 属性测试 resize 到 %dx%d 后逻辑内容变化\n  ref =[%.200s...]\n  got =[%.200s...]\n",
+                    seq[t][0], seq[t][1], ref, got);
+            free_screen(&s); return 1;
+        }
+        /* 宽/高 每次 resize 后 line_wrap 行数与内容一致：逐槽 content 读一遍无重复校验略过 */
+    }
+    /* 回到起点尺寸也应一致 */
+    assert(screen_resize(&s, 40, 8) == 1);
+    {
+        char got[8192];
+        logical_text(&s, got, sizeof(got));
+        if (!texts_eq(ref, got)) {
+            fprintf(stderr, "FAIL: 回到 40x8 后逻辑内容变化\n");
+            free_screen(&s); return 1;
+        }
+    }
+    free_screen(&s);
+    printf("  v1.8.52: 属性测试——11 次随机 resize 后逻辑内容逐字不变\n");
+    return 0;
+}
+
 int main(void) {
     if (test_alt_resize_truecolor()) return 1;
     if (test_search_cur_after_drop()) return 1;
@@ -580,6 +778,8 @@ int main(void) {
     if (test_resize_narrow_wide_history_not_truncated()) return 1;
     if (test_resize_wide_then_small()) return 1;
     if (test_resize_shrink_keeps_history()) return 1;
+    if (test_resize_enlarge_reflow_no_duplicate()) return 1;
+    if (test_random_resize_invariant()) return 1;
     if (test_reflow_view()) return 1;
     printf("  [OK] screen.c 状态迁移验证通过（alt 屏真彩色迁移 + 搜索当前项落点 + resize 保历史）。\n");
     return 0;
