@@ -26,8 +26,8 @@ typedef struct {
     WORD *fg_rgb;
     WORD *bg_rgb;
     unsigned char *rgb_valid;
-    int len;          /* 本行 cells/fg/bg/valid 的实际分配宽度（>=当前 cols；
-                       * v1.8.45：历史行在收窄后保留旧宽内容，故可 > cols） */
+    int len;          /* 四个数组的实际分配宽度（容量） */
+    int used;         /* 本行由终端输出实际写到的最右 cell+1；保留行尾真实空格 */
 } ScreenLine;
 
 typedef struct {
@@ -72,8 +72,9 @@ typedef struct {
     unsigned char *alt_rgb_valid;
     int hist_lines;
     int alt_hist_lines;
-    int cr_pending;   /* 上一个 ST_NORMAL 字节是否为 CR（供 LF 判断 CRLF 真实换行 vs
-                       * ConPTY 裸 LF 滚动标记；v1.8.52 实验） */
+    int cr_pending;   /* 上一个逻辑文本控制是否为 CR；OSC 标题不打断 CRLF */
+    int repaint_candidate; /* 收到 DECTCEM hide，等待 HOME 确认 ConPTY 整屏重绘 */
+    int repaint_active;    /* ConPTY viewport 重绘中：底边 CRLF 不得写入 scrollback */
 } ScreenBuffer;
 
 typedef struct {

@@ -20,7 +20,7 @@ static void screen_put_cp(ScreenBuffer *s, unsigned int cp) {
          * 普通空白，吸附与渲染都不会再误判。 */
         if (s->cursor_x == s->cols - 1) {
             WORD attr = build_attr(s);
-            screen_write_cell(s, s->cursor_y, s->cursor_x, L' ', attr);
+            screen_erase_range(s, s->cursor_y, s->cursor_x, s->cursor_x, attr);
         }
         s->cursor_x = 0;
         screen_newline(s);
@@ -252,7 +252,11 @@ static void execute_csi_internal(ScreenBuffer *s, char final, char prefix, const
                 switch (params[i]) {
                     case 1: s->app_cursor_keys = 1; break;
                     case 7: s->auto_wrap = 1; break;
-                    case 25: s->cursor_visible = 1; break;
+                    case 25:
+                        s->cursor_visible = 1;
+                        s->repaint_candidate = 0;
+                        s->repaint_active = 0;
+                        break;
                     case 47: case 1047:
                         if (!s->in_alt_screen) {
                             s->in_alt_screen = 1; s->alt_scroll_top = s->scroll_top;
@@ -290,7 +294,11 @@ static void execute_csi_internal(ScreenBuffer *s, char final, char prefix, const
                 switch (params[i]) {
                     case 1: s->app_cursor_keys = 0; break;
                     case 7: s->auto_wrap = 0; break;
-                    case 25: s->cursor_visible = 0; break;
+                    case 25:
+                        s->cursor_visible = 0;
+                        s->repaint_candidate = 1;
+                        s->repaint_active = 0;
+                        break;
                     case 47: case 1047:
                         if (s->in_alt_screen) {
                             s->in_alt_screen = 0; s->scroll_top = s->alt_scroll_top;
@@ -335,6 +343,11 @@ static void execute_csi_internal(ScreenBuffer *s, char final, char prefix, const
         case 'F': { int n = p1 ? p1 : 1; s->cursor_x = 0; s->cursor_y -= n; if (s->cursor_y < 0) s->cursor_y = 0; s->wraparound_pending = 0; break; }
         case 'G': case '`': { s->cursor_x = (p1 ? p1 : 1) - 1; if (s->cursor_x >= s->cols) s->cursor_x = s->cols - 1; if (s->cursor_x < 0) s->cursor_x = 0; s->wraparound_pending = 0; break; }
         case 'H': case 'f': {
+            /* ConPTY resize repaint 固定以隐藏光标后 HOME 开始。仅用控制状态识别，
+             * 不检查提示符文本；这样启动 banner 的合法空行也不会被误删。 */
+            if (s->repaint_candidate && (p1 == 0 || p1 == 1) &&
+                (p2 == 0 || p2 == 1) && !s->in_alt_screen)
+                s->repaint_active = 1;
             s->cursor_y = (p1 ? p1 : 1) - 1; s->cursor_x = (p2 ? p2 : 1) - 1;
             if (s->origin_mode) s->cursor_y += s->scroll_region_top;
             if (s->cursor_y >= s->rows) s->cursor_y = s->rows - 1;
@@ -350,13 +363,12 @@ static void execute_csi_internal(ScreenBuffer *s, char final, char prefix, const
             if (p1 == 0 || p1 == 2) {
                 int sy = (p1 == 0) ? s->cursor_y : 0, sx = (p1 == 0) ? s->cursor_x : 0;
                 for (int y = sy; y < s->rows; y++)
-                    for (int x = (y == sy ? sx : 0); x < s->cols; x++)
-                        screen_write_cell(s, y, x, L' ', attr);
+                    screen_erase_range(s, y, (y == sy ? sx : 0), s->cols - 1, attr);
             }
             if (p1 == 1) {
                 for (int y = 0; y <= s->cursor_y; y++) {
                     int ex = (y == s->cursor_y) ? s->cursor_x : s->cols - 1;
-                    for (int x = 0; x <= ex; x++) screen_write_cell(s, y, x, L' ', attr);
+                    screen_erase_range(s, y, 0, ex, attr);
                 }
             }
             /* 只有 ED(3)（清滚动缓冲）才清历史；ED(2)（清显示）只清可见区、保留
@@ -373,7 +385,7 @@ static void execute_csi_internal(ScreenBuffer *s, char final, char prefix, const
             WORD attr = build_attr(s);
             int sx = (p1 == 1 || p1 == 2) ? 0 : s->cursor_x;
             int ex = (p1 == 0 || p1 == 2) ? s->cols - 1 : s->cursor_x;
-            for (int x = sx; x <= ex; x++) screen_write_cell(s, s->cursor_y, x, L' ', attr);
+            screen_erase_range(s, s->cursor_y, sx, ex, attr);
             break;
         }
         case 'L': screen_scroll_down(s, s->cursor_y, s->scroll_region_bottom, p1 ? p1 : 1); break;
@@ -394,7 +406,7 @@ static void execute_csi_internal(ScreenBuffer *s, char final, char prefix, const
         }
         case 'X': {
             int n = p1 ? p1 : 1; WORD attr = build_attr(s);
-            for (int x = s->cursor_x; x < s->cursor_x + n && x < s->cols; x++) screen_write_cell(s, s->cursor_y, x, L' ', attr);
+            screen_erase_range(s, s->cursor_y, s->cursor_x, s->cursor_x + n - 1, attr);
             break;
         }
         case 'S': screen_scroll_up(s, s->scroll_region_top, s->scroll_region_bottom, p1 ? p1 : 1); break;
@@ -461,23 +473,21 @@ static void execute_csi_internal(ScreenBuffer *s, char final, char prefix, const
     }
 }
 
-/* LF 行进。real_newline=1 表示这是 CRLF 里的 LF（真实行尾，cmd/ConPTY 每输出一
- * 行都会发）；=0 表示 ConPTY 的裸 LF（其 9001 行内部缓冲的「留位/滚动」标记，
- * cmd 换窗口标题等场合 ConPTY 会额外发出成串裸 LF）。
- * 底部行处理：真实换行必滚；裸 LF 若底行仍是未被写入过的空白，则说明它只是
- * ConPTY 在为下一行内容留位——此时吸收该 LF 不滚动，避免把空白行滚进本地滚动
- * 历史（v1.8.52 实验：消除 cmd 长输出历史里逐行多出的幻影空行）。 */
+/* LF 必须始终按终端字节流行进。CR 与 LF 之间允许夹 OSC 标题，因此
+ * `CR OSC LF` 仍是真实换行；连续的另一个 `OSC LF` 则明确产生空行。
+ * 不能因为光标已在底部空行就吸收裸 LF，否则长命令输出结束时
+ * `LINE-80, blank, prompt` 会错误地压成 `LINE-80, prompt`。 */
 static void screen_lf(ScreenBuffer *s, int real_newline) {
+    (void)real_newline;
     if (s->cursor_y >= s->scroll_region_bottom) {
-        if (!real_newline) {
-            int pr = screen_phys_row(s, s->cursor_y);
-            int blank = 1;
-            if (pr >= 0 && s->lines && s->lines[pr].cells) {
-                ScreenLine *ln = &s->lines[pr];
-                for (int x = 0; x < ln->len; x++)
-                    if (ln->cells[x].Char.UnicodeChar != L' ') { blank = 0; break; }
-            }
-            if (blank) return; /* 吸收：底行空白且无真实内容要顶 */
+        /* 整屏重绘的 CRLF 只是按行遍历 viewport。若在底边产生普通滚动，
+         * 每次拖动分隔线都会把重绘尾部空行塞入历史，并最终挤掉下方 pane 的
+         * LINE-1..80。真实程序输出不处于 repaint_active，仍照常滚动。 */
+        if (s->repaint_active) {
+            /* 重绘仍须像真实 viewport 一样上移，否则超出当前高度的序列会全部
+             * 覆盖最后一行；区别仅在于不得把被移出的行追加到 scrollback。 */
+            screen_scroll_viewport_up(s, 1);
+            return;
         }
         screen_scroll_up(s, s->scroll_region_top, s->scroll_region_bottom, 1);
     } else if (s->cursor_y < s->rows - 1) {
@@ -496,7 +506,10 @@ static void screen_process_byte(ScreenBuffer *s, unsigned char c) {
         s->state = ST_ESC;
         s->param_len = 0;
         s->inter_len = 0;
-        s->cr_pending = 0;
+        /* 不清 cr_pending：ConPTY/cmd 经常输出 CR + OSC(窗口标题) + LF。
+         * OSC 是带外元数据，不应打断逻辑 CRLF；否则这个 LF 会被当成裸 LF，
+         * 光标位于底部空行时被 screen_lf() 吸收，最后一个真实空行消失，直到
+         * resize 的整屏重绘才重新出现。 */
         return;
     }
 
@@ -641,12 +654,13 @@ void screen_process_output(ScreenBuffer *s, const char *data, int len) {
     for (int i = 0; i < len; i++) {
         unsigned char c = (unsigned char)data[i];
 
-        /* CRLF 相邻检测：只有 ST_NORMAL 下紧跟在 CR 之后的 LF 才算真实行尾
-         * （cmd 一行输出 = text + CRLF）。任何其它字节（含 OSC 标题、文本、
-         * 控制符）都会打断相邻关系，之后的 LF 视为 ConPTY 的裸 LF。 */
+        /* CRLF 逻辑配对：普通文本会打断 CR；ESC 序列不打断，因为 ConPTY/cmd
+         * 会把窗口标题 OSC 插在 CR 与 LF 之间（CR OSC LF 仍是一条真实换行）。
+         * 若把 ESC 当普通字节清掉 cr_pending，底部的 LF 会被误判为留位裸 LF，
+         * 真实空行在实时缓冲中消失，resize 重绘后又出现。 */
         if (s->state == ST_NORMAL) {
             if (c == '\r') s->cr_pending = 1;
-            else if (c != '\n') s->cr_pending = 0;
+            else if (c != '\n' && c != 0x1B) s->cr_pending = 0;
         }
 
         if (s->state == ST_NORMAL) {

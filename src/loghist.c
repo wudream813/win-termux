@@ -29,6 +29,7 @@ void loghist_clear(LogHistory *h) {
         h->lines[i].cells = NULL; h->lines[i].fg_rgb = NULL;
         h->lines[i].bg_rgb = NULL; h->lines[i].rgb_valid = NULL;
         h->lines[i].len = 0;
+        h->lines[i].used = 0;
     }
     h->count = 0;
     h->head = 0;
@@ -57,23 +58,34 @@ static void line_grow(ScreenLine *ln, const CHAR_INFO *cells,
     if (count <= 0) return;
     int old = ln->len;
     int need = old + count;
-    CHAR_INFO *nc = (CHAR_INFO *)realloc(ln->cells, (size_t)need * sizeof(CHAR_INFO));
-    WORD *nfg = (WORD *)realloc(ln->fg_rgb, (size_t)need * sizeof(WORD));
-    WORD *nbg = (WORD *)realloc(ln->bg_rgb, (size_t)need * sizeof(WORD));
-    unsigned char *nv = (unsigned char *)realloc(ln->rgb_valid, (size_t)need);
-    if (!nc) return;   /* 内存不足：本批丢弃，不破坏已有数据 */
-    ln->cells = nc;
-    if (nfg) ln->fg_rgb = nfg;
-    if (nbg) ln->bg_rgb = nbg;
-    if (nv) ln->rgb_valid = nv;
-    memcpy(ln->cells + old, cells, (size_t)count * sizeof(CHAR_INFO));
-    if (ln->fg_rgb && fg) memcpy(ln->fg_rgb + old, fg, (size_t)count * sizeof(WORD));
-    else if (ln->fg_rgb) memset(ln->fg_rgb + old, 0xFF, (size_t)count * sizeof(WORD));
-    if (ln->bg_rgb && bg) memcpy(ln->bg_rgb + old, bg, (size_t)count * sizeof(WORD));
-    else if (ln->bg_rgb) memset(ln->bg_rgb + old, 0, (size_t)count * sizeof(WORD));
-    if (ln->rgb_valid && valid) memcpy(ln->rgb_valid + old, valid, (size_t)count);
-    else if (ln->rgb_valid) memset(ln->rgb_valid + old, 0, (size_t)count);
+    /* 四个并行数组必须原子扩容。分别 realloc 会出现“cells 成功、fg 失败”的
+     * 半成功状态：len 仍增长后，后续颜色写入越过旧 fg 容量。改为先完整分配，
+     * 任一失败就全部回滚，旧行保持不变。 */
+    CHAR_INFO *nc = (CHAR_INFO *)malloc((size_t)need * sizeof(CHAR_INFO));
+    WORD *nfg = (WORD *)malloc((size_t)need * sizeof(WORD));
+    WORD *nbg = (WORD *)malloc((size_t)need * sizeof(WORD));
+    unsigned char *nv = (unsigned char *)malloc((size_t)need);
+    if (!nc || !nfg || !nbg || !nv) {
+        free(nc); free(nfg); free(nbg); free(nv);
+        return;
+    }
+    if (old > 0) {
+        memcpy(nc, ln->cells, (size_t)old * sizeof(CHAR_INFO));
+        memcpy(nfg, ln->fg_rgb, (size_t)old * sizeof(WORD));
+        memcpy(nbg, ln->bg_rgb, (size_t)old * sizeof(WORD));
+        memcpy(nv, ln->rgb_valid, (size_t)old);
+    }
+    memcpy(nc + old, cells, (size_t)count * sizeof(CHAR_INFO));
+    if (fg) memcpy(nfg + old, fg, (size_t)count * sizeof(WORD));
+    else memset(nfg + old, 0xFF, (size_t)count * sizeof(WORD));
+    if (bg) memcpy(nbg + old, bg, (size_t)count * sizeof(WORD));
+    else memset(nbg + old, 0, (size_t)count * sizeof(WORD));
+    if (valid) memcpy(nv + old, valid, (size_t)count);
+    else memset(nv + old, 0, (size_t)count);
+    free(ln->cells); free(ln->fg_rgb); free(ln->bg_rgb); free(ln->rgb_valid);
+    ln->cells = nc; ln->fg_rgb = nfg; ln->bg_rgb = nbg; ln->rgb_valid = nv;
     ln->len = need;
+    ln->used = need;
 }
 
 /* 取最新（最新一条逻辑行）的槽位；没有则开一条新的。 */

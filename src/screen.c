@@ -66,11 +66,13 @@ static void line_free(ScreenLine *ln) {
     ln->bg_rgb = NULL;
     ln->rgb_valid = NULL;
     ln->len = 0;
+    ln->used = 0;
 }
 
 /* 把一整行填成空白（不碰分配状态）。 */
 static void line_fill_blank(ScreenLine *ln, int n, WORD attr) {
     if (!ln->cells) return;
+    ln->used = 0;
     for (int j = 0; j < n; j++) {
         ln->cells[j].Char.UnicodeChar = L' ';
         ln->cells[j].Attributes = attr;
@@ -102,6 +104,7 @@ static void line_copy(ScreenLine *dst, const ScreenLine *src, int n) {
     if (dst->fg_rgb && src->fg_rgb) memcpy(dst->fg_rgb, src->fg_rgb, n * sizeof(WORD));
     if (dst->bg_rgb && src->bg_rgb) memcpy(dst->bg_rgb, src->bg_rgb, n * sizeof(WORD));
     if (dst->rgb_valid && src->rgb_valid) memcpy(dst->rgb_valid, src->rgb_valid, n * sizeof(unsigned char));
+    dst->used = src->used < n ? src->used : n;
 }
 
 /* alt 屏是扁平数组，按「行起点下标」搬运同样的四份数据。 */
@@ -246,8 +249,29 @@ void screen_write_cell(ScreenBuffer *s, int row, int col, WCHAR ch, WORD attr) {
             s->lines[pr].fg_rgb[col] = s->fg_rgb_on ? rgb565(s->fg_r, s->fg_g, s->fg_b) : RGB565_WHITE;
             s->lines[pr].bg_rgb[col] = s->bg_rgb_on ? rgb565(s->bg_r, s->bg_g, s->bg_b) : RGB565_BLACK;
             s->lines[pr].rgb_valid[col] = v;
+            if (col + 1 > s->lines[pr].used) s->lines[pr].used = col + 1;
         }
     }
+}
+
+/* 擦除不是“输出空格”：保留 used 左侧真实尾随空格，但被擦除到行尾时收缩有效
+ * 范围。不能直接循环 screen_write_cell，否则 ESC[K 会把整行 used 错标成 cols。 */
+void screen_erase_range(ScreenBuffer *s, int row, int sx, int ex, WORD attr) {
+    if (!s || row < 0 || row >= s->rows) return;
+    if (sx < 0) sx = 0;
+    if (ex >= s->cols) ex = s->cols - 1;
+    if (sx > ex) return;
+    if (s->in_alt_screen) {
+        for (int x = sx; x <= ex; x++) screen_write_cell(s, row, x, L' ', attr);
+        return;
+    }
+    int pr = screen_phys_row(s, row);
+    if (!screen_ensure_line(s, pr)) return;
+    ScreenLine *ln = &s->lines[pr];
+    int old_used = ln->used;
+    for (int x = sx; x <= ex; x++) screen_write_cell(s, row, x, L' ', attr);
+    if (ex >= old_used - 1 && sx < old_used) ln->used = sx;
+    else ln->used = old_used;
 }
 
 void screen_scroll_up(ScreenBuffer *s, int top, int bottom, int count) {
@@ -338,6 +362,28 @@ void screen_scroll_up(ScreenBuffer *s, int top, int bottom, int count) {
                 line_fill_blank(&s->lines[pr], s->cols, s->current_attr);
             }
         }
+    }
+}
+
+void screen_scroll_viewport_up(ScreenBuffer *s, int count) {
+    if (!s || s->in_alt_screen || count <= 0 || s->rows <= 0) return;
+    if (count > s->rows) count = s->rows;
+    for (int y = 0; y < s->rows - count; y++) {
+        int dp = screen_phys_row(s, y);
+        int sp = screen_phys_row(s, y + count);
+        if (s->lines && s->lines[sp].cells) {
+            screen_ensure_line(s, dp);
+            line_copy(&s->lines[dp], &s->lines[sp], s->cols);
+        } else if (s->lines && s->lines[dp].cells) {
+            line_fill_blank(&s->lines[dp], s->cols, s->current_attr);
+        }
+        if (s->line_wrap) s->line_wrap[dp] = s->line_wrap[sp];
+    }
+    for (int y = s->rows - count; y < s->rows; y++) {
+        int pr = screen_phys_row(s, y);
+        screen_ensure_line(s, pr);
+        line_fill_blank(&s->lines[pr], s->cols, s->current_attr);
+        if (s->line_wrap) s->line_wrap[pr] = 0;
     }
 }
 
@@ -658,6 +704,27 @@ static int reflow_acc_cb(const RGlyph *line, int cnt, void *ud) {
     return 0;
 }
 
+/* 物理行参与逻辑 reflow 的有效 cell 数。
+ * line_wrap 标在“下一物理行是本行的软换行续行”上，因此若 rel+1 为续行，本行的
+ * 整个旧视口宽度都是逻辑布局的一部分。旧代码无条件裁掉每个物理行尾空格，会把
+ * 自动折行边界前用户真实输出的空格一起删除；resize 后单词/列对齐因而粘连。
+ * 硬换行末段仍裁掉终端为屏幕宽度补的空白，避免每行都被误当成满宽内容。 */
+static int screen_row_reflow_len(ScreenBuffer *s, int rel) {
+    if (!s || !s->lines) return 0;
+    int pr = screen_phys_row(s, rel);
+    if (pr < 0 || pr >= s->total_lines || !s->lines[pr].cells) return 0;
+    ScreenLine *ln = &s->lines[pr];
+    int len = ln->used;
+    if (len > s->cols) len = s->cols;
+    /* 兼容旧缓冲/测试夹具中直接写 cells、尚无 used 元数据的行。 */
+    if (len <= 0) {
+        len = ln->len;
+        if (len > s->cols) len = s->cols;
+        while (len > 0 && ln->cells[len - 1].Char.UnicodeChar == L' ') len--;
+    }
+    return len;
+}
+
 /* ---- 内容区间边界 ------------------------------------------
  * 纯空白逻辑行分两种：a) 夹在两条内容之间的真实空行（程序/CRLF 输出产生的空行，
  * 实时屏幕可见，回看历史时也应保留——否则「历史里换行不见了」）；b) 首条内容之上
@@ -677,12 +744,7 @@ static int screen_content_span(ScreenBuffer *s, int *top_rel, int *bot_rel) {
     for (int rel = -hist; rel < s->rows; rel++) {
         int pr = screen_phys_row(s, rel);
         if (pr < 0 || pr >= s->total_lines) continue;
-        int len = 0;
-        if (s->lines && s->lines[pr].cells) {
-            ScreenLine *ln = &s->lines[pr];
-            len = ln->len;
-            while (len > 0 && ln->cells[len - 1].Char.UnicodeChar == L' ') len--;
-        }
+        int len = screen_row_reflow_len(s, rel);
         /* 空物理行（从未写字符，cells 可能为 NULL）也是真实一行：按 wrap 参与逻辑
          * 行分组，作为 len=0 的空逻辑行处理，content_span 只关心它是否隔开内容。 */
         int wr = (s->line_wrap && s->line_wrap[pr]) ? 1 : 0;
@@ -727,12 +789,7 @@ int screen_reflow_height(ScreenBuffer *s, int width) {
     for (int rel = -hist; rel < s->rows; rel++) {
         int pr = screen_phys_row(s, rel);
         if (pr < 0 || pr >= s->total_lines) continue;
-        int len = 0;
-        if (s->lines && s->lines[pr].cells) {
-            ScreenLine *ln = &s->lines[pr];
-            len = ln->len;
-            while (len > 0 && ln->cells[len - 1].Char.UnicodeChar == L' ') len--;
-        }
+        int len = screen_row_reflow_len(s, rel);
         int wr = (s->line_wrap && s->line_wrap[pr]) ? 1 : 0;
         if (wr == 0) {
             /* 前一条逻辑行结束：内容计折行数，内容间的空行占 1 行（leading/trailing
@@ -834,11 +891,7 @@ int screen_reflow_view(ScreenBuffer *s, int vo, int rows, int width, RGlyph *out
         if (pr < 0 || pr >= s->total_lines) continue;
         /* 空物理行（从未写字符、cells==NULL）也是真实一行，按 len=0 空逻辑行参与
          * 分组：wrap0 处结束上一条逻辑行；落位时由 keep_blank 决定是否显示。 */
-        int len = 0;
-        if (s->lines && s->lines[pr].cells) {
-            len = s->lines[pr].len;
-            while (len > 0 && s->lines[pr].cells[len - 1].Char.UnicodeChar == L' ') len--;
-        }
+        int len = screen_row_reflow_len(s, rel);
         int wrap = (s->line_wrap && s->line_wrap[pr]) ? 1 : 0;
 
         /* 段前插：本行段（扫描上更老）插到 logrow 开头，保持 logrow 老→新。 */
@@ -960,7 +1013,7 @@ int screen_repaint_align(ScreenBuffer *s, const char *data, int len) {
     if (homed < 0) return 0;
     /* 2) 取归顶之后的首行原始段（到 CR / LF 为止）。ConPTY 整屏重绘逐行写
      *    「行文本 ESC[K CRLF」。段内可能夹 SGR 着色，统一剥除再比对。 */
-    int seg[4096]; int segn = 0;
+    unsigned char seg[4096]; int segn = 0;
     {
         int k = homed;
         while (k < len && segn < 4090) {
@@ -1005,10 +1058,15 @@ int screen_repaint_align(ScreenBuffer *s, const char *data, int len) {
         }
     }
     if (wn == 0) return 2;
-    /* 4) 在可见区更深处找内容相同的行（rel 1..rows-1）。命中说明 ConPTY 视口
-     *    比本地 reflow 深 rel 行（其顶行 = 本地 rel 行）：把环往前滚 rel 行使两边
-     *    对齐（内容零改动、hist_lines + rel），随后重绘逐行覆盖内容相同不再吞行。 */
-    for (int rel = 1; rel < s->rows; rel++) {
+    /* 4) 在整个历史+可见区寻找重绘首行。ConPTY 的重绘顶行不只可能比本地可见
+     *    顶部更深（rel>0），加宽 reflow 后也常落在本地历史里（rel<0）。旧代码只
+     *    搜 rel>=1；真实日志里 `.out` 位于历史约 -9，重绘却从它开始，于是它被写
+     *    到 rel0，后续 29 行覆盖掉较新的可见内容，每拖宽一列历史就短一截。
+     *    这里取绝对偏移最小的匹配，随后按有符号 rel 调整 scroll_top/hist_lines，
+     *    让重绘覆盖原有同一批行。 */
+    int best_rel = 0;
+    for (int rel = -s->hist_lines; rel < s->rows; rel++) {
+        if (rel == 0) continue;
         int pr = screen_phys_row(s, rel);
         if (pr < 0 || pr >= s->total_lines || !s->lines || !s->lines[pr].cells) continue;
         ScreenLine *ln = &s->lines[pr];
@@ -1020,13 +1078,17 @@ int screen_repaint_align(ScreenBuffer *s, const char *data, int len) {
         for (int x = 0; x < wn; x++)
             if (ln->cells[a + x].Char.UnicodeChar != wl[x]) { eq = 0; break; }
         if (!eq) continue;
-        s->hist_lines += rel;
+        if (best_rel == 0 || abs(rel) < abs(best_rel)) best_rel = rel;
+    }
+    if (best_rel != 0) {
+        s->hist_lines += best_rel;
+        if (s->hist_lines < 0) s->hist_lines = 0;
         if (s->hist_lines > s->total_lines - s->rows) s->hist_lines = s->total_lines - s->rows;
-        s->scroll_top = (s->scroll_top + rel) % s->total_lines;
+        s->scroll_top = (s->scroll_top + best_rel) % s->total_lines;
         if (s->scroll_top < 0) s->scroll_top += s->total_lines;
         return 1;
     }
-    return 2;   /* 归顶重绘已见，但顶行在本地即为 rel0（无更深同内容行）：无需对齐 */
+    return 2;   /* 归顶重绘已见，但没有其它位置的同内容行：无需对齐 */
 }
 
 
@@ -1037,13 +1099,21 @@ int screen_repaint_align(ScreenBuffer *s, const char *data, int len) {
 typedef struct {
     RGlyph **rows;        /* rows[slot] 一行 width 格（行内已铺满空格） */
     unsigned char *first; /* first[slot]=1 = 该显示行是某逻辑行的首行 */
+    int *used;            /* 该显示行真实使用的 cell 数（含输出的空格） */
     int cap, head, count, width;
 } RfRing;
 
-static void rfring_init(RfRing *r, int cap, int width) {
+static int rfring_init(RfRing *r, int cap, int width) {
     r->cap = cap; r->width = width; r->head = 0; r->count = 0;
     r->rows = (RGlyph **)calloc((size_t)cap, sizeof(RGlyph *));
     r->first = (unsigned char *)calloc((size_t)cap, 1);
+    r->used = (int *)calloc((size_t)cap, sizeof(int));
+    if (!r->rows || !r->first || !r->used) {
+        free(r->rows); free(r->first); free(r->used);
+        r->rows = NULL; r->first = NULL; r->used = NULL;
+        return 0;
+    }
+    return 1;
 }
 static void rfring_free(RfRing *r) {
     if (r->rows) {
@@ -1051,9 +1121,10 @@ static void rfring_free(RfRing *r) {
         free(r->rows);
     }
     free(r->first);
-    r->rows = NULL; r->first = NULL;
+    free(r->used);
+    r->rows = NULL; r->first = NULL; r->used = NULL;
 }
-static void rfring_add(RfRing *r, const RGlyph *row, int firstflag) {
+static void rfring_add(RfRing *r, const RGlyph *row, int firstflag, int used) {
     int slot;
     if (r->count < r->cap) {
         slot = (r->head + r->count) % r->cap;
@@ -1068,6 +1139,7 @@ static void rfring_add(RfRing *r, const RGlyph *row, int firstflag) {
     }
     memcpy(r->rows[slot], row, (size_t)r->width * sizeof(RGlyph));
     r->first[slot] = (unsigned char)firstflag;
+    r->used[slot] = used;
 }
 
 /* reflow_append_rows 回调：把一条显示行（铺满 width 格）塞进 RfRing。 */
@@ -1086,14 +1158,15 @@ static int reflow_sink_cb(const RGlyph *seg, int cnt, void *ud) {
     }
     int m = cnt < sk->width ? cnt : sk->width;
     for (int x = 0; x < m; x++) sk->line[x] = seg[x];
-    rfring_add(sk->ring, sk->line, sk->first_done ? 0 : 1);
+    rfring_add(sk->ring, sk->line, sk->first_done ? 0 : 1, m);
     sk->first_done = 1;
     return 0;
 }
 
 /* 从 RGlyph 显示行拷进一行（四个并行数组一并写）。 */
-static void line_store_rglyph(ScreenLine *ln, const RGlyph *row, int w) {
+static void line_store_rglyph(ScreenLine *ln, const RGlyph *row, int w, int used) {
     if (!ln->cells || !row) return;
+    ln->used = used < w ? used : w;
     for (int x = 0; x < w; x++) {
         ln->cells[x].Char.UnicodeChar = row[x].ci.Char.UnicodeChar;
         ln->cells[x].Attributes = row[x].ci.Attributes;
@@ -1105,6 +1178,7 @@ static void line_store_rglyph(ScreenLine *ln, const RGlyph *row, int w) {
 
 static int screen_resize_reflow(ScreenBuffer *s, int nc, int nr) {
     int nt = nr + g_scrollback_lines;
+    int old_scroll_top = s->scroll_top;
     WORD fill_attr = s->current_attr ? s->current_attr : 0x07;
 
     ScreenLine *nl = (ScreenLine *)calloc(nt, sizeof(ScreenLine));
@@ -1124,7 +1198,12 @@ static int screen_resize_reflow(ScreenBuffer *s, int nc, int nr) {
 
     /* 1) 合并逻辑行 + 按新宽度折行，落进 RfRing。自老→新扫历史与可见。 */
     RfRing ring;
-    rfring_init(&ring, nt, nc);
+    memset(&ring, 0, sizeof(ring));
+    if (!rfring_init(&ring, nt, nc)) {
+        for (int i = 0; i < nt; i++) line_free(&nl[i]);
+        free(nl); free(nwrap); free(na); free(nafr); free(nabr); free(nav);
+        return 0;
+    }
     RfSink sk;
     sk.ring = &ring; sk.width = nc; sk.first_done = 1;
     sk.line = (RGlyph *)malloc((size_t)(nc > 16 ? nc : 16) * sizeof(RGlyph));
@@ -1146,14 +1225,45 @@ static int screen_resize_reflow(ScreenBuffer *s, int nc, int nr) {
      * 真内容。 */
     int empty_top = (old_hist == 0) ? 1 : 0;
     int saw_content = 0;
+    /* resize 只扫描真实内容跨度，不能把可见内容下方未使用的屏幕填充行搬进历史。
+     * 上下分屏首次把 29 行缩到 14 行时，旧代码把 banner 后面的 15 个空白屏幕行
+     * 也落入 ring，得到 hist=15；ConPTY 随后重绘 banner，于是最上方出现重复。
+     * 夹在内容之间的真实空行仍位于 content span 内，不受影响。游标所在空行也保留，
+     * 以免正在输入前的垂直位置在 resize 时上跳。 */
+    int span_top = 0, span_bot = -1;
+    int have_span = screen_content_span(s, &span_top, &span_bot);
+    int scan_end = have_span ? span_bot + 1 : 0;
+    /* 历史本身由 rel=-old_hist..-1 完整扫描；可见屏幕则无论是否已有历史，
+     * 都只能扫描到真实内容/游标末端。若 old_hist>0 时强行扫满 s->rows，
+     * 上方 pane 下方未使用的 padding 会在每次拖动分隔线时被塞进时间流，
+     * 形成提示符后的多余空行，并不断扰乱 hist/scroll_limit。内容跨度内部的
+     * 真实空行仍完整保留。 */
+    if (s->cursor_y + 1 > scan_end) scan_end = s->cursor_y + 1;
+    if (scan_end > s->rows) scan_end = s->rows;
+    (void)span_top;
 
-    for (int rel = -old_hist; rel < s->rows && !oom; rel++) {
+    for (int rel = -old_hist; rel < scan_end && !oom; rel++) {
         int pr = screen_phys_row(s, rel);
         if (pr < 0 || pr >= s->total_lines || !s->lines || !s->lines[pr].cells) continue;
         ScreenLine *ln = &s->lines[pr];
-        int len = ln->len;
-        while (len > 0 && ln->cells[len - 1].Char.UnicodeChar == L' ') len--;
+        int len = screen_row_reflow_len(s, rel);
         int wr = (s->line_wrap && s->line_wrap[pr]) ? 1 : 0;
+        /* 纯增高时不要把历史行“提取”到可见区后从历史所有权中删除。
+         * ConPTY 随后的整屏重绘会覆盖可见区；若这里先减少 hist，那批旧行就永久
+         * 消失。历史与旧可见区之间插入新增的屏幕空位，使 old_hist 保持不变；
+         * 重绘只更新 viewport。纯宽变化仍走正常逻辑 reflow。 */
+        if (rel == 0 && nc == s->cols && nr > s->rows && old_hist > 0) {
+            if (line_open) {
+                sk.first_done = 0;
+                reflow_append_rows(log, logn, nc, reflow_sink_cb, &sk);
+                logn = 0;
+                line_open = 0;
+            }
+            for (int z = 0; z < nr - s->rows; z++) {
+                sk.first_done = 0;
+                reflow_append_rows(NULL, 0, nc, reflow_sink_cb, &sk);
+            }
+        }
         if (len == 0 && wr == 0 && empty_top && !saw_content) continue; /* 顶部空区 */
         if (len > 0 || wr) saw_content = 1;
         if (wr == 0) {
@@ -1210,18 +1320,20 @@ static int screen_resize_reflow(ScreenBuffer *s, int nc, int nr) {
             if (!nl[phys].cells) {
                 if (!line_alloc(&nl[phys], nc, fill_attr)) continue;
             }
-            line_store_rglyph(&nl[phys], ring.rows[slot], nc);
+            line_store_rglyph(&nl[phys], ring.rows[slot], nc, ring.used[slot]);
             if (ring.first[slot]) nwrap[phys] = 0; else nwrap[phys] = 1;
         }
     } else {
-        int base = nr - tcount;                     /* 内容不足一屏：底对齐 */
+        /* 无历史的普通屏幕缩放保持内容顶部位置，避免首次上下分屏时 banner/提示符
+         * 在 ConPTY 重绘到达前瞬间跳到窗格底部；已有历史时仍按最新内容底部锚定。 */
+        int base = old_hist == 0 ? 0 : nr - tcount;
         for (int j = 0; j < tcount; j++) {
             int slot = (ring.head + j) % ring.cap;
             int phys = base + j;
             if (!nl[phys].cells) {
                 if (!line_alloc(&nl[phys], nc, fill_attr)) continue;
             }
-            line_store_rglyph(&nl[phys], ring.rows[slot], nc);
+            line_store_rglyph(&nl[phys], ring.rows[slot], nc, ring.used[slot]);
             if (ring.first[slot]) nwrap[phys] = 0; else nwrap[phys] = 1;
         }
     }
@@ -1246,8 +1358,15 @@ static int screen_resize_reflow(ScreenBuffer *s, int nc, int nr) {
     s->cols = nc;
     s->rows = nr;
     s->total_lines = nt;
-    s->scroll_top = 0;
     s->hist_lines = hist;
+    /* 拖动分隔线不能把正在回看的视图强制跳回底部。旧代码每次 resize 都置 0，
+     * 因而用户刚滚到 LINE-80/空行/提示符附近，下一次尺寸事件就立即丢失位置。 */
+    s->scroll_top = old_scroll_top;
+    {
+        int lim = screen_scroll_limit(s);
+        if (s->scroll_top > lim) s->scroll_top = lim;
+        if (s->scroll_top < 0) s->scroll_top = 0;
+    }
     if (s->alt_hist_lines > nt - nr) s->alt_hist_lines = nt - nr;
     if (s->cursor_x >= nc) s->cursor_x = nc - 1;
     if (s->cursor_y >= nr) s->cursor_y = nr - 1;

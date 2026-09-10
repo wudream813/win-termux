@@ -54,11 +54,12 @@ for sig in ("static void line_free(",
             "static int reflow_glyph_w(",
             "static int reflow_append_rows(",
             "static int reflow_acc_cb(",
+            "static int screen_row_reflow_len(",
             "static int screen_content_span(",
             "int screen_reflow_height(",
             "int screen_scroll_limit(",
             "int screen_reflow_view(",
-            "static void rfring_init(",
+            "static int rfring_init(",
             "static void rfring_free(",
             "static void rfring_add(",
             "static int reflow_sink_cb(",
@@ -99,7 +100,7 @@ typedef struct {
     WORD *fg_rgb;
     WORD *bg_rgb;
     unsigned char *rgb_valid;
-    int len;
+    int len, used;
 } ScreenLine;
 
 typedef struct {
@@ -144,6 +145,7 @@ typedef struct {
 typedef struct {
     RGlyph **rows;
     unsigned char *first;
+    int *used;
     int cap, head, count, width;
 } RfRing;
 

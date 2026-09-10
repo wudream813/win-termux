@@ -96,7 +96,7 @@ typedef struct {
     WORD *fg_rgb;
     WORD *bg_rgb;
     unsigned char *rgb_valid;
-    int len;
+    int len, used;
 } ScreenLine;
 
 typedef struct {

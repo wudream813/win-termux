@@ -171,7 +171,14 @@ static int handle_split_mouse(MOUSE_EVENT_RECORD *me) {
                 switch_pane(i);
                 return 1;   /* 切换焦点这一下不下发给终端 */
             }
-            return 0;   /* 已是活动 pane：继续常规处理 */
+            /* 滚轮应作用于鼠标所在 pane，而不是仍有键盘焦点的另一个 pane。
+             * 极窄子终端里的历史本来仍在（hist/limit 均非零），旧逻辑却把滚轮
+             * 交给 active_pane，表现为该子终端完全无法向上滚动。 */
+            if (i != g_mux.active_pane && me->dwEventFlags == MOUSE_WHEELED) {
+                ui_modes_cancel();
+                switch_pane(i);
+            }
+            return 0;   /* 命中 pane：继续常规处理 */
         }
     }
     return 1;   /* 点在边框/空隙上，吞掉 */

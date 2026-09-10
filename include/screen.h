@@ -23,7 +23,10 @@ static inline int screen_to_abs_row(ScreenBuffer *s, int cy, int vo) {
 
 CHAR_INFO *screen_cell(ScreenBuffer *s, int row, int col);
 void screen_write_cell(ScreenBuffer *s, int row, int col, WCHAR ch, WORD attr);
+void screen_erase_range(ScreenBuffer *s, int row, int sx, int ex, WORD attr);
 void screen_scroll_up(ScreenBuffer *s, int top, int bottom, int count);
+/* ConPTY viewport repaint 用：移动可见行但绝不写入/删除 scrollback。 */
+void screen_scroll_viewport_up(ScreenBuffer *s, int count);
 void screen_scroll_down(ScreenBuffer *s, int top, int bottom, int count);
 void screen_newline(ScreenBuffer *s);
 void screen_mark_softwrap(ScreenBuffer *s);  /* 标记当前行=软换行续行（v1.8.47 reflow） */
